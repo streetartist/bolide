@@ -1,0 +1,23 @@
+// 测试带签名的函数类型
+
+fn double(x: int) -> int {
+    return x * 2;
+}
+
+fn add(a: int, b: int) -> int {
+    return a + b;
+}
+
+fn apply(f: func(int) -> int, x: int) -> int {
+    return f(x);
+}
+
+fn apply2(f: func(int, int) -> int, a: int, b: int) -> int {
+    return f(a, b);
+}
+
+let r1: int = apply(double, 5);
+print(r1);
+
+let r2: int = apply2(add, 3, 4);
+print(r2);

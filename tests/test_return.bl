@@ -1,0 +1,15 @@
+// 返回值测试
+
+fn add_them(a: bigint, b: bigint) -> bigint {
+    return a + b;
+}
+
+fn test() {
+    let a: bigint = 100B;
+    let b: bigint = 200B;
+    let sum: bigint = add_them(a, b);
+    print(sum);
+}
+
+test();
+bigint_debug_stats();

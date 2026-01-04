@@ -1,0 +1,19 @@
+// 测试普通函数返回 bigint
+
+bigint_debug_stats();
+
+fn get_bigint() -> bigint {
+    return 123456789012345678901234567890b;
+}
+
+let b1: bigint = get_bigint();
+print(b1);
+
+bigint_debug_stats();
+
+let b2: bigint = get_bigint();
+print(b2);
+
+bigint_debug_stats();
+
+print(999);

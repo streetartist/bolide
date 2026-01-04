@@ -1,0 +1,13 @@
+// bigint 函数测试
+
+fn print_it(x: bigint) {
+    print(x);
+}
+
+fn test() {
+    let a: bigint = 100B;
+    print_it(a);
+}
+
+test();
+bigint_debug_stats();

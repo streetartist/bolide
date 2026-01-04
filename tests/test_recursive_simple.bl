@@ -1,0 +1,22 @@
+// 简单递归测试
+
+fn countdown(n: bigint) -> bigint {
+    if n <= 0B {
+        return 0B;
+    }
+    return countdown(n - 1B);
+}
+
+fn main_test() {
+    print("=== Simple Recursive Test ===");
+    bigint_debug_stats();
+
+    let result: bigint = countdown(3B);
+    print(result);
+
+    bigint_debug_stats();
+}
+
+main_test();
+print("Final:");
+bigint_debug_stats();

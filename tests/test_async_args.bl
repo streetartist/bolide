@@ -1,0 +1,12 @@
+// 测试带参数的 async 函数
+
+async fn async_add(a: int, b: int) -> int {
+    return a + b;
+}
+
+// 调用带参数的 async 函数
+let f: future = async_add(10, 20);
+let result: int = await f;
+print(result);
+
+print(999);

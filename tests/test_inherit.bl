@@ -1,0 +1,26 @@
+// 测试继承
+
+class Animal {
+    age: int;
+
+    fn get_age() -> int {
+        return self.age;
+    }
+}
+
+class Dog: Animal {
+    name: int;
+
+    fn bark() -> int {
+        return 100;
+    }
+}
+
+let d: Dog = Dog();
+d.age = 5;
+d.name = 42;
+
+print(d.age);
+print(d.name);
+print(d.get_age());
+print(d.bark());

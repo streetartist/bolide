@@ -1,0 +1,31 @@
+// 测试多线程 channel 通信（通过参数传递）
+
+let ch: channel<int> = channel();
+
+fn producer(c: channel<int>, n: int) -> int {
+    c <- n;
+    return n;
+}
+
+// 启动多个生产者线程
+let t1: future = spawn producer(ch, 100);
+let t2: future = spawn producer(ch, 200);
+let t3: future = spawn producer(ch, 300);
+
+// 接收数据
+print(1);
+let v1: int = <- ch;
+print(v1);
+
+let v2: int = <- ch;
+print(v2);
+
+let v3: int = <- ch;
+print(v3);
+
+// 等待线程结束
+join(t1);
+join(t2);
+join(t3);
+
+print(999);

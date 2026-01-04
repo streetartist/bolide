@@ -1,0 +1,25 @@
+// 逐步测试
+
+fn test1() {
+    print("test1 start");
+    let a: bigint = 100B;
+    print(a);
+    print("test1 end");
+}
+
+fn print_val(x: bigint) {
+    print(x);
+}
+
+fn test2() {
+    print("test2 start");
+    let a: bigint = 100B;
+    print_val(a);
+    print("test2 end");
+}
+
+print("=== test1 ===");
+test1();
+print("=== test2 ===");
+test2();
+print("done");

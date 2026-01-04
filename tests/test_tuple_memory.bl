@@ -1,0 +1,20 @@
+// 测试 tuple 内存安全
+
+bigint_debug_stats();
+
+// 创建包含 bigint 的 tuple
+let t1: (int, bigint, int) = (1, 12345678901234567890b, 3);
+print(t1[0]);
+print(t1[1]);
+print(t1[2]);
+
+bigint_debug_stats();
+
+// 创建更多 tuple
+let t2: (bigint, bigint) = (111111111111111111111b, 222222222222222222222b);
+print(t2[0]);
+print(t2[1]);
+
+bigint_debug_stats();
+
+print(999);

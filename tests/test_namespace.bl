@@ -1,0 +1,15 @@
+// 测试命名空间导入
+
+import "math_utils.bl";
+
+// 使用命名空间调用: math_utils.func()
+let a: int = math_utils.add(10, 20);
+print(a);  // 30
+
+let b: int = math_utils.mul(6, 7);
+print(b);  // 42
+
+let c: int = math_utils.square(5);
+print(c);  // 25
+
+print(999);

@@ -1,0 +1,21 @@
+// 测试 async select - 竞争等待
+
+async fn fast_task() -> int {
+    return 10;
+}
+
+async fn slow_task() -> int {
+    return 20;
+}
+
+// 竞争等待，第一个完成的获胜
+async select {
+    result = fast_task() => {
+        print(result);
+    }
+    result2 = slow_task() => {
+        print(result2);
+    }
+}
+
+print(999);

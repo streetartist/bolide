@@ -1,0 +1,8 @@
+// 最简返回值测试
+
+fn make_bigint() -> bigint {
+    return 100B;
+}
+
+let x: bigint = make_bigint();
+print(x);

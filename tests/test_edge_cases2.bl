@@ -1,0 +1,55 @@
+// 边界情况测试 - 全部在函数内
+
+fn test_early_return(cond: int) -> bigint {
+    let a: bigint = 100B;
+    if cond > 0 {
+        return a;
+    }
+    let b: bigint = 200B;
+    return b;
+}
+
+fn consume_bigint(x: bigint) {
+    print(x);
+}
+
+fn make_bigint() -> bigint {
+    return 999B;
+}
+
+fn run_all_tests() {
+    print("--- test_early_return(1) ---");
+    let r1: bigint = test_early_return(1);
+    print(r1);
+    bigint_debug_stats();
+
+    print("--- test_early_return(-1) ---");
+    let r2: bigint = test_early_return(-1);
+    print(r2);
+    bigint_debug_stats();
+
+    print("--- consume_bigint ---");
+    let a: bigint = 100B;
+    consume_bigint(a);
+    bigint_debug_stats();
+
+    print("--- multiple calls ---");
+    print(make_bigint());
+    print(make_bigint());
+    print(make_bigint());
+    bigint_debug_stats();
+
+    print("--- local temp ---");
+    let x: bigint = 1B;
+    let y: bigint = 2B;
+    print(x + y);
+    bigint_debug_stats();
+}
+
+print("=== Before tests ===");
+bigint_debug_stats();
+
+run_all_tests();
+
+print("=== After all tests ===");
+bigint_debug_stats();

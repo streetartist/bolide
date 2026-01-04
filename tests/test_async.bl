@@ -1,0 +1,19 @@
+// 测试协程功能
+
+fn compute(n: int) -> int {
+    return n * 2;
+}
+
+async fn async_compute(n: int) -> int {
+    return n * 3;
+}
+
+// 测试基本调用
+print(compute(10));
+
+// 测试 await（需要 async 函数）
+// let f: future = async_compute(10);
+// let r: int = await f;
+// print(r);
+
+print(999);

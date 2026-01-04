@@ -1,0 +1,11 @@
+// 简单测试 bigint_debug_stats
+
+bigint_debug_stats();
+
+let b1: bigint = 123b;
+bigint_debug_stats();
+
+let b2: bigint = 456b;
+bigint_debug_stats();
+
+print(999);

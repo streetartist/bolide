@@ -1,0 +1,12 @@
+// Test with print_bigint function name
+
+fn print_bigint(x: bigint) {
+    print(x);
+}
+
+fn test() {
+    let a: bigint = 100B;
+    print_bigint(a);
+}
+
+test();

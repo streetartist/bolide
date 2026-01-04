@@ -1,0 +1,18 @@
+// 测试内存泄漏
+
+fn test_basic() {
+    let a: bigint = 100B;
+    let b: bigint = 200B;
+    let c: bigint = a + b;
+    print(c);
+}
+
+print("=== Before test ===");
+bigint_debug_stats();
+
+test_basic();
+
+print("=== After test ===");
+bigint_debug_stats();
+
+// 期望: alloc == free (没有泄漏)

@@ -1,0 +1,32 @@
+// 测试 BigInt 和 Decimal 类型
+
+// 测试 BigInt 字面量
+let big1: bigint = 100B;
+let big2: bigint = 200B;
+
+print(big1);
+print(big2);
+
+// 测试从 int 转换为 bigint
+let x = 42;
+let big3: bigint = bigint(x);
+print(big3);
+
+// 测试 Decimal 字面量
+let dec1: decimal = 3.14D;
+let dec2: decimal = 2.0D;
+
+print(dec1);
+print(dec2);
+
+// 测试从 int 转换为 decimal
+let y = 100;
+let dec3: decimal = decimal(y);
+print(dec3);
+
+// 测试普通运算仍然正常
+print(10 + 20);
+print(50 - 10);
+print(6 * 7);
+
+print(999);

@@ -1,0 +1,22 @@
+// 单线程 compute 测试
+
+fn compute(x: bigint) -> bigint {
+    let result: bigint = x + x + 1B;
+    return result;
+}
+
+fn main_test() {
+    let a: bigint = 100B;
+    print("Before compute:");
+    bigint_debug_stats();
+
+    let r: bigint = compute(a);
+
+    print("After compute:");
+    print(r);
+    bigint_debug_stats();
+}
+
+main_test();
+print("Final:");
+bigint_debug_stats();

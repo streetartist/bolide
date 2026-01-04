@@ -1,0 +1,62 @@
+// 更多边界情况测试
+
+// 场景 1: 早期 return
+fn test_early_return(cond: int) -> bigint {
+    let a: bigint = 100B;
+    if cond > 0 {
+        return a;  // 早期返回
+    }
+    let b: bigint = 200B;
+    return b;
+}
+
+// 场景 2: 函数参数（RC 类型）
+fn consume_bigint(x: bigint) {
+    print(x);
+    // x 是参数，函数结束时需要释放吗？
+}
+
+fn test_param_ownership() {
+    let a: bigint = 100B;
+    consume_bigint(a);
+    // a 传入函数后还能用吗？这取决于语义（move vs copy）
+}
+
+// 场景 3: 多次函数调用
+fn make_bigint() -> bigint {
+    return 999B;
+}
+
+fn test_multiple_calls() {
+    print(make_bigint());
+    print(make_bigint());
+    print(make_bigint());
+}
+
+// 场景 4: 顶层代码
+let global_a: bigint = 1B;
+let global_b: bigint = 2B;
+print(global_a + global_b);
+
+print("=== Start edge case tests ===");
+bigint_debug_stats();
+
+print("--- test_early_return(1) ---");
+let r1: bigint = test_early_return(1);
+print(r1);
+bigint_debug_stats();
+
+print("--- test_early_return(-1) ---");
+let r2: bigint = test_early_return(-1);
+print(r2);
+bigint_debug_stats();
+
+print("--- test_param_ownership ---");
+test_param_ownership();
+bigint_debug_stats();
+
+print("--- test_multiple_calls ---");
+test_multiple_calls();
+bigint_debug_stats();
+
+print("=== All edge case tests done ===");

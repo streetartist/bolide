@@ -1,0 +1,22 @@
+// 测试 print 函数的类型感知
+
+// 测试直接打印字面量
+print(42);          // int
+print(100 + 200);   // int 表达式
+
+// 测试打印变量
+let x = 123;
+print(x);           // int 变量
+
+let big: bigint = 999B;
+print(big);         // bigint 变量
+
+let dec: decimal = 3.14159D;
+print(dec);         // decimal 变量
+
+// 测试表达式类型推断
+let a = 10;
+let b = 20;
+print(a + b);       // int + int = int
+
+print(888);

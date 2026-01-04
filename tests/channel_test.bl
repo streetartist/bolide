@@ -1,0 +1,17 @@
+// 多线程测试 - 通道
+
+// 创建通道
+let ch: channel = channel();
+
+// 生产者函数
+fn producer() -> int {
+    return 99;
+}
+
+// 在另一个线程中发送数据
+// 注意：这里需要修改语法来支持通道传递，目前先用简单测试
+
+// 直接测试发送和接收
+ch <- 42;
+let val: int = <- ch;
+print(val);

@@ -1,0 +1,47 @@
+// 测试内存释放是否正确
+
+fn test_temp_values() {
+    print("=== Test 1: Temp values ===");
+    // 临时值: a + b 的结果应该在 print 后释放
+    let a: bigint = 100B;
+    let b: bigint = 200B;
+    print(a + b);  // 临时结果 300B 应该被释放
+    print("After print a+b");
+}
+
+fn test_reassign() {
+    print("=== Test 2: Reassignment ===");
+    let s: str = "first";
+    print(s);
+    // 重新赋值时，旧值 "first" 应该被释放
+    // s = "second";  // 暂时不测试，可能不支持
+    print("After reassign");
+}
+
+fn test_scope() {
+    print("=== Test 3: Scope ===");
+    let x: bigint = 1000B;
+    // 函数结束时 x 应该被释放
+    print(x);
+}
+
+fn test_multiple_ops() {
+    print("=== Test 4: Multiple ops ===");
+    let a: bigint = 10B;
+    let b: bigint = 20B;
+    let c: bigint = 30B;
+    // 复杂表达式产生多个临时值
+    let result: bigint = a + b + c;
+    print(result);
+}
+
+// 运行测试
+test_temp_values();
+test_temp_values();  // 第二次调用，如果有内存泄漏会累积
+test_temp_values();
+
+test_reassign();
+test_scope();
+test_multiple_ops();
+
+print("=== All tests completed ===");

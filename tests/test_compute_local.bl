@@ -1,0 +1,21 @@
+// 简化测试 - 找出泄漏来源
+
+fn compute(x: bigint) -> bigint {
+    let result: bigint = x + x + 1B;
+    return result;
+}
+
+fn main_test() {
+    print("=== Test compute locally ===");
+    bigint_debug_stats();
+
+    let a: bigint = 100B;
+    let r: bigint = compute(a);
+    print(r);
+
+    bigint_debug_stats();
+}
+
+main_test();
+print("Final:");
+bigint_debug_stats();

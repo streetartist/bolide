@@ -1,0 +1,18 @@
+// 最简单的多线程 bigint 测试
+
+fn worker(x: bigint) -> bigint {
+    return x;
+}
+
+let a: bigint = 100B;
+print("Before spawn:");
+bigint_debug_stats();
+
+let handle = spawn worker(a);
+print("After spawn:");
+bigint_debug_stats();
+
+let result: bigint = join(handle);
+print("After join:");
+print(result);
+bigint_debug_stats();

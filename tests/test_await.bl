@@ -1,0 +1,12 @@
+// 测试无参数 async 函数
+
+async fn simple_async() -> int {
+    return 42;
+}
+
+// 调用 async 函数
+let f: future = simple_async();
+let result: int = await f;
+print(result);
+
+print(999);

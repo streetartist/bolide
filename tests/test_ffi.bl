@@ -1,0 +1,16 @@
+// 测试 FFI 调用 C 库
+
+extern "msvcrt.dll" {
+    fn abs(x: c_int) -> c_int;
+    fn sqrt(x: c_double) -> c_double;
+}
+
+// 测试 abs
+let a: int = abs(-42);
+print(a);
+
+// 测试 sqrt
+let b: float = sqrt(16.0);
+print(b);
+
+print(999);

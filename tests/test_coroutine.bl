@@ -1,0 +1,12 @@
+// 测试协程基础功能
+
+fn compute(n: int) -> int {
+    return n * 2;
+}
+
+// 测试基本调用
+print(1);
+let result: int = compute(21);
+print(result);
+
+print(999);

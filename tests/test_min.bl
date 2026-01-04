@@ -1,0 +1,11 @@
+// 最简单测试
+
+fn foo() {
+    print("foo");
+}
+
+fn bar() {
+    foo();
+}
+
+bar();

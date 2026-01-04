@@ -1,0 +1,16 @@
+// 最简单的临时值测试
+
+fn test_temp() {
+    print("Before:");
+    bigint_debug_stats();
+
+    let a: bigint = 1B + 2B;
+    print(a);
+
+    print("After let:");
+    bigint_debug_stats();
+}
+
+test_temp();
+print("Final:");
+bigint_debug_stats();

@@ -1,0 +1,27 @@
+// 测试 while 循环和赋值
+fn countdown(n: int) {
+    let i = n;
+    while i > 0 {
+        print(i);
+        i = i - 1;
+    }
+    print(0);
+}
+
+// 测试累加
+fn sum_to(n: int) -> int {
+    let total = 0;
+    let i = 1;
+    while i <= n {
+        total = total + i;
+        i = i + 1;
+    }
+    return total;
+}
+
+// 主程序
+print(999);
+countdown(5);
+
+print(888);
+print(sum_to(10));  // 1+2+...+10 = 55

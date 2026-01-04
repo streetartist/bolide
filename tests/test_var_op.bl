@@ -1,0 +1,17 @@
+// 测试变量参与运算
+
+fn test_var_op() {
+    print("Before:");
+    bigint_debug_stats();
+
+    let x: bigint = 100B;
+    let a: bigint = x + x + 1B;
+    print(a);
+
+    print("After let:");
+    bigint_debug_stats();
+}
+
+test_var_op();
+print("Final:");
+bigint_debug_stats();

@@ -1,0 +1,19 @@
+// 测试 ref 参数 - swap
+
+fn swap_values(ref a: bigint, ref b: bigint) {
+    let temp: bigint = a;
+    a = b;
+    b = temp;
+}
+
+print("=== swap test ===");
+let m: bigint = 111B;
+let n: bigint = 222B;
+print("Before swap:");
+print(m);
+print(n);
+swap_values(m, n);
+print("After swap:");
+print(m);
+print(n);
+bigint_debug_stats();

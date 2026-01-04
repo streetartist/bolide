@@ -1,0 +1,12 @@
+// 简单测试 - 只有一个分支
+async fn task() -> int {
+    return 10;
+}
+
+async select {
+    result = task() => {
+        print(result);
+    }
+}
+
+print(999);

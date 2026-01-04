@@ -1,0 +1,11 @@
+// 简单测试 BigInt
+
+print("Testing small bigint...");
+let a: bigint = 123B;
+print(a);
+
+print("Testing large bigint...");
+let b: bigint = 12345678901234567890B;
+print(b);
+
+print("Done");

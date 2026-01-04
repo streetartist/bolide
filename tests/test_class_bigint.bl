@@ -1,0 +1,23 @@
+// 测试 class 中 bigint 字段的内存管理
+
+class BigCounter {
+    value: bigint;
+}
+
+fn test_loop() {
+    let i: int = 0;
+    while i < 1000 {
+        let c: BigCounter = BigCounter();
+        c.value = 12345B;
+        i = i + 1;
+    }
+}
+
+bigint_debug_stats();
+print(1);
+test_loop();
+bigint_debug_stats();
+print(2);
+test_loop();
+bigint_debug_stats();
+print(3);

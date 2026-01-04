@@ -1,0 +1,54 @@
+// 测试多层嵌套循环的内存管理
+
+fn test_nested_loops() {
+    let i: int = 0;
+    while i < 2 {
+        let outer: bigint = 100B;
+        print(outer);
+
+        let j: int = 0;
+        while j < 3 {
+            let inner: bigint = 200B;
+            print(inner);
+            j = j + 1;
+        }
+
+        i = i + 1;
+    }
+}
+
+fn test_triple_nested() {
+    let i: int = 0;
+    while i < 2 {
+        let a: bigint = 1B;
+
+        let j: int = 0;
+        while j < 2 {
+            let b: bigint = 2B;
+
+            let k: int = 0;
+            while k < 2 {
+                let c: bigint = 3B;
+                print(a + b + c);
+                k = k + 1;
+            }
+
+            j = j + 1;
+        }
+
+        i = i + 1;
+    }
+}
+
+print("=== Before tests ===");
+bigint_debug_stats();
+
+print("--- test_nested_loops ---");
+test_nested_loops();
+bigint_debug_stats();
+
+print("--- test_triple_nested ---");
+test_triple_nested();
+bigint_debug_stats();
+
+print("=== All tests done ===");

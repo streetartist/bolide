@@ -1,0 +1,19 @@
+// 测试元组功能
+
+// 创建元组
+let t: (int, int) = (1, 2);
+
+// 打印元组
+print(t);
+
+// 访问元组元素
+let a: int = t[0];
+let b: int = t[1];
+print(a);
+print(b);
+
+// 三元组
+let t3: (int, int, int) = (10, 20, 30);
+print(t3);
+
+print(999);

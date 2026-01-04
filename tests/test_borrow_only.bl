@@ -1,0 +1,30 @@
+// Test borrow mode only
+
+fn print_bigint(x: bigint) {
+    print(x);
+}
+
+fn add_bigints(a: bigint, b: bigint) -> bigint {
+    return a + b;
+}
+
+fn test_borrow() {
+    print("=== Test Borrow Mode ===");
+    let a: bigint = 100B;
+    let b: bigint = 200B;
+
+    print_bigint(a);
+    print_bigint(b);
+
+    let sum: bigint = add_bigints(a, b);
+    print("Sum:");
+    print(sum);
+
+    print("After borrow, a is still:");
+    print(a);
+
+    bigint_debug_stats();
+}
+
+test_borrow();
+bigint_debug_stats();

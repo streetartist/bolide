@@ -1,0 +1,18 @@
+[package]
+name = "bolide-compiler"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+bolide-parser = { path = "../bolide-parser" }
+bolide-runtime = { path = "../bolide-runtime" }
+cranelift.workspace = true
+cranelift-jit.workspace = true
+cranelift-module.workspace = true
+cranelift-object.workspace = true
+cranelift-codegen.workspace = true
+cranelift-frontend.workspace = true
+cranelift-native.workspace = true
+target-lexicon.workspace = true
+thiserror.workspace = true
+libloading = "0.8"

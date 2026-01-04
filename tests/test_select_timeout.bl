@@ -1,0 +1,13 @@
+// 测试 select timeout 分支
+
+let ch: channel<int> = channel();
+
+print(1);
+
+// 测试 timeout（100ms 后超时）
+select {
+    x <- ch => { print(x); }
+    timeout(100) => { print(999); }
+}
+
+print(2);

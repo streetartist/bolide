@@ -1,0 +1,49 @@
+// 详细追踪测试
+
+fn swap_values(ref a: bigint, ref b: bigint) {
+    print("  [swap] entering");
+    bigint_debug_stats();
+
+    let temp: bigint = a;
+    print("  [swap] after let temp = a");
+    bigint_debug_stats();
+
+    a = b;
+    print("  [swap] after a = b");
+    bigint_debug_stats();
+
+    b = temp;
+    print("  [swap] after b = temp");
+    bigint_debug_stats();
+
+    print("  [swap] exiting");
+}
+
+print("=== Initial ===");
+bigint_debug_stats();
+
+let m: bigint = 111B;
+print("=== After m = 111B ===");
+bigint_debug_stats();
+
+let n: bigint = 222B;
+print("=== After n = 222B ===");
+bigint_debug_stats();
+
+print("Before swap: m=");
+print(m);
+print("n=");
+print(n);
+
+swap_values(m, n);
+
+print("=== After swap_values returns ===");
+bigint_debug_stats();
+
+print("After swap: m=");
+print(m);
+print("n=");
+print(n);
+
+print("=== Final ===");
+bigint_debug_stats();

@@ -1,0 +1,29 @@
+// 测试多线程 bigint 内存安全
+
+fn worker(x: bigint) -> bigint {
+    let result: bigint = x + x;
+    return result;
+}
+
+fn main_test() {
+    print("=== Thread BigInt Test ===");
+    bigint_debug_stats();
+
+    let a: bigint = 100B;
+    print("Before spawn:");
+    print(a);
+
+    let handle = spawn worker(a);
+    let result: bigint = join(handle);
+
+    print("After join:");
+    print(result);
+
+    print("Original a:");
+    print(a);
+
+    bigint_debug_stats();
+}
+
+main_test();
+bigint_debug_stats();

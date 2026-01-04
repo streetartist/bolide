@@ -1,0 +1,13 @@
+// Nested function call test
+
+fn print_val(x: bigint) {
+    print(x);
+}
+
+fn test() {
+    let a: bigint = 100B;
+    print_val(a);
+}
+
+test();
+bigint_debug_stats();

@@ -1,0 +1,14 @@
+// 测试 BigInt 运算
+
+print("Testing bigint arithmetic...");
+let a: bigint = 12345678901234567890B;
+let b: bigint = 98765432109876543210B;
+print("a created");
+print(a);
+print("b created");
+print(b);
+print("Adding...");
+let c: bigint = a + b;
+print("c created");
+print(c);
+print("Done");

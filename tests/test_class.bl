@@ -1,0 +1,16 @@
+// 测试 class 基本功能
+
+class Point {
+    x: int;
+    y: int;
+}
+
+let p: Point = Point();
+p.x = 10;
+p.y = 20;
+
+print(p.x);
+print(p.y);
+
+let sum: int = p.x + p.y;
+print(sum);

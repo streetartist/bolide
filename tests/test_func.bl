@@ -1,0 +1,19 @@
+// 测试函数作为参数
+
+fn double(x: int) -> int {
+    return x * 2;
+}
+
+fn triple(x: int) -> int {
+    return x * 3;
+}
+
+fn apply(f: func, x: int) -> int {
+    return f(x);
+}
+
+let result1: int = apply(double, 5);
+print(result1);
+
+let result2: int = apply(triple, 5);
+print(result2);

@@ -1,0 +1,9 @@
+[package]
+name = "bolide-parser"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+pest.workspace = true
+pest_derive.workspace = true
+thiserror.workspace = true

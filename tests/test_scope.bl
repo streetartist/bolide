@@ -1,0 +1,16 @@
+// 测试 await scope
+
+async fn background_task(id: int) -> int {
+    return id * 10;
+}
+
+// await scope 确保所有任务在 scope 结束前完成
+await scope {
+    let f1: future = background_task(1);
+    let f2: future = background_task(2);
+    let f3: future = background_task(3);
+    // 不显式 await，scope 结束时自动等待
+}
+
+print(100);
+print(999);

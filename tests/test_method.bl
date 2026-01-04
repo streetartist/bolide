@@ -1,0 +1,27 @@
+// 测试 class 方法
+
+class Point {
+    x: int;
+    y: int;
+
+    fn sum() -> int {
+        return self.x + self.y;
+    }
+
+    fn set(nx: int, ny: int) {
+        self.x = nx;
+        self.y = ny;
+    }
+}
+
+let p: Point = Point();
+p.x = 10;
+p.y = 20;
+
+let s: int = p.sum();
+print(s);
+
+p.set(100, 200);
+print(p.x);
+print(p.y);
+print(p.sum());

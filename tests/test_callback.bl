@@ -1,0 +1,14 @@
+// 测试 FFI 回调函数
+
+extern "msvcrt.dll" {
+    fn qsort(base: *void, num: size_t, size: size_t, compare: fn(*void, *void) -> c_int);
+}
+
+// 比较函数 - 用于 qsort 回调
+fn compare_int(a: ptr, b: ptr) -> int {
+    // 简单返回差值
+    return 0;
+}
+
+// 由于需要数组支持，先测试简单的回调传递
+print(999);

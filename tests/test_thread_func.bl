@@ -1,0 +1,25 @@
+// 多线程 bigint 测试 - 在函数内
+
+fn worker(x: bigint) -> bigint {
+    return x;
+}
+
+fn main_test() {
+    print("Before spawn:");
+    bigint_debug_stats();
+
+    let a: bigint = 100B;
+    let handle = spawn worker(a);
+
+    print("After spawn:");
+    bigint_debug_stats();
+
+    let result: bigint = join(handle);
+    print("After join:");
+    print(result);
+    bigint_debug_stats();
+}
+
+main_test();
+print("After main_test:");
+bigint_debug_stats();

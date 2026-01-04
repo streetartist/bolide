@@ -1,0 +1,37 @@
+// 测试 RC 自动释放
+
+fn test_string_rc() {
+    let s: str = "hello world";
+    print(s);
+}
+
+fn test_bigint_rc() {
+    let a: bigint = 12345678901234567890B;
+    let b: bigint = 98765432109876543210B;
+    let c: bigint = a + b;
+    print(c);
+}
+
+fn test_decimal_rc() {
+    let x: decimal = 3.14159D;
+    let y: decimal = 2.71828D;
+    let z: decimal = x * y;
+    print(z);
+}
+
+fn test_return_rc() -> str {
+    let s: str = "returned string";
+    return s;
+}
+
+// 测试
+print("=== Testing RC Auto Release ===");
+
+test_string_rc();
+test_bigint_rc();
+test_decimal_rc();
+
+let result: str = test_return_rc();
+print(result);
+
+print("=== RC Test Complete ===");

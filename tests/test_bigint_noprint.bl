@@ -1,0 +1,10 @@
+// 测试 BigInt 运算 - 不打印结果
+
+print("Testing bigint arithmetic without printing result...");
+let a: bigint = 12345678901234567890B;
+let b: bigint = 98765432109876543210B;
+print("a and b created");
+let c: bigint = a + b;
+print("c created from a + b");
+// 不打印c
+print("About to exit function...");

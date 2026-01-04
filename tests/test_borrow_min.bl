@@ -1,0 +1,9 @@
+// Simplest borrow test
+
+fn print_val(x: bigint) {
+    print(x);
+}
+
+let a: bigint = 100B;
+print_val(a);
+bigint_debug_stats();

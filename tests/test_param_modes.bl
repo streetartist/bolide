@@ -1,0 +1,155 @@
+// 测试三种参数传递模式
+
+// === 1. Borrow 模式（默认）===
+// 借用：传递裸指针，不操作 RC，函数内只读
+fn print_bigint(x: bigint) {
+    print(x);
+}
+
+fn add_bigints(a: bigint, b: bigint) -> bigint {
+    return a + b;
+}
+
+// === 2. Owned 模式 ===
+// 所有权转移：调用者失去所有权，被调用者负责释放
+fn consume_bigint(owned x: bigint) {
+    print("Consumed:");
+    print(x);
+    // x 在函数结束时会被释放
+}
+
+fn transfer_to_channel(owned val: bigint) {
+    print("Transferring to channel:");
+    print(val);
+}
+
+// === 3. Ref 模式 ===
+// 引用修改：传递指针地址，可修改调用者的变量
+fn double_value(ref x: bigint) {
+    x = x + x;
+}
+
+fn swap_values(ref a: bigint, ref b: bigint) {
+    let temp: bigint = a;
+    a = b;
+    b = temp;
+}
+
+fn increment(ref n: bigint) {
+    n = n + 1B;
+}
+
+// === 测试函数 ===
+
+fn test_borrow() {
+    print("=== Test Borrow Mode ===");
+    let a: bigint = 100B;
+    let b: bigint = 200B;
+
+    // 借用后变量仍可用
+    print_bigint(a);
+    print_bigint(b);
+
+    // 多次借用
+    let sum: bigint = add_bigints(a, b);
+    print("Sum:");
+    print(sum);
+
+    // 原变量仍然可用
+    print("After borrow, a is still:");
+    print(a);
+
+    bigint_debug_stats();
+}
+
+fn test_owned() {
+    print("=== Test Owned Mode ===");
+    let x: bigint = 500B;
+    print("Before consume:");
+    print(x);
+
+    // 转移所有权
+    consume_bigint(x);
+
+    // 注意：此时 x 已失效，不能再使用
+    // 如果取消下面的注释，应该会报错：
+    // print(x);  // Error: Variable 'x' has been moved
+
+    print("After consume, x is moved");
+    bigint_debug_stats();
+}
+
+fn test_ref() {
+    print("=== Test Ref Mode ===");
+    let val: bigint = 10B;
+    print("Before double:");
+    print(val);
+
+    double_value(val);
+    print("After double:");
+    print(val);
+
+    // 测试 swap
+    let m: bigint = 111B;
+    let n: bigint = 222B;
+    print("Before swap: m=");
+    print(m);
+    print("n=");
+    print(n);
+
+    swap_values(m, n);
+    print("After swap: m=");
+    print(m);
+    print("n=");
+    print(n);
+
+    // 测试 increment
+    let counter: bigint = 0B;
+    increment(counter);
+    increment(counter);
+    increment(counter);
+    print("Counter after 3 increments:");
+    print(counter);
+
+    bigint_debug_stats();
+}
+
+fn test_mixed() {
+    print("=== Test Mixed Modes ===");
+
+    // 复合使用场景
+    let a: bigint = 50B;
+    let b: bigint = 30B;
+
+    // Borrow: 只读访问
+    let sum: bigint = add_bigints(a, b);
+    print("Sum:");
+    print(sum);
+
+    // Ref: 修改 a
+    double_value(a);
+    print("After doubling a:");
+    print(a);
+
+    // Borrow again
+    print_bigint(a);
+    print_bigint(b);
+
+    bigint_debug_stats();
+}
+
+// === 主程序 ===
+print("========================================");
+print("Testing Parameter Passing Modes");
+print("========================================");
+bigint_debug_stats();
+
+test_borrow();
+test_ref();
+test_mixed();
+test_owned();
+
+print("========================================");
+print("All tests completed!");
+print("========================================");
+bigint_debug_stats();

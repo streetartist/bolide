@@ -1,0 +1,22 @@
+// 测试递归函数内存安全
+
+fn factorial(n: bigint) -> bigint {
+    if n <= 1B {
+        return 1B;
+    }
+    return n * factorial(n - 1B);
+}
+
+fn main_test() {
+    print("=== Recursive Memory Test ===");
+    bigint_debug_stats();
+
+    let result: bigint = factorial(5B);
+    print(result);
+
+    bigint_debug_stats();
+}
+
+main_test();
+print("Final:");
+bigint_debug_stats();

@@ -1,0 +1,11 @@
+// 测试 class 中 bigint 字段的读取
+
+class BigCounter {
+    value: bigint;
+}
+
+let c: BigCounter = BigCounter();
+c.value = 12345B;
+print(c.value);
+
+bigint_debug_stats();

@@ -1,0 +1,47 @@
+// 测试算术运算
+fn test_arithmetic() {
+    print(10 + 5);    // 15
+    print(10 - 3);    // 7
+    print(6 * 7);     // 42
+    print(100 / 4);   // 25
+    print(17 % 5);    // 2
+}
+
+// 测试比较运算
+fn test_comparison() {
+    print(10 > 5);    // 1 (true)
+    print(3 < 2);     // 0 (false)
+    print(5 == 5);    // 1
+    print(5 != 3);    // 1
+}
+
+// 测试控制流
+fn abs(x: int) -> int {
+    if x > 0 {
+        return x;
+    } else {
+        return 0 - x;
+    }
+}
+
+// 测试递归 - 斐波那契
+fn fib(n: int) -> int {
+    if n <= 1 {
+        return n;
+    }
+    return fib(n - 1) + fib(n - 2);
+}
+
+// 主程序
+print(111);
+test_arithmetic();
+
+print(222);
+test_comparison();
+
+print(333);
+print(abs(10));
+print(abs(0 - 5));
+
+print(444);
+print(fib(10));

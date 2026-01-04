@@ -1,0 +1,41 @@
+// 线程返回值类型测试
+
+// 返回 int 类型
+fn worker_int() -> int {
+    return 42;
+}
+
+// 返回 float 类型
+fn worker_float() -> float {
+    return 3.14;
+}
+
+// 返回 bool 类型
+fn worker_bool() -> bool {
+    return true;
+}
+
+// 返回 string 类型
+fn worker_string() -> str {
+    return "Hello from thread!";
+}
+
+// 测试 int 返回值
+let h1: future = spawn worker_int();
+let r1: int = join(h1);
+print(r1);
+
+// 测试 float 返回值
+let h2: future = spawn worker_float();
+let r2: float = join(h2);
+print(r2);
+
+// 测试 bool 返回值
+let h3: future = spawn worker_bool();
+let r3: bool = join(h3);
+print(r3);
+
+// 测试 string 返回值
+let h4: future = spawn worker_string();
+let r4: str = join(h4);
+print(r4);

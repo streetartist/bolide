@@ -1,0 +1,21 @@
+// 多个 bigint 函数测试
+
+fn print_it(x: bigint) {
+    print(x);
+}
+
+fn add_them(a: bigint, b: bigint) -> bigint {
+    return a + b;
+}
+
+fn test() {
+    let a: bigint = 100B;
+    let b: bigint = 200B;
+    print_it(a);
+    print_it(b);
+    let sum: bigint = add_them(a, b);
+    print(sum);
+}
+
+test();
+bigint_debug_stats();

@@ -1,0 +1,47 @@
+// 综合测试：参数模式 + 多线程内存安全
+
+fn borrow_test(x: bigint) {
+    print(x);
+}
+
+fn owned_test(owned x: bigint) {
+    print(x);
+}
+
+fn ref_test(ref x: bigint) {
+    x = x + 1B;
+}
+
+fn thread_worker(x: bigint) -> bigint {
+    return x + x;
+}
+
+fn main_test() {
+    print("=== Comprehensive Test ===");
+    bigint_debug_stats();
+
+    // Borrow mode
+    let a: bigint = 100B;
+    borrow_test(a);
+    print(a);
+
+    // Ref mode
+    ref_test(a);
+    print(a);
+
+    // Owned mode
+    let b: bigint = 200B;
+    owned_test(b);
+
+    // Multi-thread
+    let c: bigint = 300B;
+    let h = spawn thread_worker(c);
+    let r: bigint = join(h);
+    print(r);
+
+    bigint_debug_stats();
+}
+
+main_test();
+print("=== Final ===");
+bigint_debug_stats();

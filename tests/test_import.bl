@@ -1,0 +1,18 @@
+// 测试模块导入
+
+import "math_utils.bl";
+
+// 使用导入的函数
+let a: int = add(10, 20);
+print(a);  // 30
+
+let b: int = mul(6, 7);
+print(b);  // 42
+
+let c: int = square(5);
+print(c);  // 25
+
+let d: int = cube(3);
+print(d);  // 27
+
+print(999);

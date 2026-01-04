@@ -1,0 +1,27 @@
+// 测试协程内存安全
+
+bigint_debug_stats();
+
+// 异步函数返回 bigint
+async fn async_bigint() -> bigint {
+    return 123456789012345678901234567890b;
+}
+
+// 测试单个协程
+let f1: future = async_bigint();
+let r1: bigint = await f1;
+print(r1);
+
+bigint_debug_stats();
+
+// 测试多个协程
+let f2: future = async_bigint();
+let f3: future = async_bigint();
+let r2: bigint = await f2;
+let r3: bigint = await f3;
+print(r2);
+print(r3);
+
+bigint_debug_stats();
+
+print(999);

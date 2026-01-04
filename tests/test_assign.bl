@@ -1,0 +1,18 @@
+// 测试赋值语句的内存管理
+
+fn test_reassign() {
+    let a: bigint = 1B;
+    print(a);
+    a = 2B;
+    print(a);
+    a = 3B;
+    print(a);
+}
+
+print("=== Before test ===");
+bigint_debug_stats();
+
+test_reassign();
+
+print("=== After test ===");
+bigint_debug_stats();

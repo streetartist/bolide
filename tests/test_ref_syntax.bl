@@ -1,0 +1,16 @@
+// Test ref keyword
+
+fn double_val(ref x: bigint) {
+    x = x + x;
+}
+
+fn test() {
+    print("=== Test ===");
+    let a: bigint = 100B;
+    print(a);
+    double_val(a);
+    print(a);
+}
+
+test();
+bigint_debug_stats();

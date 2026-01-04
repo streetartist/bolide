@@ -1,0 +1,35 @@
+// 多线程复杂测试
+
+fn compute(x: bigint) -> bigint {
+    let result: bigint = x + x + 1B;
+    return result;
+}
+
+fn main_test() {
+    print("=== Multi-thread Complex Test ===");
+    bigint_debug_stats();
+
+    let a: bigint = 100B;
+    let b: bigint = 200B;
+
+    // 启动两个线程
+    let h1 = spawn compute(a);
+    let h2 = spawn compute(b);
+
+    print("After 2 spawns:");
+    bigint_debug_stats();
+
+    // 等待结果
+    let r1: bigint = join(h1);
+    let r2: bigint = join(h2);
+
+    print("Results:");
+    print(r1);
+    print(r2);
+
+    bigint_debug_stats();
+}
+
+main_test();
+print("Final:");
+bigint_debug_stats();

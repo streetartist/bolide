@@ -1,0 +1,10 @@
+// 简单的 Ref 测试
+
+fn double_it(ref x: bigint) {
+    x = x + x;
+}
+
+let a: bigint = 10B;
+print(a);
+double_it(a);
+print(a);

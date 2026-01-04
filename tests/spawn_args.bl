@@ -1,0 +1,24 @@
+// 测试带参数的 spawn
+
+fn add(a: int, b: int) -> int {
+    return a + b;
+}
+
+fn multiply(x: int, y: int) -> int {
+    return x * y;
+}
+
+// 测试 spawn 带参数
+let t1 = spawn add(10, 20);
+let result1 = join(t1);
+print(result1);  // 应该输出 30
+
+let t2 = spawn multiply(5, 6);
+let result2 = join(t2);
+print(result2);  // 应该输出 30
+
+// 测试多个并发 spawn
+let t3 = spawn add(100, 200);
+let t4 = spawn multiply(10, 10);
+print(join(t3));  // 300
+print(join(t4));  // 100

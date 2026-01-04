@@ -1,0 +1,213 @@
+// Bolide 语法定义 (PEG)
+// 使用 {} 块语法，类似 Rust
+
+// 空白和注释
+WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
+COMMENT = _{ "//" ~ (!"\n" ~ ANY)* | "/*" ~ (!"*/" ~ ANY)* ~ "*/" }
+
+// 程序入口
+program = { SOI ~ (statement)* ~ EOI }
+
+// 语句
+statement = {
+    extern_block |
+    func_def |
+    class_def |
+    if_stmt |
+    while_stmt |
+    for_stmt |
+    pool_stmt |
+    await_scope_stmt |
+    async_select_stmt |
+    select_stmt |
+    send_stmt |
+    return_stmt |
+    import_stmt |
+    var_decl |
+    assign_stmt |
+    expr_stmt
+}
+
+// 导入语句
+import_stmt = { "import" ~ (string_lit | module_path) ~ ("as" ~ ident)? ~ ";" }
+module_path = { ident ~ ("." ~ ident)* }
+
+// FFI extern 块
+extern_block = { "extern" ~ string_lit ~ "{" ~ extern_decl* ~ "}" }
+extern_decl = { extern_func | extern_struct | extern_typedef }
+extern_func = { "fn" ~ ident ~ "(" ~ extern_param_list? ~ variadic? ~ ")" ~ ("->" ~ c_type)? ~ ";" }
+extern_param_list = { extern_param ~ ("," ~ extern_param)* }
+extern_param = { ident ~ ":" ~ c_type }
+variadic = { "," ~ "..." }
+extern_struct = { "struct" ~ ident ~ "{" ~ extern_field* ~ "}" }
+extern_field = { ident ~ ":" ~ c_type ~ ";" }
+extern_typedef = { "type" ~ ident ~ "=" ~ c_type ~ ";" }
+
+// 函数定义（支持 async）
+func_def = {
+    async_keyword? ~ "fn" ~ ident ~ "(" ~ param_list? ~ ")" ~ ("->" ~ type_expr)? ~ block
+}
+async_keyword = { "async" }
+param_list = { param ~ ("," ~ param)* }
+param = { param_mode? ~ ident ~ ":" ~ type_expr }
+param_mode = { "owned" | "ref" }
+
+// 类定义
+class_def = {
+    "class" ~ ident ~ (":" ~ ident)? ~ "{" ~ class_body ~ "}"
+}
+class_body = { class_member* }
+class_member = { field_decl | method_def }
+field_decl = { ident ~ ":" ~ type_expr ~ ("=" ~ expr)? ~ ";" }
+method_def = { func_def }
+
+// 控制流
+if_stmt = {
+    "if" ~ expr ~ block ~
+    elif_branch* ~
+    else_branch?
+}
+elif_branch = { "elif" ~ expr ~ block }
+else_branch = { "else" ~ block }
+
+while_stmt = { "while" ~ expr ~ block }
+for_stmt = { "for" ~ ident ~ "in" ~ expr ~ block }
+
+// 线程池块
+pool_stmt = { "pool" ~ "(" ~ expr ~ ")" ~ block }
+
+// await scope 语句: await scope { ... }
+await_scope_stmt = { "await" ~ "scope" ~ block }
+
+// 协程 select 语句
+async_select_stmt = { "async" ~ "select" ~ "{" ~ async_select_branch+ ~ "}" }
+async_select_branch = { async_select_bind | async_select_expr }
+async_select_bind = { ident ~ "=" ~ expr ~ "=>" ~ block }
+async_select_expr = { expr ~ "=>" ~ block }
+
+// channel select 语句
+select_stmt = { "select" ~ "{" ~ select_branch+ ~ "}" }
+select_branch = { select_recv | select_timeout | select_default }
+select_recv = { ident ~ "<-" ~ ident ~ "=>" ~ block }
+select_timeout = { "timeout" ~ "(" ~ expr ~ ")" ~ "=>" ~ block }
+select_default = { "default" ~ "=>" ~ block }
+
+// 通道发送语句: ch <- val;
+send_stmt = { ident ~ "<-" ~ expr ~ ";" }
+
+return_stmt = { "return" ~ expr? ~ ";" }
+var_decl = { "let" ~ ident ~ (":" ~ type_expr)? ~ ("=" ~ expr)? ~ ";" }
+assign_stmt = { assign_target ~ "=" ~ expr ~ ";" }
+assign_target = { (ident | self_lit) ~ member* }
+expr_stmt = { expr ~ ";" }
+
+// 代码块
+block = { "{" ~ statement* ~ "}" }
+
+// 表达式
+expr = { or_expr }
+or_expr = { and_expr ~ ("or" ~ and_expr)* }
+and_expr = { cmp_expr ~ ("and" ~ cmp_expr)* }
+cmp_expr = { add_expr ~ (cmp_op ~ add_expr)* }
+add_expr = { mul_expr ~ (add_op ~ mul_expr)* }
+mul_expr = { unary_expr ~ (mul_op ~ unary_expr)* }
+unary_expr = { unary_op? ~ postfix_expr }
+postfix_expr = { primary ~ (call_args | index | member)* }
+
+cmp_op = { "==" | "!=" | "<=" | ">=" | "<" | ">" }
+add_op = { "+" | "-" }
+mul_op = { "*" | "/" | "%" }
+unary_op = { "-" | "not" }
+
+// 后缀操作
+call_args = { "(" ~ (expr ~ ("," ~ expr)*)? ~ ")" }
+index = { "[" ~ expr ~ "]" }
+member = { "." ~ ident }
+
+// 基本表达式
+primary = {
+    tuple_literal |
+    "(" ~ expr ~ ")" |
+    await_all_expr |
+    await_expr |
+    spawn_expr |
+    recv_expr |
+    list_literal |
+    bigint_lit |
+    decimal_lit |
+    float_lit |
+    int_lit |
+    string_lit |
+    bool_lit |
+    none_lit |
+    self_lit |
+    ident
+}
+
+// await 表达式: await expr
+await_expr = { "await" ~ expr }
+
+// await all 表达式: await all { expr, expr, ... }
+await_all_expr = { "await" ~ "all" ~ "{" ~ (expr ~ ("," ~ expr)*)? ~ "}" }
+
+// self 字面量
+self_lit = { "self" }
+
+// spawn 表达式: spawn func(args)
+spawn_expr = { "spawn" ~ ident ~ call_args }
+
+// 接收表达式: <- ch
+recv_expr = { "<-" ~ ident }
+
+// 字面量
+list_literal = { "[" ~ (expr ~ ("," ~ expr)*)? ~ "]" }
+tuple_literal = { "(" ~ expr ~ "," ~ (expr ~ ("," ~ expr)*)? ~ ")" }
+
+// bigint 字面量: 123B 或 123b
+bigint_lit = @{ ASCII_DIGIT+ ~ ("B" | "b") }
+
+// decimal 字面量: 123.45D 或 123.45d
+decimal_lit = @{ ASCII_DIGIT+ ~ ("." ~ ASCII_DIGIT+)? ~ ("D" | "d") }
+
+// 普通字面量
+int_lit = @{ ASCII_DIGIT+ }
+float_lit = @{ ASCII_DIGIT+ ~ "." ~ ASCII_DIGIT+ }
+string_lit = @{ "\"" ~ (!"\"" ~ ANY)* ~ "\"" }
+bool_lit = { "true" | "false" }
+none_lit = { "none" }
+
+// 类型
+type_expr = { tuple_type | list_type | channel_type | func_type | basic_type }
+tuple_type = { "(" ~ type_expr ~ ("," ~ type_expr)+ ~ ")" }
+list_type = { "list" ~ "<" ~ type_expr ~ ">" }
+channel_type = { "channel" ~ "<" ~ type_expr ~ ">" }
+func_type = { "func" ~ "(" ~ func_type_params? ~ ")" ~ ("->" ~ type_expr)? }
+func_type_params = { type_expr ~ ("," ~ type_expr)* }
+basic_type = { "int" | "float" | "bool" | "str" | "bigint" | "decimal" | "dynamic" | "ptr" | "future" | ident }
+
+// 标识符
+ident = @{ !keyword ~ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
+
+// 关键字
+keyword = {
+    ("fn" | "let" | "class" | "if" | "elif" | "else" |
+    "while" | "for" | "in" | "return" | "import" | "as" |
+    "true" | "false" | "none" | "and" | "or" | "not" |
+    "spawn" | "pool" | "self" | "super" | "select" | "timeout" | "default" |
+    "async" | "await" | "scope" | "all" | "extern" | "struct" | "type") ~ !(ASCII_ALPHANUMERIC | "_")
+}
+
+// C 类型系统
+c_type = { c_func_ptr | c_ptr_type | c_array_type | c_basic_type }
+c_ptr_type = { "*" ~ c_type }
+c_array_type = { c_basic_type ~ "[" ~ int_lit ~ "]" }
+c_func_ptr = { "fn" ~ "(" ~ c_type_list? ~ ")" ~ ("->" ~ c_type)? }
+c_type_list = { c_type ~ ("," ~ c_type)* }
+c_basic_type = {
+    "void" | "char" | "uchar" | "short" | "ushort" |
+    "c_int" | "c_uint" | "long" | "ulong" | "longlong" | "ulonglong" |
+    "c_float" | "c_double" | "c_bool" |
+    "i8" | "u8" | "i16" | "u16" | "i32" | "u32" | "i64" | "u64" |
+    "size_t" | "ptrdiff_t" |
+    ident
+}

@@ -1,0 +1,17 @@
+// 多线程测试 - 线程池 + future 类型
+
+fn worker() -> int {
+    return 42;
+}
+
+// 线程池中 spawn 也返回 future
+pool(4) {
+    let h1: future = spawn worker();
+    let h2: future = spawn worker();
+    let r1: int = join(h1);
+    let r2: int = join(h2);
+    print(r1);
+    print(r2);
+}
+
+print(100);

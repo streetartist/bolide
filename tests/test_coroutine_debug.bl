@@ -1,0 +1,19 @@
+// 精确测试协程内部 bigint
+
+bigint_debug_stats();
+
+async fn async_bigint() -> bigint {
+    bigint_debug_stats();  // 函数内部检查
+    let temp: bigint = 123b;
+    bigint_debug_stats();  // 创建后检查
+    return temp;
+}
+
+let f1: future = async_bigint();
+bigint_debug_stats();  // spawn 后检查
+
+let r1: bigint = await f1;
+bigint_debug_stats();  // await 后检查
+
+print(r1);
+print(999);

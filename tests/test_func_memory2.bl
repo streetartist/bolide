@@ -1,0 +1,30 @@
+// 复杂函数类型内存测试
+
+fn compute(x: bigint) -> bigint {
+    return x + x + 1B;
+}
+
+fn apply(f: func(bigint) -> bigint, x: bigint) -> bigint {
+    let result: bigint = f(x);
+    return result;
+}
+
+fn main_test() {
+    print("=== Complex Func Memory Test ===");
+    bigint_debug_stats();
+
+    let a: bigint = 100B;
+    let b: bigint = 200B;
+
+    let r1: bigint = apply(compute, a);
+    let r2: bigint = apply(compute, b);
+
+    print(r1);
+    print(r2);
+
+    bigint_debug_stats();
+}
+
+main_test();
+print("Final:");
+bigint_debug_stats();

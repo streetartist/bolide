@@ -1,0 +1,11 @@
+// 简单测试 - 不用协程
+
+bigint_debug_stats();
+
+let b1: bigint = 111b;
+bigint_debug_stats();
+
+print(b1);
+bigint_debug_stats();
+
+print(999);

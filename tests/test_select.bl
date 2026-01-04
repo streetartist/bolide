@@ -1,0 +1,23 @@
+// 测试 select 语句
+
+let ch1: channel<int> = channel();
+let ch2: channel<int> = channel();
+
+// 测试 default 分支
+print(1);
+select {
+    x <- ch1 => { print(x); }
+    default => { print(100); }
+}
+
+// 发送数据到 ch1
+ch1 <- 42;
+
+// 测试接收
+print(2);
+select {
+    x <- ch1 => { print(x); }
+    default => { print(200); }
+}
+
+print(3);

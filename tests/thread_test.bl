@@ -1,0 +1,10 @@
+// 多线程测试 - 使用 future 类型
+
+fn worker() -> int {
+    return 42;
+}
+
+// spawn 返回 future 类型
+let h1: future = spawn worker();
+let r1: int = join(h1);
+print(r1);

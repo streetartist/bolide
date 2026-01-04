@@ -1,0 +1,15 @@
+[package]
+name = "bolide-cli"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "bolide"
+path = "src/main.rs"
+
+[dependencies]
+bolide-parser = { path = "../bolide-parser" }
+bolide-compiler = { path = "../bolide-compiler" }
+bolide-runtime = { path = "../bolide-runtime" }
+clap.workspace = true
+miette.workspace = true

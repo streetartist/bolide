@@ -1,0 +1,15 @@
+// 简单的 Owned 测试
+
+fn consume_it(owned x: bigint) {
+    print("Received:");
+    print(x);
+}
+
+let a: bigint = 100B;
+print("Before:");
+print(a);
+
+consume_it(a);
+
+print("After consume - a should be moved");
+bigint_debug_stats();

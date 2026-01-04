@@ -1,0 +1,15 @@
+// Test owned keyword
+
+fn consume(owned x: bigint) {
+    print("Consumed:");
+    print(x);
+}
+
+fn test() {
+    print("=== Test ===");
+    let a: bigint = 100B;
+    consume(a);
+}
+
+test();
+bigint_debug_stats();

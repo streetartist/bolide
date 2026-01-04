@@ -1,0 +1,21 @@
+// Test with two functions
+
+fn print_val(x: bigint) {
+    print(x);
+}
+
+fn add_vals(a: bigint, b: bigint) -> bigint {
+    return a + b;
+}
+
+fn test() {
+    let a: bigint = 100B;
+    let b: bigint = 200B;
+    print_val(a);
+    print_val(b);
+    let sum: bigint = add_vals(a, b);
+    print(sum);
+}
+
+test();
+bigint_debug_stats();

@@ -1,0 +1,24 @@
+// 测试函数类型 + bigint 内存安全
+
+fn double_bigint(x: bigint) -> bigint {
+    return x + x;
+}
+
+fn apply_bigint(f: func(bigint) -> bigint, x: bigint) -> bigint {
+    return f(x);
+}
+
+fn main_test() {
+    print("=== Func + BigInt Memory Test ===");
+    bigint_debug_stats();
+
+    let a: bigint = 100B;
+    let r: bigint = apply_bigint(double_bigint, a);
+    print(r);
+
+    bigint_debug_stats();
+}
+
+main_test();
+print("Final:");
+bigint_debug_stats();

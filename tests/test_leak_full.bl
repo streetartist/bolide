@@ -1,0 +1,118 @@
+// 全面的内存泄漏测试
+
+// ===== 场景 1: 函数参数传递 =====
+fn take_bigint(x: bigint) {
+    print(x);
+    // x 是参数，函数结束时需要释放吗？
+}
+
+fn test_param() {
+    let a: bigint = 100B;
+    take_bigint(a);
+    // a 传入函数后，这里还能用吗？
+    print(a);
+}
+
+// ===== 场景 2: 函数返回值 =====
+fn create_bigint() -> bigint {
+    let x: bigint = 999B;
+    return x;
+}
+
+fn test_return() {
+    let result: bigint = create_bigint();
+    print(result);
+}
+
+fn test_return_unused() {
+    // 返回值没有被使用
+    create_bigint();
+}
+
+// ===== 场景 3: 字符串字面量 =====
+fn test_string_literal() {
+    let s: str = "hello";
+    print(s);
+}
+
+// ===== 场景 4: 条件分支 =====
+fn test_if_branch(cond: int) {
+    if cond > 0 {
+        let a: bigint = 111B;
+        print(a);
+    } else {
+        let b: bigint = 222B;
+        print(b);
+    }
+}
+
+// ===== 场景 5: 循环 =====
+fn test_loop() {
+    let i: int = 0;
+    while i < 3 {
+        let temp: bigint = 100B;
+        print(temp);
+        i = i + 1;
+    }
+}
+
+// ===== 场景 6: 嵌套表达式 =====
+fn get_bigint() -> bigint {
+    return 50B;
+}
+
+fn test_nested() {
+    // get_bigint() 返回的临时值
+    print(get_bigint());
+}
+
+// ===== 场景 7: 复杂表达式 =====
+fn test_complex() {
+    let a: bigint = 10B;
+    let b: bigint = 20B;
+    let c: bigint = 30B;
+    // a + b 产生临时值，然后 + c 又产生临时值
+    print(a + b + c);
+}
+
+// ===== 运行测试 =====
+print("=== Start Tests ===");
+bigint_debug_stats();
+
+print("--- test_param ---");
+test_param();
+bigint_debug_stats();
+
+print("--- test_return ---");
+test_return();
+bigint_debug_stats();
+
+print("--- test_return_unused ---");
+test_return_unused();
+bigint_debug_stats();
+
+print("--- test_string_literal ---");
+test_string_literal();
+bigint_debug_stats();
+
+print("--- test_if_branch(1) ---");
+test_if_branch(1);
+bigint_debug_stats();
+
+print("--- test_if_branch(-1) ---");
+test_if_branch(-1);
+bigint_debug_stats();
+
+print("--- test_loop ---");
+test_loop();
+bigint_debug_stats();
+
+print("--- test_nested ---");
+test_nested();
+bigint_debug_stats();
+
+print("--- test_complex ---");
+test_complex();
+bigint_debug_stats();
+
+print("=== All Tests Done ===");

@@ -1,0 +1,41 @@
+// 更全面的内存泄漏测试
+
+fn test_basic() {
+    let a: bigint = 100B;
+    let b: bigint = 200B;
+    let c: bigint = a + b;
+    print(c);
+}
+
+fn test_temp_value() {
+    let a: bigint = 100B;
+    let b: bigint = 200B;
+    // 临时值: a + b 的结果
+    print(a + b);
+}
+
+fn test_complex_expr() {
+    let a: bigint = 10B;
+    let b: bigint = 20B;
+    let c: bigint = 30B;
+    // (a + b) + c 产生两个临时值
+    let result: bigint = a + b + c;
+    print(result);
+}
+
+print("=== Before tests ===");
+bigint_debug_stats();
+
+test_basic();
+print("After test_basic:");
+bigint_debug_stats();
+
+test_temp_value();
+print("After test_temp_value:");
+bigint_debug_stats();
+
+test_complex_expr();
+print("After test_complex_expr:");
+bigint_debug_stats();
+
+print("=== End of tests ===");
