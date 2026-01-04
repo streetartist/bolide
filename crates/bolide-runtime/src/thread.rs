@@ -4,6 +4,7 @@
 //! 使用 trampoline 方案，运行时只处理无参函数
 
 use std::sync::{Arc, Mutex, Condvar};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
 use std::collections::VecDeque;
 use std::os::raw::c_void;
@@ -31,6 +32,7 @@ pub struct BolideThreadHandle {
     handle: Option<JoinHandle<ThreadResult>>,
     result: ThreadResult,
     has_result: bool,
+    cancelled: Arc<AtomicBool>,
 }
 
 unsafe impl Send for BolideThreadHandle {}
@@ -129,6 +131,7 @@ unsafe impl Sync for BolidePoolHandle {}
 #[no_mangle]
 pub extern "C" fn bolide_thread_spawn_int(func_ptr: extern "C" fn() -> i64) -> *mut BolideThreadHandle {
     let send_fn = SendFnPtr(func_ptr as *const c_void);
+    let cancelled = Arc::new(AtomicBool::new(false));
 
     let handle = thread::spawn(move || {
         let f: extern "C" fn() -> i64 = unsafe { std::mem::transmute(send_fn) };
@@ -139,6 +142,7 @@ pub extern "C" fn bolide_thread_spawn_int(func_ptr: extern "C" fn() -> i64) -> *
         handle: Some(handle),
         result: ThreadResult { int_val: 0 },
         has_result: false,
+        cancelled,
     }))
 }
 
@@ -146,6 +150,7 @@ pub extern "C" fn bolide_thread_spawn_int(func_ptr: extern "C" fn() -> i64) -> *
 #[no_mangle]
 pub extern "C" fn bolide_thread_spawn_float(func_ptr: extern "C" fn() -> f64) -> *mut BolideThreadHandle {
     let send_fn = SendFnPtr(func_ptr as *const c_void);
+    let cancelled = Arc::new(AtomicBool::new(false));
 
     let handle = thread::spawn(move || {
         let f: extern "C" fn() -> f64 = unsafe { std::mem::transmute(send_fn) };
@@ -156,6 +161,7 @@ pub extern "C" fn bolide_thread_spawn_float(func_ptr: extern "C" fn() -> f64) ->
         handle: Some(handle),
         result: ThreadResult { float_val: 0.0 },
         has_result: false,
+        cancelled,
     }))
 }
 
@@ -163,6 +169,7 @@ pub extern "C" fn bolide_thread_spawn_float(func_ptr: extern "C" fn() -> f64) ->
 #[no_mangle]
 pub extern "C" fn bolide_thread_spawn_ptr(func_ptr: extern "C" fn() -> *mut c_void) -> *mut BolideThreadHandle {
     let send_fn = SendFnPtr(func_ptr as *const c_void);
+    let cancelled = Arc::new(AtomicBool::new(false));
 
     let handle = thread::spawn(move || {
         let f: extern "C" fn() -> *mut c_void = unsafe { std::mem::transmute(send_fn) };
@@ -173,6 +180,7 @@ pub extern "C" fn bolide_thread_spawn_ptr(func_ptr: extern "C" fn() -> *mut c_vo
         handle: Some(handle),
         result: ThreadResult { ptr_val: std::ptr::null_mut() },
         has_result: false,
+        cancelled,
     }))
 }
 
@@ -185,7 +193,8 @@ pub extern "C" fn bolide_thread_spawn_int_with_env(
     env: *mut c_void,
 ) -> *mut BolideThreadHandle {
     let send_fn = SendFnPtr(func_ptr as *const c_void);
-    let env_addr = env as usize;  // usize is Send
+    let env_addr = env as usize;
+    let cancelled = Arc::new(AtomicBool::new(false));
 
     let handle = thread::spawn(move || {
         let f: extern "C" fn(*mut c_void) -> i64 = unsafe { std::mem::transmute(send_fn) };
@@ -197,6 +206,7 @@ pub extern "C" fn bolide_thread_spawn_int_with_env(
         handle: Some(handle),
         result: ThreadResult { int_val: 0 },
         has_result: false,
+        cancelled,
     }))
 }
 
@@ -208,6 +218,7 @@ pub extern "C" fn bolide_thread_spawn_float_with_env(
 ) -> *mut BolideThreadHandle {
     let send_fn = SendFnPtr(func_ptr as *const c_void);
     let env_addr = env as usize;
+    let cancelled = Arc::new(AtomicBool::new(false));
 
     let handle = thread::spawn(move || {
         let f: extern "C" fn(*mut c_void) -> f64 = unsafe { std::mem::transmute(send_fn) };
@@ -219,6 +230,7 @@ pub extern "C" fn bolide_thread_spawn_float_with_env(
         handle: Some(handle),
         result: ThreadResult { float_val: 0.0 },
         has_result: false,
+        cancelled,
     }))
 }
 
@@ -230,6 +242,7 @@ pub extern "C" fn bolide_thread_spawn_ptr_with_env(
 ) -> *mut BolideThreadHandle {
     let send_fn = SendFnPtr(func_ptr as *const c_void);
     let env_addr = env as usize;
+    let cancelled = Arc::new(AtomicBool::new(false));
 
     let handle = thread::spawn(move || {
         let f: extern "C" fn(*mut c_void) -> *mut c_void = unsafe { std::mem::transmute(send_fn) };
@@ -241,6 +254,7 @@ pub extern "C" fn bolide_thread_spawn_ptr_with_env(
         handle: Some(handle),
         result: ThreadResult { ptr_val: std::ptr::null_mut() },
         has_result: false,
+        cancelled,
     }))
 }
 
@@ -323,6 +337,27 @@ pub extern "C" fn bolide_thread_handle_free(handle: *mut BolideThreadHandle) {
         unsafe {
             let _ = Box::from_raw(handle);
         }
+    }
+}
+
+/// 取消线程（设置取消标志）
+#[no_mangle]
+pub extern "C" fn bolide_thread_cancel(handle: *mut BolideThreadHandle) {
+    if !handle.is_null() {
+        unsafe {
+            (*handle).cancelled.store(true, Ordering::SeqCst);
+        }
+    }
+}
+
+/// 检查线程是否已被取消
+#[no_mangle]
+pub extern "C" fn bolide_thread_is_cancelled(handle: *const BolideThreadHandle) -> i64 {
+    if handle.is_null() {
+        return 0;
+    }
+    unsafe {
+        if (*handle).cancelled.load(Ordering::SeqCst) { 1 } else { 0 }
     }
 }
 

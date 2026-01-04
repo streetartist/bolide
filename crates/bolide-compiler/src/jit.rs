@@ -8,7 +8,7 @@ use cranelift_jit::{JITBuilder, JITModule};
 use cranelift_module::{DataDescription, Linkage, Module, FuncId};
 use cranelift_codegen::ir::{FuncRef, StackSlotData, StackSlotKind};
 use std::collections::{HashMap, HashSet};
-use bolide_parser::{Program, Statement, Expr, BinOp, UnaryOp, Type as BolideType, FuncDef, VarDecl, Assign, Param, ParamMode, ClassDef, ClassField};
+use bolide_parser::{Program, Statement, Expr, BinOp, UnaryOp, Type as BolideType, FuncDef, VarDecl, Assign, Param, ParamMode, ClassDef, ClassField, ExternBlock};
 
 /// Trampoline 信息
 struct TrampolineInfo {
@@ -128,6 +128,7 @@ impl JitCompiler {
 
         // 注册字符串函数
         builder.symbol("string_from_slice", bolide_runtime::bolide_string_from_slice as *const u8);
+        builder.symbol("string_as_cstr", bolide_runtime::bolide_string_as_cstr as *const u8);
 
         // 注册内存分配函数
         builder.symbol("bolide_alloc", bolide_runtime::bolide_alloc as *const u8);
@@ -151,6 +152,8 @@ impl JitCompiler {
         builder.symbol("thread_join_float", bolide_runtime::bolide_thread_join_float as *const u8);
         builder.symbol("thread_join_ptr", bolide_runtime::bolide_thread_join_ptr as *const u8);
         builder.symbol("thread_handle_free", bolide_runtime::bolide_thread_handle_free as *const u8);
+        builder.symbol("thread_cancel", bolide_runtime::bolide_thread_cancel as *const u8);
+        builder.symbol("thread_is_cancelled", bolide_runtime::bolide_thread_is_cancelled as *const u8);
 
         // 注册运行时函数 - 线程池（无参版本）
         builder.symbol("pool_create", bolide_runtime::bolide_pool_create as *const u8);
@@ -257,6 +260,13 @@ impl JitCompiler {
 
         // 注册内置函数
         self.register_builtins()?;
+
+        // 先处理所有 extern 块（必须在函数声明之前）
+        for stmt in &program.statements {
+            if let Statement::ExternBlock(eb) = stmt {
+                self.register_extern_block(eb)?;
+            }
+        }
 
         // 收集所有类定义
         self.collect_classes(&program)?;
@@ -382,14 +392,18 @@ impl JitCompiler {
                     for imp_stmt in imported.statements {
                         match imp_stmt {
                             Statement::FuncDef(mut func) => {
-                                // 重命名函数: func -> module_func
-                                func.name = format!("{}_{}", module_name, func.name);
+                                // 重命名函数: func -> @module_func
+                                func.name = format!("@{}_{}", module_name, func.name);
                                 merged_statements.push(Statement::FuncDef(func));
                             }
                             Statement::ClassDef(mut class) => {
-                                // 重命名类: Class -> module_Class
-                                class.name = format!("{}_{}", module_name, class.name);
+                                // 重命名类: Class -> @module_Class
+                                class.name = format!("@{}_{}", module_name, class.name);
                                 merged_statements.push(Statement::ClassDef(class));
+                            }
+                            Statement::ExternBlock(ext) => {
+                                // 保留 extern 声明（不添加前缀，C函数名必须保持不变）
+                                merged_statements.push(Statement::ExternBlock(ext));
                             }
                             _ => {} // 忽略顶层代码
                         }
@@ -761,6 +775,13 @@ impl JitCompiler {
         let id = self.module.declare_function("string_from_slice", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
         self.functions.insert("string_from_slice".to_string(), id);
 
+        // string_as_cstr(ptr) -> ptr  (BolideString* -> char*)
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(ptr));
+        sig.returns.push(AbiParam::new(ptr));
+        let id = self.module.declare_function("string_as_cstr", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        self.functions.insert("string_as_cstr".to_string(), id);
+
         // ===== 内存分配函数 =====
         // bolide_alloc(i64) -> ptr
         let mut sig = self.module.make_signature();
@@ -835,6 +856,19 @@ impl JitCompiler {
         sig.params.push(AbiParam::new(ptr));
         let id = self.module.declare_function("thread_handle_free", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
         self.functions.insert("thread_handle_free".to_string(), id);
+
+        // thread_cancel(ptr)
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(ptr));
+        let id = self.module.declare_function("thread_cancel", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        self.functions.insert("thread_cancel".to_string(), id);
+
+        // thread_is_cancelled(ptr) -> i64
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(ptr));
+        sig.returns.push(AbiParam::new(types::I64));
+        let id = self.module.declare_function("thread_is_cancelled", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        self.functions.insert("thread_is_cancelled".to_string(), id);
 
         // ===== 线程池函数 =====
         // pool_create(i64) -> ptr
@@ -1808,6 +1842,20 @@ impl JitCompiler {
 
                     self.compile_function(&method_with_self)?;
                 }
+            }
+        }
+        Ok(())
+    }
+
+    /// 注册 extern 块中的函数声明（JitCompiler 级别）
+    fn register_extern_block(&mut self, eb: &ExternBlock) -> Result<(), String> {
+        let lib_path = &eb.lib_path;
+        for decl in &eb.declarations {
+            if let bolide_parser::ExternDecl::Function(func) = decl {
+                self.extern_funcs.insert(
+                    func.name.clone(),
+                    (lib_path.clone(), func.clone())
+                );
             }
         }
         Ok(())
@@ -3001,8 +3049,8 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             // 先检查是否是模块调用
             if let Expr::Ident(module_name) = base.as_ref() {
                 if self.modules.contains_key(module_name) {
-                    // 模块调用: module.func() -> module_func()
-                    let func_name = format!("{}_{}", module_name, member_name);
+                    // 模块调用: module.func() -> @module_func()
+                    let func_name = format!("@{}_{}", module_name, member_name);
                     return self.compile_module_call(&func_name, args);
                 }
             }
@@ -3030,8 +3078,8 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                 // 检查是否是模块调用: module.func()
                 if let Expr::Ident(module_name) = base.as_ref() {
                     if self.modules.contains_key(module_name) {
-                        // 转换为 module_func
-                        format!("{}_{}", module_name, member)
+                        // 转换为 @module_func
+                        format!("@{}_{}", module_name, member)
                     } else {
                         // 不是模块，是方法调用
                         return self.compile_method_call(base, member, args);
@@ -4315,6 +4363,29 @@ impl<'a, 'b> CompileContext<'a, 'b> {
     fn compile_method_call(&mut self, base: &Expr, method_name: &str, args: &[Expr]) -> Result<Value, String> {
         // 获取对象类型
         let class_name = self.get_expr_type(base)?;
+
+        // 检查是否是 Future 类型的方法调用
+        if matches!(class_name, BolideType::Future) {
+            let handle = self.compile_expr(base)?;
+            match method_name {
+                "close" | "cancel" => {
+                    // 调用 thread_cancel
+                    let cancel_ref = *self.func_refs.get("thread_cancel")
+                        .ok_or("thread_cancel not found")?;
+                    self.builder.ins().call(cancel_ref, &[handle]);
+                    return Ok(self.builder.ins().iconst(types::I64, 0));
+                }
+                "is_cancelled" => {
+                    // 调用 thread_is_cancelled
+                    let is_cancelled_ref = *self.func_refs.get("thread_is_cancelled")
+                        .ok_or("thread_is_cancelled not found")?;
+                    let call = self.builder.ins().call(is_cancelled_ref, &[handle]);
+                    return Ok(self.builder.inst_results(call)[0]);
+                }
+                _ => return Err(format!("Unknown Future method: {}", method_name)),
+            }
+        }
+
         let class_name = match class_name {
             BolideType::Custom(name) => name,
             _ => return Err(format!("Method call on non-class type: {:?}", class_name)),
@@ -4491,6 +4562,21 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             }
 
             let val = self.compile_expr(arg)?;
+
+            // 检查是否需要将 BolideString* 转换为 char*
+            if let Some(param) = extern_func.params.get(i) {
+                if let bolide_parser::CType::Ptr(inner) = &param.ty {
+                    if matches!(inner.as_ref(), bolide_parser::CType::Char) {
+                        // 参数类型是 *char，需要转换 BolideString* -> char*
+                        let as_cstr_ref = *self.func_refs.get("string_as_cstr")
+                            .ok_or("string_as_cstr not found")?;
+                        let call = self.builder.ins().call(as_cstr_ref, &[val]);
+                        let cstr_ptr = self.builder.inst_results(call)[0];
+                        arg_values.push(cstr_ptr);
+                        continue;
+                    }
+                }
+            }
 
             // 获取期望的 C 类型
             if let Some(param) = extern_func.params.get(i) {

@@ -274,6 +274,15 @@ pub fn bolide_string_from_rust(s: &str) -> *mut BolideString {
     BolideString::new(s)
 }
 
+/// 获取 BolideString 的 C 字符串指针（用于 FFI）
+#[no_mangle]
+pub extern "C" fn bolide_string_as_cstr(s: *const BolideString) -> *const c_char {
+    if s.is_null() {
+        return std::ptr::null();
+    }
+    unsafe { (*s).data }
+}
+
 // ==================== 测试 ====================
 
 #[cfg(test)]

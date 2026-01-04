@@ -1,0 +1,66 @@
+// Bolide GUI 标准库
+// 使用: import "std/gui/gui.bl";
+
+extern "std/gui/gui.dll" {
+    fn gui_init() -> c_int;
+    fn gui_window(title: *char, width: c_int, height: c_int) -> *void;
+    fn gui_button(parent: *void, text: *char, x: c_int, y: c_int, w: c_int, h: c_int) -> *void;
+    fn gui_label(parent: *void, text: *char, x: c_int, y: c_int, w: c_int, h: c_int) -> *void;
+    fn gui_textbox(parent: *void, x: c_int, y: c_int, w: c_int, h: c_int) -> *void;
+    fn gui_get_text(handle: *void) -> *char;
+    fn gui_set_text(handle: *void, text: *char);
+    fn gui_on_click(button: *void, callback: fn());
+    fn gui_run();
+    fn gui_close(window: *void);
+    fn gui_set_timer(interval_ms: c_int, callback: fn()) -> c_int;
+    fn gui_kill_timer(timer_id: c_int);
+}
+
+// 包装函数
+fn init() -> int {
+    return gui_init();
+}
+
+fn window(title: str, width: int, height: int) -> ptr {
+    return gui_window(title, width, height);
+}
+
+fn button(parent: ptr, text: str, x: int, y: int, w: int, h: int) -> ptr {
+    return gui_button(parent, text, x, y, w, h);
+}
+
+fn label(parent: ptr, text: str, x: int, y: int, w: int, h: int) -> ptr {
+    return gui_label(parent, text, x, y, w, h);
+}
+
+fn textbox(parent: ptr, x: int, y: int, w: int, h: int) -> ptr {
+    return gui_textbox(parent, x, y, w, h);
+}
+
+fn get_text(handle: ptr) -> str {
+    return gui_get_text(handle);
+}
+
+fn set_text(handle: ptr, text: str) {
+    gui_set_text(handle, text);
+}
+
+fn on_click(btn: ptr, callback: func()) {
+    gui_on_click(btn, callback);
+}
+
+fn run() {
+    gui_run();
+}
+
+fn close(window: ptr) {
+    gui_close(window);
+}
+
+fn set_timer(interval_ms: int, callback: func()) -> int {
+    return gui_set_timer(interval_ms, callback);
+}
+
+fn kill_timer(timer_id: int) {
+    gui_kill_timer(timer_id);
+}
