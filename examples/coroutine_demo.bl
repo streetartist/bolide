@@ -1,0 +1,389 @@
+// ============================================================
+// Bolide 协程功能完整示例
+// Comprehensive Coroutine Feature Demo
+// ============================================================
+
+// ============================================================
+// 1. async 函数定义与 await 基础
+//    Basic async function and await
+// ============================================================
+
+async fn simple_task() -> int {
+    return 42;
+}
+
+async fn compute_async(n: int) -> int {
+    return n * 2;
+}
+
+async fn compute_float() -> float {
+    return 3.14159;
+}
+
+print("=== 1. Basic Async/Await ===");
+
+// 调用 async 函数返回 future
+let f1: future = simple_task();
+
+// await 等待结果
+let result1: int = await f1;
+print(result1);  // 42
+
+// 带参数的 async 函数
+let f2: future = compute_async(21);
+let result2: int = await f2;
+print(result2);  // 42
+
+// 返回 float 的 async 函数
+let f3: future = compute_float();
+let result3: float = await f3;
+print(result3);  // 3.14159
+
+// ============================================================
+// 2. spawn 线程并发
+//    Thread-based concurrency with spawn
+// ============================================================
+
+fn heavy_compute(x: int) -> int {
+    // 模拟耗时计算
+    let result: int = x * x + x;
+    return result;
+}
+
+fn string_worker() -> str {
+    return "Hello from thread!";
+}
+
+fn float_worker(x: float) -> float {
+    return x * 2.5;
+}
+
+print("=== 2. Spawn & Join ===");
+
+// spawn 启动新线程，返回 future
+let t1: future = spawn heavy_compute(10);
+let t2: future = spawn heavy_compute(20);
+
+// join 等待线程结果
+let r1: int = join(t1);
+let r2: int = join(t2);
+print(r1);  // 110 (10*10 + 10)
+print(r2);  // 420 (20*20 + 20)
+
+// spawn 返回字符串
+let t3: future = spawn string_worker();
+let s: str = join(t3);
+print(s);  // Hello from thread!
+
+// spawn 带浮点数参数
+let t4: future = spawn float_worker(4.0);
+let f: float = join(t4);
+print(f);  // 10.0
+
+// ============================================================
+// 3. 多并发任务
+//    Multiple concurrent tasks
+// ============================================================
+
+fn task_a() -> int {
+    return 100;
+}
+
+fn task_b() -> int {
+    return 200;
+}
+
+fn task_c() -> int {
+    return 300;
+}
+
+print("=== 3. Multiple Concurrent Tasks ===");
+
+// 同时启动多个任务
+let h1: future = spawn task_a();
+let h2: future = spawn task_b();
+let h3: future = spawn task_c();
+
+// 等待所有任务完成
+let v1: int = join(h1);
+let v2: int = join(h2);
+let v3: int = join(h3);
+
+print(v1);  // 100
+print(v2);  // 200
+print(v3);  // 300
+print(v1 + v2 + v3);  // 600
+
+// ============================================================
+// 4. await all - 并发等待多个 async 任务
+//    Concurrent await for multiple async tasks
+// ============================================================
+
+async fn data_fetch_1() -> int {
+    return 10;
+}
+
+async fn data_fetch_2() -> int {
+    return 20;
+}
+
+async fn data_fetch_3() -> int {
+    return 30;
+}
+
+print("=== 4. Await All ===");
+
+// await all 并发等待所有任务完成，返回元组
+let results: (int, int, int) = await all {
+    data_fetch_1(),
+    data_fetch_2(),
+    data_fetch_3()
+};
+
+print(results);        // 打印整个元组
+print(results[0]);     // 10
+print(results[1]);     // 20
+print(results[2]);     // 30
+
+// ============================================================
+// 5. async select - 竞争等待（第一个完成的获胜）
+//    Race condition: first completed wins
+// ============================================================
+
+async fn fast_api() -> int {
+    return 1;
+}
+
+async fn slow_api() -> int {
+    return 2;
+}
+
+async fn medium_api() -> int {
+    return 3;
+}
+
+print("=== 5. Async Select ===");
+
+// async select 等待第一个完成的任务
+async select {
+    result = fast_api() => {
+        print("Fast API won:");
+        print(result);  // 1
+    }
+    result2 = slow_api() => {
+        print("Slow API won:");
+        print(result2);
+    }
+    result3 = medium_api() => {
+        print("Medium API won:");
+        print(result3);
+    }
+}
+
+// ============================================================
+// 6. Channel 通道通信
+//    Channel-based communication
+// ============================================================
+
+print("=== 6. Channel Communication ===");
+
+// 创建类型化通道
+let ch: channel<int> = channel();
+
+// 发送数据到通道
+ch <- 42;
+
+// 从通道接收数据
+let received: int = <- ch;
+print(received);  // 42
+
+// 多值通信
+let ch2: channel<int> = channel();
+ch2 <- 100;
+ch2 <- 200;
+ch2 <- 300;
+
+print(<- ch2);  // 100
+print(<- ch2);  // 200
+print(<- ch2);  // 300
+
+// ============================================================
+// 7. 线程间通道通信
+//    Channel communication between threads
+// ============================================================
+
+fn producer(c: channel<int>, value: int) -> int {
+    c <- value;
+    return value;
+}
+
+print("=== 7. Thread Channel Communication ===");
+
+let comm_ch: channel<int> = channel();
+
+// 在多个线程中发送数据
+let p1: future = spawn producer(comm_ch, 111);
+let p2: future = spawn producer(comm_ch, 222);
+let p3: future = spawn producer(comm_ch, 333);
+
+// 主线程接收数据
+let msg1: int = <- comm_ch;
+let msg2: int = <- comm_ch;
+let msg3: int = <- comm_ch;
+
+print(msg1);
+print(msg2);
+print(msg3);
+
+// 等待生产者线程结束
+join(p1);
+join(p2);
+join(p3);
+
+// ============================================================
+// 8. 线程池
+//    Thread Pool
+// ============================================================
+
+fn pool_worker(id: int) -> int {
+    return id * 10;
+}
+
+print("=== 8. Thread Pool ===");
+
+// pool(n) 创建有 n 个工作线程的线程池
+pool(4) {
+    let w1: future = spawn pool_worker(1);
+    let w2: future = spawn pool_worker(2);
+    let w3: future = spawn pool_worker(3);
+    let w4: future = spawn pool_worker(4);
+    
+    print(join(w1));  // 10
+    print(join(w2));  // 20
+    print(join(w3));  // 30
+    print(join(w4));  // 40
+}
+
+// ============================================================
+// 9. BigInt 多线程计算
+//    BigInt computation with threads
+// ============================================================
+
+fn bigint_compute(x: bigint) -> bigint {
+    return x * x + 1B;
+}
+
+print("=== 9. BigInt with Threads ===");
+
+let big1: bigint = 1000000B;
+let big2: bigint = 2000000B;
+
+let bh1: future = spawn bigint_compute(big1);
+let bh2: future = spawn bigint_compute(big2);
+
+let br1: bigint = join(bh1);
+let br2: bigint = join(bh2);
+
+print(br1);  // 1000000000001
+print(br2);  // 4000000000001
+
+// ============================================================
+// 10. 嵌套异步调用
+//     Nested async calls
+// ============================================================
+
+async fn inner_task(n: int) -> int {
+    return n + 1;
+}
+
+async fn outer_task(n: int) -> int {
+    let f: future = inner_task(n);
+    let result: int = await f;
+    return result * 2;
+}
+
+print("=== 10. Nested Async ===");
+
+let nested: future = outer_task(10);
+let nested_result: int = await nested;
+print(nested_result);  // 22 = (10 + 1) * 2
+
+// ============================================================
+// 11. 函数中使用并发
+//     Concurrency inside functions
+// ============================================================
+
+fn parallel_sum(a: int, b: int, c: int) -> int {
+    let f1: future = spawn heavy_compute(a);
+    let f2: future = spawn heavy_compute(b);
+    let f3: future = spawn heavy_compute(c);
+    
+    let r1: int = join(f1);
+    let r2: int = join(f2);
+    let r3: int = join(f3);
+    
+    return r1 + r2 + r3;
+}
+
+print("=== 11. Concurrency in Functions ===");
+
+let sum: int = parallel_sum(1, 2, 3);
+print(sum);  // (1+1) + (4+2) + (9+3) = 2 + 6 + 12 = 20
+
+// ============================================================
+// 12. 综合示例：并发数据处理管道
+//     Complete Example: Concurrent Data Pipeline
+// ============================================================
+
+fn stage1(x: int) -> int {
+    return x * 2;
+}
+
+fn stage2(x: int) -> int {
+    return x + 100;
+}
+
+fn stage3(x: int) -> int {
+    return x / 2;
+}
+
+print("=== 12. Concurrent Pipeline ===");
+
+// 流水线处理多个数据
+let input1: int = 10;
+let input2: int = 20;
+let input3: int = 30;
+
+// Stage 1: 并发处理
+let s1_1: future = spawn stage1(input1);
+let s1_2: future = spawn stage1(input2);
+let s1_3: future = spawn stage1(input3);
+
+let mid1: int = join(s1_1);  // 20
+let mid2: int = join(s1_2);  // 40
+let mid3: int = join(s1_3);  // 60
+
+// Stage 2: 并发处理
+let s2_1: future = spawn stage2(mid1);
+let s2_2: future = spawn stage2(mid2);
+let s2_3: future = spawn stage2(mid3);
+
+let mid2_1: int = join(s2_1);  // 120
+let mid2_2: int = join(s2_2);  // 140
+let mid2_3: int = join(s2_3);  // 160
+
+// Stage 3: 最终处理
+let s3_1: future = spawn stage3(mid2_1);
+let s3_2: future = spawn stage3(mid2_2);
+let s3_3: future = spawn stage3(mid2_3);
+
+print(join(s3_1));  // 60
+print(join(s3_2));  // 70
+print(join(s3_3));  // 80
+
+// ============================================================
+// 完成
+// ============================================================
+
+print("=== All Demo Completed ===");
+print(999);

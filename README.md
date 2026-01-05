@@ -12,13 +12,10 @@
     <img src="https://img.shields.io/badge/License-MIT-brightgreen.svg" alt="License: MIT">
   </a>
   <a href="#">
-    <img src="https://img.shields.io/badge/version-0.1.0-blue.svg" alt="Version">
+    <img src="https://img.shields.io/badge/version-0.5.4-blue.svg" alt="Version">
   </a>
   <a href="#">
     <img src="https://img.shields.io/badge/platform-windows%20%7C%20linux-lightgrey.svg" alt="Platform">
-  </a>
-  <a href="./README_EN.md">
-    <img src="https://img.shields.io/badge/lang-English-blue.svg" alt="English">
   </a>
 </p>
 
