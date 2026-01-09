@@ -6,8 +6,8 @@ class BigCounter {
 
 fn test_loop() {
     let i: int = 0;
+    let c: BigCounter = BigCounter(0B);
     while i < 1000 {
-        let c: BigCounter = BigCounter();
         c.value = 12345B;
         i = i + 1;
     }

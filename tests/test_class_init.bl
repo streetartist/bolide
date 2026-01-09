@@ -1,10 +1,11 @@
-// 测试 class 基本功能
+// 测试类构造函数带参数初始化
 
 class Point {
     x: int;
     y: int;
 }
 
+// 使用新语法直接初始化
 let p: Point = Point(10, 20);
 
 print(p.x);

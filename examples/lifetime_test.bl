@@ -1,0 +1,14 @@
+// 测试生命周期注解功能
+// fn function(ref x: type) -> return_type from x
+
+// 正确的用法：返回值来自参数 x
+fn get_value(ref x: bigint) -> bigint from x {
+    return x;
+}
+
+// 测试：调用带生命周期注解的函数
+let a: bigint = 42B;
+print(a);
+let result: bigint = get_value(a);
+print(result);
+print(a);

@@ -1,0 +1,8 @@
+// 简单测试 weak 和 unowned 语法解析
+
+let x: int = 42;
+let y: unowned int = x;  // unowned 不检查 nil
+
+print(y);
+print("\n");
+print("Done!\n");

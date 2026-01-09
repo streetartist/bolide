@@ -49,6 +49,9 @@ pub struct FuncDef {
     pub is_async: bool,
     pub params: Vec<Param>,
     pub return_type: Option<Type>,
+    /// 生命周期依赖: from x, y 表示返回值依赖于参数 x 和 y 的生命周期
+    /// 当指定时，跳过 ARC 并执行生命周期检查
+    pub lifetime_deps: Option<Vec<String>>,
     pub body: Vec<Statement>,
 }
 
@@ -249,6 +252,8 @@ pub enum Type {
     List(Box<Type>),
     Tuple(Vec<Type>),  // 元组类型: (T1, T2, ...)
     Custom(String),
+    Weak(Box<Type>),    // 弱引用: weak T
+    Unowned(Box<Type>), // 无主引用: unowned T
 }
 
 /// FFI extern 块

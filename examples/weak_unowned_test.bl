@@ -1,0 +1,40 @@
+// 测试 weak 和 unowned 引用
+// weak: 不增加引用计数，访问时检查是否为 nil
+// unowned: 不增加引用计数，不检查 nil
+
+class Person {
+    name: str;
+    age: int;
+}
+
+// 测试 weak 引用
+print("=== Testing weak reference ===\n");
+
+let p1: Person = Person("Alice", 30);
+
+let w: weak Person = p1;  // weak 引用，不增加引用计数
+
+print("Original: ");
+print(p1.name);
+print("\n");
+
+print("Via weak: ");
+print(w.name);
+print("\n");
+
+// 测试 unowned 引用
+print("\n=== Testing unowned reference ===\n");
+
+let p2: Person = Person("Bob", 25);
+
+let u: unowned Person = p2;  // unowned 引用，不增加引用计数
+
+print("Original: ");
+print(p2.name);
+print("\n");
+
+print("Via unowned: ");
+print(u.name);
+print("\n");
+
+print("\nAll tests passed!\n");

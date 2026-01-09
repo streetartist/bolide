@@ -1,0 +1,12 @@
+// 测试数据流追踪：let y = x 后 return y 应该通过检查
+
+fn get_value(ref x: bigint) -> bigint from x {
+    let y: bigint = x;  // y 来自 x
+    return y;           // 现在应该通过检查
+}
+
+let a: bigint = 42B;
+print(a);
+let result: bigint = get_value(a);
+print(result);
+print(a);

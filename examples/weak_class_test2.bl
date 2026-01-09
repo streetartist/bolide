@@ -1,0 +1,14 @@
+// 测试类的 weak 引用（不访问 weak 变量）
+
+class Person {
+    name: str;
+    age: int;
+}
+
+let p: Person = Person("Alice", 30);
+let w: weak Person = p;
+
+print("Person created\n");
+print(p.name);
+print("\n");
+print("Done!\n");

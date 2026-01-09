@@ -14,9 +14,7 @@ class Point {
     }
 }
 
-let p: Point = Point();
-p.x = 10;
-p.y = 20;
+let p: Point = Point(10, 20);
 
 let s: int = p.sum();
 print(s);

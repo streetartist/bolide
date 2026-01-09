@@ -16,9 +16,7 @@ class Dog: Animal {
     }
 }
 
-let d: Dog = Dog();
-d.age = 5;
-d.name = 42;
+let d: Dog = Dog(5, 42);
 
 print(d.age);
 print(d.name);

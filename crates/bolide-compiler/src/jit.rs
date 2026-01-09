@@ -62,6 +62,8 @@ pub struct JitCompiler {
     loaded_libs: HashMap<String, libloading::Library>,
     /// 模块名映射: 模块名 -> 文件路径
     modules: HashMap<String, String>,
+    /// 使用生命周期模式的函数集合（返回借用而非拥有的值）
+    lifetime_funcs: HashSet<String>,
 }
 
 impl JitCompiler {
@@ -227,6 +229,10 @@ impl JitCompiler {
         builder.symbol("list_retain", bolide_runtime::bolide_list_retain as *const u8);
         builder.symbol("list_release", bolide_runtime::bolide_list_release as *const u8);
         builder.symbol("list_clone", bolide_runtime::bolide_list_clone as *const u8);
+        builder.symbol("list_new", bolide_runtime::bolide_list_new as *const u8);
+        builder.symbol("list_push", bolide_runtime::bolide_list_push as *const u8);
+        builder.symbol("list_len", bolide_runtime::bolide_list_len as *const u8);
+        builder.symbol("list_get", bolide_runtime::bolide_list_get as *const u8);
         builder.symbol("dynamic_retain", bolide_runtime::bolide_dynamic_retain as *const u8);
         builder.symbol("dynamic_release", bolide_runtime::bolide_dynamic_release as *const u8);
 
@@ -250,6 +256,7 @@ impl JitCompiler {
             extern_funcs: HashMap::new(),
             loaded_libs: HashMap::new(),
             modules: HashMap::new(),
+            lifetime_funcs: HashSet::new(),
         }
     }
 
@@ -324,6 +331,7 @@ impl JitCompiler {
             is_async: false,
             params: vec![],
             return_type: Some(BolideType::Int),
+            lifetime_deps: None,
             body: toplevel_stmts,
         };
         self.declare_function(&main_func)?;
@@ -363,6 +371,10 @@ impl JitCompiler {
         self.func_return_types.insert(func.name.clone(), func.return_type.clone());
         // 存储函数参数
         self.func_params.insert(func.name.clone(), func.params.clone());
+        // 记录生命周期函数
+        if func.lifetime_deps.is_some() {
+            self.lifetime_funcs.insert(func.name.clone());
+        }
         Ok(())
     }
 
@@ -535,6 +547,35 @@ impl JitCompiler {
         sig.returns.push(AbiParam::new(ptr));
         let id = self.module.declare_function("list_clone", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
         self.functions.insert("list_clone".to_string(), id);
+
+        // list_new(elem_type: u8) -> ptr
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(types::I8));
+        sig.returns.push(AbiParam::new(ptr));
+        let id = self.module.declare_function("list_new", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        self.functions.insert("list_new".to_string(), id);
+
+        // list_push(list: ptr, value: i64) -> void
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(ptr));
+        sig.params.push(AbiParam::new(types::I64));
+        let id = self.module.declare_function("list_push", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        self.functions.insert("list_push".to_string(), id);
+
+        // list_len(list: ptr) -> i64
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(ptr));
+        sig.returns.push(AbiParam::new(types::I64));
+        let id = self.module.declare_function("list_len", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        self.functions.insert("list_len".to_string(), id);
+
+        // list_get(list: ptr, index: i64) -> i64
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(ptr));
+        sig.params.push(AbiParam::new(types::I64));
+        sig.returns.push(AbiParam::new(types::I64));
+        let id = self.module.declare_function("list_get", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        self.functions.insert("list_get".to_string(), id);
 
         // dynamic_clone(ptr) -> ptr
         let mut sig = self.module.make_signature();
@@ -1256,6 +1297,8 @@ impl JitCompiler {
         let extern_funcs = self.extern_funcs.clone();
         let modules = self.modules.clone();
 
+        let lifetime_funcs = self.lifetime_funcs.clone();
+
         // 创建编译上下文
         let mut compile_ctx = CompileContext::new(
             &mut builder,
@@ -1270,6 +1313,9 @@ impl JitCompiler {
             async_funcs,
             extern_funcs,
             modules,
+            func.lifetime_deps.clone(),
+            func.name.clone(),
+            lifetime_funcs,
         );
 
         // 绑定参数到变量
@@ -1317,8 +1363,11 @@ impl JitCompiler {
 
         // 如果没有显式 return，返回默认值或空
         if !terminated {
-            // 在隐式返回之前释放所有 RC 变量
-            compile_ctx.emit_rc_cleanup();
+            // 生命周期模式下跳过 RC 清理
+            if !compile_ctx.uses_lifetime_mode() {
+                // 在隐式返回之前释放所有 RC 变量
+                compile_ctx.emit_rc_cleanup();
+            }
 
             // 写回 Ref 参数
             compile_ctx.write_back_ref_params();
@@ -1620,6 +1669,8 @@ impl JitCompiler {
             BolideType::List(_) => self.ptr_type,
             BolideType::Tuple(_) => self.ptr_type,  // 元组作为指针
             BolideType::Custom(_) => self.ptr_type,
+            BolideType::Weak(inner) => self.bolide_type_to_cranelift(inner),
+            BolideType::Unowned(inner) => self.bolide_type_to_cranelift(inner),
         }
     }
 
@@ -1711,8 +1762,18 @@ impl JitCompiler {
 
     /// 声明类构造函数
     fn declare_class_constructor(&mut self, class_name: &str) -> Result<(), String> {
-        // 构造函数签名: ClassName() -> ptr
+        let class_info = self.classes.get(class_name)
+            .ok_or_else(|| format!("Class not found: {}", class_name))?
+            .clone();
+
+        // 构造函数签名: ClassName(field1, field2, ...) -> ptr
         let mut sig = self.module.make_signature();
+        
+        // 添加字段参数（按字段声明顺序）
+        for field in &class_info.fields {
+            let ty = self.bolide_type_to_cranelift(&field.ty);
+            sig.params.push(AbiParam::new(ty));
+        }
         sig.returns.push(AbiParam::new(self.ptr_type));
 
         let func_name = class_name.to_string();
@@ -1722,7 +1783,16 @@ impl JitCompiler {
 
         self.functions.insert(func_name.clone(), func_id);
         self.func_return_types.insert(func_name.clone(), Some(BolideType::Custom(class_name.to_string())));
-        self.func_params.insert(func_name, vec![]);
+        
+        // 存储构造函数参数信息
+        let params: Vec<Param> = class_info.fields.iter()
+            .map(|f| Param {
+                name: f.name.clone(),
+                ty: f.ty.clone(),
+                mode: ParamMode::Borrow,
+            })
+            .collect();
+        self.func_params.insert(func_name, params);
 
         Ok(())
     }
@@ -1736,8 +1806,12 @@ impl JitCompiler {
         let func_id = *self.functions.get(class_name)
             .ok_or_else(|| format!("Constructor not declared: {}", class_name))?;
 
-        // 创建函数签名
+        // 创建函数签名（与 declare 一致）
         let mut sig = self.module.make_signature();
+        for field in &class_info.fields {
+            let ty = self.bolide_type_to_cranelift(&field.ty);
+            sig.params.push(AbiParam::new(ty));
+        }
         sig.returns.push(AbiParam::new(self.ptr_type));
 
         self.ctx.func.signature = sig;
@@ -1753,6 +1827,9 @@ impl JitCompiler {
         builder.switch_to_block(entry_block);
         builder.seal_block(entry_block);
 
+        // 获取传入的参数
+        let params: Vec<Value> = builder.block_params(entry_block).to_vec();
+
         // 导入 object_alloc 函数
         let object_alloc_id = *self.functions.get("object_alloc")
             .ok_or("object_alloc not found")?;
@@ -1763,11 +1840,16 @@ impl JitCompiler {
         let call = builder.ins().call(object_alloc_ref, &[size_val]);
         let obj_ptr = builder.inst_results(call)[0];
 
-        // 初始化所有字段为零值
-        for field in &class_info.fields {
+        // 使用传入的参数初始化字段
+        for (i, field) in class_info.fields.iter().enumerate() {
             let field_ptr = builder.ins().iadd_imm(obj_ptr, field.offset as i64);
-            let zero = builder.ins().iconst(types::I64, 0);
-            builder.ins().store(MemFlags::new(), zero, field_ptr, 0);
+            // 使用传入的参数值，如果没有则使用零值
+            let val = if i < params.len() {
+                params[i]
+            } else {
+                builder.ins().iconst(types::I64, 0)
+            };
+            builder.ins().store(MemFlags::new(), val, field_ptr, 0);
         }
 
         // 返回对象指针
@@ -1907,6 +1989,23 @@ struct CompileContext<'a, 'b> {
     extern_funcs: HashMap<String, (String, bolide_parser::ExternFunc)>,
     /// 模块名映射
     modules: HashMap<String, String>,
+    /// 生命周期依赖参数（from x, y 中的参数名）
+    /// 当指定时，跳过 ARC 并执行生命周期检查
+    lifetime_deps: Option<Vec<String>>,
+    /// 当前函数名（用于错误信息）
+    current_func_name: String,
+    /// 使用生命周期模式的函数集合（返回借用而非拥有的值）
+    lifetime_funcs: HashSet<String>,
+    /// 变量来源追踪：变量名 -> 来源参数名（用于生命周期检查）
+    var_lifetime_source: HashMap<String, String>,
+    /// 当前作用域深度（用于调用者端生命周期检查）
+    scope_depth: usize,
+    /// 变量的作用域深度：变量名 -> 声明时的作用域深度
+    var_scope_depth: HashMap<String, usize>,
+    /// 借用变量追踪：变量名 -> (来源变量名, 来源作用域深度)
+    borrowed_vars: HashMap<String, (String, usize)>,
+    /// weak 引用变量集合（访问时需要检查是否为 nil）
+    weak_variables: HashSet<String>,
 }
 
 impl<'a, 'b> CompileContext<'a, 'b> {
@@ -1923,6 +2022,9 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         async_funcs: HashSet<String>,
         extern_funcs: HashMap<String, (String, bolide_parser::ExternFunc)>,
         modules: HashMap<String, String>,
+        lifetime_deps: Option<Vec<String>>,
+        current_func_name: String,
+        lifetime_funcs: HashSet<String>,
     ) -> Self {
         Self {
             builder,
@@ -1946,7 +2048,155 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             async_funcs,
             extern_funcs,
             modules,
+            lifetime_deps,
+            current_func_name,
+            lifetime_funcs,
+            var_lifetime_source: HashMap::new(),
+            scope_depth: 0,
+            var_scope_depth: HashMap::new(),
+            borrowed_vars: HashMap::new(),
+            weak_variables: HashSet::new(),
         }
+    }
+
+    /// 检查表达式是否来源于生命周期依赖参数
+    /// 返回 Some(param_name) 如果表达式来自某个生命周期参数（直接或间接）
+    fn check_lifetime_source(&self, expr: &Expr) -> Option<String> {
+        match expr {
+            Expr::Ident(name) => {
+                // 1. 检查是否直接是生命周期依赖参数
+                if let Some(ref deps) = self.lifetime_deps {
+                    if deps.contains(name) {
+                        return Some(name.clone());
+                    }
+                }
+                // 2. 检查是否是从生命周期参数派生的变量
+                if let Some(source) = self.var_lifetime_source.get(name) {
+                    return Some(source.clone());
+                }
+                None
+            }
+            Expr::Member(base, _) => {
+                self.check_lifetime_source(base)
+            }
+            Expr::Index(base, _) => {
+                self.check_lifetime_source(base)
+            }
+            _ => None,
+        }
+    }
+
+    /// 验证返回值的生命周期依赖
+    /// 如果函数声明了 from x，则返回值必须来自参数 x
+    fn validate_lifetime_return(&self, expr: &Expr) -> Result<(), String> {
+        if let Some(ref deps) = self.lifetime_deps {
+            // 检查返回值是否来自声明的生命周期依赖参数
+            if let Some(source) = self.check_lifetime_source(expr) {
+                // 返回值来自某个参数，检查是否在声明的依赖列表中
+                if deps.contains(&source) {
+                    return Ok(());
+                }
+            }
+            // 返回值不是来自声明的生命周期依赖参数
+            return Err(format!(
+                "Lifetime error in function '{}': return value must derive from parameter(s) {:?}, \
+                 but the expression does not reference any of them",
+                self.current_func_name, deps
+            ));
+        }
+        Ok(())
+    }
+
+    /// 检查当前函数是否使用生命周期模式（跳过 ARC）
+    fn uses_lifetime_mode(&self) -> bool {
+        self.lifetime_deps.is_some()
+    }
+
+    /// 检查被调用的函数是否是生命周期函数（返回借用而非拥有的值）
+    fn is_lifetime_func(&self, func_name: &str) -> bool {
+        self.lifetime_funcs.contains(func_name)
+    }
+
+    /// 检查表达式是否是对生命周期函数的调用
+    fn is_lifetime_func_call(&self, expr: &Expr) -> bool {
+        if let Expr::Call(callee, _) = expr {
+            if let Expr::Ident(func_name) = callee.as_ref() {
+                return self.is_lifetime_func(func_name);
+            }
+        }
+        false
+    }
+
+    /// 进入新作用域
+    fn enter_scope(&mut self) {
+        self.scope_depth += 1;
+    }
+
+    /// 离开作用域，检查借用变量是否悬空
+    fn leave_scope(&mut self) -> Result<(), String> {
+        // 检查是否有借用变量依赖于当前作用域的变量
+        let current_depth = self.scope_depth;
+
+        // 找出当前作用域声明的变量
+        let vars_in_scope: Vec<String> = self.var_scope_depth.iter()
+            .filter(|(_, &depth)| depth == current_depth)
+            .map(|(name, _)| name.clone())
+            .collect();
+
+        // 检查是否有外层变量借用了当前作用域的变量
+        for (borrower, (source, _)) in &self.borrowed_vars {
+            let borrower_depth = self.var_scope_depth.get(borrower).copied().unwrap_or(0);
+            if borrower_depth < current_depth && vars_in_scope.contains(source) {
+                return Err(format!(
+                    "Lifetime error: '{}' borrows from '{}' which goes out of scope",
+                    borrower, source
+                ));
+            }
+        }
+
+        // 清理当前作用域的变量
+        for var in &vars_in_scope {
+            self.var_scope_depth.remove(var);
+            self.borrowed_vars.remove(var);
+        }
+
+        self.scope_depth -= 1;
+        Ok(())
+    }
+
+    /// 记录变量声明的作用域
+    fn record_var_scope(&mut self, var_name: &str) {
+        self.var_scope_depth.insert(var_name.to_string(), self.scope_depth);
+    }
+
+    /// 记录借用关系
+    fn record_borrow(&mut self, borrower: &str, source: &str) {
+        let source_depth = self.var_scope_depth.get(source).copied().unwrap_or(0);
+        self.borrowed_vars.insert(borrower.to_string(), (source.to_string(), source_depth));
+    }
+
+    /// 获取生命周期函数调用的源变量（第一个 ref 参数）
+    fn get_lifetime_call_source(&self, expr: &Expr) -> Option<String> {
+        if let Expr::Call(callee, args) = expr {
+            if let Expr::Ident(func_name) = callee.as_ref() {
+                if self.is_lifetime_func(func_name) {
+                    // 获取函数的参数信息
+                    if let Some(params) = self.func_params.get(func_name) {
+                        // 找第一个 ref 参数对应的实参
+                        for (i, param) in params.iter().enumerate() {
+                            if param.mode == ParamMode::Ref {
+                                if let Some(arg) = args.get(i) {
+                                    if let Expr::Ident(var_name) = arg {
+                                        return Some(var_name.clone());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        None
     }
 
     /// 收集语句列表中的 RC 变量声明（用于循环预初始化）
@@ -1988,14 +2238,18 @@ impl<'a, 'b> CompileContext<'a, 'b> {
 
     /// 检查类型是否需要 RC 管理
     fn is_rc_type(ty: &BolideType) -> bool {
-        matches!(ty,
-            BolideType::Str |
-            BolideType::BigInt |
-            BolideType::Decimal |
-            BolideType::List(_) |
-            BolideType::Dynamic |
-            BolideType::Custom(_)
-        )
+        match ty {
+            // weak 和 unowned 不需要 RC 管理（这是它们的核心特性）
+            BolideType::Weak(_) | BolideType::Unowned(_) => false,
+            _ => matches!(ty,
+                BolideType::Str |
+                BolideType::BigInt |
+                BolideType::Decimal |
+                BolideType::List(_) |
+                BolideType::Dynamic |
+                BolideType::Custom(_)
+            )
+        }
     }
 
     /// 获取类型对应的 release 函数名
@@ -2146,8 +2400,9 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                 self.compile_while(while_stmt)?;
                 Ok(false)
             }
-            Statement::For(_for_stmt) => {
-                Err("For loop not yet fully implemented".to_string())
+            Statement::For(for_stmt) => {
+                self.compile_for(for_stmt)?;
+                Ok(false)
             }
             Statement::Pool(pool_stmt) => {
                 self.compile_pool(pool_stmt)?;
@@ -2254,10 +2509,15 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             self.builder.def_var(var, val);
         }
 
+        // 调用者端借用检查：记录借用关系
+        if self.is_lifetime_func_call(value) {
+            if let Some(source_var) = self.get_lifetime_call_source(value) {
+                self.record_borrow(var_name, &source_var);
+            }
+        }
+
         Ok(())
     }
-
-    /// 编译成员赋值 (obj.field = value)
     fn compile_member_assign(&mut self, base: &Expr, member: &str, value: &Expr) -> Result<(), String> {
         // 获取基础表达式的类型
         let class_name = self.get_expr_type(base)?;
@@ -2331,6 +2591,9 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         // 记录变量的 Bolide 类型
         self.var_types.insert(decl.name.clone(), bolide_ty.clone());
 
+        // 记录变量的作用域深度
+        self.record_var_scope(&decl.name);
+
         // 如果是 spawn 或异步函数调用，记录变量名 -> 函数名的映射
         if let Some(ref value) = decl.value {
             match value {
@@ -2399,8 +2662,11 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         if let Some(ref value) = decl.value {
             let val = self.compile_expr(value)?;
 
+            // 检查值是否来自生命周期函数调用（返回借用而非拥有的值）
+            let is_from_lifetime_func = self.is_lifetime_func_call(value);
+
             // 如果是 RC 类型，需要处理引用计数
-            if Self::is_rc_type(&bolide_ty) {
+            if Self::is_rc_type(&bolide_ty) && !is_from_lifetime_func {
                 // 检查值是否来自临时 RC 值（函数调用结果等）
                 let is_temp = self.temp_rc_values.iter().any(|(v, _)| *v == val);
 
@@ -2427,6 +2693,7 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                     }
                 }
             } else {
+                // 非 RC 类型或来自生命周期函数，直接使用值
                 self.builder.def_var(var, val);
             }
         } else {
@@ -2439,9 +2706,40 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             self.builder.def_var(var, zero);
         }
 
+        // 数据流追踪：如果值来自生命周期参数，记录变量的来源
+        if self.uses_lifetime_mode() {
+            if let Some(ref value) = decl.value {
+                if let Some(source) = self.check_lifetime_source(value) {
+                    self.var_lifetime_source.insert(decl.name.clone(), source);
+                }
+            }
+        }
+
         // 跟踪 RC 变量，用于作用域结束时释放（避免重复添加）
-        if existing_var.is_none() && !self.rc_variables.iter().any(|(n, _)| n == &decl.name) {
+        // 但如果值来自生命周期函数调用，则跳过 RC 跟踪（返回的是借用而非拥有的值）
+        let is_from_lifetime_func = decl.value.as_ref()
+            .map(|v| self.is_lifetime_func_call(v))
+            .unwrap_or(false);
+
+        // 调用者端借用检查：记录借用关系
+        if is_from_lifetime_func {
+            if let Some(ref value) = decl.value {
+                if let Some(source_var) = self.get_lifetime_call_source(value) {
+                    self.record_borrow(&decl.name, &source_var);
+                }
+            }
+        }
+
+        if existing_var.is_none()
+            && !self.rc_variables.iter().any(|(n, _)| n == &decl.name)
+            && !is_from_lifetime_func
+        {
             self.track_rc_variable(&decl.name, &bolide_ty);
+        }
+
+        // 追踪 weak 变量（访问时需要检查是否为 nil）
+        if matches!(bolide_ty, BolideType::Weak(_)) {
+            self.weak_variables.insert(decl.name.clone());
         }
 
         Ok(())
@@ -2450,6 +2748,11 @@ impl<'a, 'b> CompileContext<'a, 'b> {
     /// 编译 return 语句
     fn compile_return(&mut self, expr: Option<&Expr>) -> Result<(), String> {
         if let Some(e) = expr {
+            // 生命周期模式：验证返回值来源
+            if self.uses_lifetime_mode() {
+                self.validate_lifetime_return(e)?;
+            }
+
             // 先编译返回表达式
             let val = self.compile_expr(e)?;
 
@@ -2460,25 +2763,31 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                 None
             };
 
-            // 如果返回的是临时 RC 值，从临时列表中移除（调用者将接管所有权）
-            self.remove_temp_rc_value(val);
+            // 生命周期模式下跳过 ARC 操作
+            if !self.uses_lifetime_mode() {
+                // 如果返回的是临时 RC 值，从临时列表中移除（调用者将接管所有权）
+                self.remove_temp_rc_value(val);
 
-            // 释放其他临时 RC 值（返回语句后不会再有机会释放）
-            self.release_temp_rc_values();
+                // 释放其他临时 RC 值（返回语句后不会再有机会释放）
+                self.release_temp_rc_values();
 
-            // 释放所有 RC 变量，除了返回的那个
-            self.emit_rc_cleanup_except(return_var_name.as_deref());
+                // 释放所有 RC 变量，除了返回的那个
+                self.emit_rc_cleanup_except(return_var_name.as_deref());
+            }
 
             // 写回 Ref 参数
             self.write_back_ref_params();
 
             self.builder.ins().return_(&[val]);
         } else {
-            // 释放所有临时 RC 值
-            self.release_temp_rc_values();
+            // 生命周期模式下跳过 ARC 操作
+            if !self.uses_lifetime_mode() {
+                // 释放所有临时 RC 值
+                self.release_temp_rc_values();
 
-            // 无返回值，释放所有 RC 变量
-            self.emit_rc_cleanup();
+                // 无返回值，释放所有 RC 变量
+                self.emit_rc_cleanup();
+            }
 
             // 写回 Ref 参数
             self.write_back_ref_params();
@@ -2511,11 +2820,13 @@ impl<'a, 'b> CompileContext<'a, 'b> {
 
         self.builder.switch_to_block(then_block);
         self.builder.seal_block(then_block);
+        self.enter_scope();  // 进入 then 作用域
         let mut then_terminated = false;
         for stmt in &if_stmt.then_body {
             if then_terminated { break; }
             then_terminated = self.compile_stmt(stmt)?;
         }
+        self.leave_scope()?;  // 离开 then 作用域
         if !then_terminated {
             self.builder.ins().jump(merge_block, &[]);
         }
@@ -2526,11 +2837,13 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         let else_terminated = if !if_stmt.elif_branches.is_empty() {
             self.compile_elif_chain(&if_stmt.elif_branches, &if_stmt.else_body, merge_block)?
         } else if let Some(ref else_body) = if_stmt.else_body {
+            self.enter_scope();  // 进入 else 作用域
             let mut terminated = false;
             for stmt in else_body {
                 if terminated { break; }
                 terminated = self.compile_stmt(stmt)?;
             }
+            self.leave_scope()?;  // 离开 else 作用域
             if !terminated {
                 self.builder.ins().jump(merge_block, &[]);
             }
@@ -2629,17 +2942,229 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         // 第二遍：正常编译循环体
         self.builder.switch_to_block(body_block);
         self.builder.seal_block(body_block);
+        self.enter_scope();  // 进入循环体作用域
         let mut terminated = false;
         for stmt in &while_stmt.body {
             if terminated { break; }
             terminated = self.compile_stmt(stmt)?;
         }
+        self.leave_scope()?;  // 离开循环体作用域
         if !terminated {
             self.builder.ins().jump(header_block, &[]);
         }
 
         self.builder.seal_block(header_block);
 
+        self.builder.switch_to_block(exit_block);
+        self.builder.seal_block(exit_block);
+
+        Ok(())
+    }
+
+    /// 编译 for 语句
+    /// 支持两种形式:
+    /// 1. for i in range(n) { ... } - 整数范围迭代
+    /// 2. for item in list { ... } - 列表迭代
+    fn compile_for(&mut self, for_stmt: &bolide_parser::ForStmt) -> Result<(), String> {
+        let var_name = &for_stmt.var;
+        
+        // 检查是否是 range(n) 调用
+        if let Expr::Call(callee, args) = &for_stmt.iter {
+            if let Expr::Ident(func_name) = callee.as_ref() {
+                if func_name == "range" {
+                    return self.compile_for_range(var_name, args, &for_stmt.body);
+                }
+            }
+        }
+        
+        // 否则是列表迭代
+        self.compile_for_list(var_name, &for_stmt.iter, &for_stmt.body)
+    }
+
+    /// 编译 for i in range(...) { ... }
+    /// 支持 Python 风格的 range:
+    /// - range(end): 0 到 end-1
+    /// - range(start, end): start 到 end-1
+    /// - range(start, end, step): start 到 end-1，步长为 step
+    fn compile_for_range(&mut self, var_name: &str, args: &[Expr], body: &[Statement]) -> Result<(), String> {
+        // 解析 range 参数
+        let (start_val, end_val, step_val, is_negative_step) = match args.len() {
+            1 => {
+                let end = self.compile_expr(&args[0])?;
+                let start = self.builder.ins().iconst(types::I64, 0);
+                let step = self.builder.ins().iconst(types::I64, 1);
+                (start, end, step, false)
+            }
+            2 => {
+                let start = self.compile_expr(&args[0])?;
+                let end = self.compile_expr(&args[1])?;
+                let step = self.builder.ins().iconst(types::I64, 1);
+                (start, end, step, false)
+            }
+            3 => {
+                let start = self.compile_expr(&args[0])?;
+                let end = self.compile_expr(&args[1])?;
+                let step = self.compile_expr(&args[2])?;
+                // 检查是否可能是负步长 (编译时无法确定，运行时处理)
+                // 对于常量步长，可以优化
+                let is_neg = if let Expr::Int(n) = &args[2] { *n < 0 } else { false };
+                (start, end, step, is_neg)
+            }
+            _ => return Err("range() expects 1, 2, or 3 arguments".to_string()),
+        };
+
+        // 创建循环变量
+        let loop_var = self.declare_variable(var_name, types::I64);
+        self.builder.def_var(loop_var, start_val);
+        self.var_types.insert(var_name.to_string(), BolideType::Int);
+
+        // 创建基本块
+        let header_block = self.builder.create_block();
+        let body_block = self.builder.create_block();
+        let exit_block = self.builder.create_block();
+
+        // 收集循环体内的 RC 变量声明
+        let loop_rc_vars = self.collect_rc_var_decls(body);
+        for (rc_var_name, var_ty) in &loop_rc_vars {
+            if self.variables.contains_key(rc_var_name) {
+                continue;
+            }
+            let ty = self.bolide_type_to_cranelift(var_ty);
+            let var = self.declare_variable(rc_var_name, ty);
+            let null_val = self.builder.ins().iconst(self.ptr_type, 0);
+            self.builder.def_var(var, null_val);
+            self.var_types.insert(rc_var_name.clone(), var_ty.clone());
+            self.track_rc_variable(rc_var_name, var_ty);
+        }
+
+        // 跳转到循环头
+        self.builder.ins().jump(header_block, &[]);
+
+        // 循环头: 检查条件
+        self.builder.switch_to_block(header_block);
+        let current_val = self.builder.use_var(loop_var);
+        
+        // 根据步长方向选择比较条件
+        let cond = if is_negative_step {
+            // 负步长: i > end
+            self.builder.ins().icmp(IntCC::SignedGreaterThan, current_val, end_val)
+        } else {
+            // 正步长: i < end
+            self.builder.ins().icmp(IntCC::SignedLessThan, current_val, end_val)
+        };
+        self.builder.ins().brif(cond, body_block, &[], exit_block, &[]);
+
+        // 循环体
+        self.builder.switch_to_block(body_block);
+        self.builder.seal_block(body_block);
+        self.enter_scope();
+        let mut terminated = false;
+        for stmt in body {
+            if terminated { break; }
+            terminated = self.compile_stmt(stmt)?;
+        }
+        self.leave_scope()?;
+        
+        if !terminated {
+            // 递增/递减循环变量: i = i + step
+            let current = self.builder.use_var(loop_var);
+            let next = self.builder.ins().iadd(current, step_val);
+            self.builder.def_var(loop_var, next);
+            self.builder.ins().jump(header_block, &[]);
+        }
+
+        self.builder.seal_block(header_block);
+        self.builder.switch_to_block(exit_block);
+        self.builder.seal_block(exit_block);
+
+        Ok(())
+    }
+
+    /// 编译 for item in list { ... }
+    fn compile_for_list(&mut self, var_name: &str, iter_expr: &Expr, body: &[Statement]) -> Result<(), String> {
+        // 编译列表表达式
+        let list_ptr = self.compile_expr(iter_expr)?;
+
+        // 获取列表长度: list_len(list_ptr)
+        let list_len_ref = *self.func_refs.get("list_len")
+            .ok_or("list_len not found")?;
+        let len_call = self.builder.ins().call(list_len_ref, &[list_ptr]);
+        let list_length = self.builder.inst_results(len_call)[0];
+
+        // 创建索引变量
+        let idx_var_name = format!("__for_idx_{}", var_name);
+        let idx_var = self.declare_variable(&idx_var_name, types::I64);
+        let zero = self.builder.ins().iconst(types::I64, 0);
+        self.builder.def_var(idx_var, zero);
+
+        // 创建循环变量
+        let loop_var = self.declare_variable(var_name, types::I64);
+        self.builder.def_var(loop_var, zero);
+        
+        // 推断列表元素类型
+        let elem_type = match self.infer_expr_type(iter_expr) {
+            BolideType::List(inner) => (*inner).clone(),
+            _ => BolideType::Int, // 默认
+        };
+        self.var_types.insert(var_name.to_string(), elem_type.clone());
+
+        // 创建基本块
+        let header_block = self.builder.create_block();
+        let body_block = self.builder.create_block();
+        let exit_block = self.builder.create_block();
+
+        // 收集循环体内的 RC 变量声明
+        let loop_rc_vars = self.collect_rc_var_decls(body);
+        for (rc_var_name, var_ty) in &loop_rc_vars {
+            if self.variables.contains_key(rc_var_name) {
+                continue;
+            }
+            let ty = self.bolide_type_to_cranelift(var_ty);
+            let var = self.declare_variable(rc_var_name, ty);
+            let null_val = self.builder.ins().iconst(self.ptr_type, 0);
+            self.builder.def_var(var, null_val);
+            self.var_types.insert(rc_var_name.clone(), var_ty.clone());
+            self.track_rc_variable(rc_var_name, var_ty);
+        }
+
+        // 跳转到循环头
+        self.builder.ins().jump(header_block, &[]);
+
+        // 循环头: 检查条件 (idx < length)
+        self.builder.switch_to_block(header_block);
+        let current_idx = self.builder.use_var(idx_var);
+        let cond = self.builder.ins().icmp(IntCC::SignedLessThan, current_idx, list_length);
+        self.builder.ins().brif(cond, body_block, &[], exit_block, &[]);
+
+        // 循环体
+        self.builder.switch_to_block(body_block);
+        self.builder.seal_block(body_block);
+
+        // 获取当前元素: list_get(list_ptr, idx)
+        let list_get_ref = *self.func_refs.get("list_get")
+            .ok_or("list_get not found")?;
+        let idx_val = self.builder.use_var(idx_var);
+        let get_call = self.builder.ins().call(list_get_ref, &[list_ptr, idx_val]);
+        let elem_val = self.builder.inst_results(get_call)[0];
+        self.builder.def_var(loop_var, elem_val);
+
+        self.enter_scope();
+        let mut terminated = false;
+        for stmt in body {
+            if terminated { break; }
+            terminated = self.compile_stmt(stmt)?;
+        }
+        self.leave_scope()?;
+        
+        if !terminated {
+            // 递增索引: idx = idx + 1
+            let current = self.builder.use_var(idx_var);
+            let next = self.builder.ins().iadd_imm(current, 1);
+            self.builder.def_var(idx_var, next);
+            self.builder.ins().jump(header_block, &[]);
+        }
+
+        self.builder.seal_block(header_block);
         self.builder.switch_to_block(exit_block);
         self.builder.seal_block(exit_block);
 
@@ -2679,7 +3204,7 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             Expr::Call(callee, args) => self.compile_call(callee, args),
             Expr::Index(base, index) => self.compile_index(base, index),
             Expr::Member(base, member) => self.compile_member_access(base, member),
-            Expr::List(_) => Err("List literals not yet implemented".to_string()),
+            Expr::List(items) => self.compile_list(items),
             Expr::Spawn(func_name, args) => self.compile_spawn(func_name, args),
             Expr::Recv(channel) => self.compile_recv(channel),
             Expr::None => Ok(self.builder.ins().iconst(types::I64, 0)),
@@ -2748,7 +3273,44 @@ impl<'a, 'b> CompileContext<'a, 'b> {
 
         // 先查找变量
         if let Some(&var) = self.variables.get(name) {
-            return Ok(self.builder.use_var(var));
+            let val = self.builder.use_var(var);
+
+            // weak 变量访问时检查是否为 nil（运行时检查）
+            // 只对指针类型（类实例等）进行 nil 检查
+            if self.weak_variables.contains(name) {
+                if let Some(var_ty) = self.var_types.get(name) {
+                    // 获取 weak 内部的实际类型
+                    let inner_ty = match var_ty {
+                        BolideType::Weak(inner) => inner.as_ref(),
+                        _ => var_ty,
+                    };
+                    // 只对 Custom 类型（类实例）进行 nil 检查
+                    if matches!(inner_ty, BolideType::Custom(_)) {
+                        let null_val = self.builder.ins().iconst(self.ptr_type, 0);
+                        let is_null = self.builder.ins().icmp(IntCC::Equal, val, null_val);
+
+                        let warn_block = self.builder.create_block();
+                        let continue_block = self.builder.create_block();
+                        self.builder.append_block_param(continue_block, self.ptr_type);
+
+                        self.builder.ins().brif(is_null, warn_block, &[], continue_block, &[val]);
+
+                        // warn_block: weak 引用已失效，返回 nil
+                        self.builder.switch_to_block(warn_block);
+                        self.builder.seal_block(warn_block);
+                        self.builder.ins().jump(continue_block, &[null_val]);
+
+                        // continue_block: 继续执行
+                        self.builder.switch_to_block(continue_block);
+                        self.builder.seal_block(continue_block);
+
+                        let result = self.builder.block_params(continue_block)[0];
+                        return Ok(result);
+                    }
+                }
+            }
+
+            return Ok(val);
         }
 
         // 如果不是变量，检查是否是函数名（支持函数作为值）
@@ -3167,6 +3729,9 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                         }
                         // 从 rc_variables 中移除（不再需要在作用域结束时释放）
                         self.rc_variables.retain(|(n, _)| n != var_name);
+                    } else {
+                        // 临时值作为 Owned 参数，所有权转移，从临时列表移除
+                        self.remove_temp_rc_value(val);
                     }
                 }
                 ParamMode::Ref => {
@@ -3201,7 +3766,11 @@ impl<'a, 'b> CompileContext<'a, 'b> {
 
         let call = self.builder.ins().call(func_ref, &arg_values);
 
+        // 检查是否是生命周期函数
+        let is_lifetime_func = self.lifetime_funcs.contains(&func_name);
+
         // 处理 Ref 参数：从栈槽读回新值
+        // 对于生命周期函数，跳过释放旧值（因为返回值可能就是参数本身）
         for (i, arg) in args.iter().enumerate() {
             let mode = param_modes.get(i).copied().unwrap_or(ParamMode::Borrow);
             if mode == ParamMode::Ref {
@@ -3212,12 +3781,15 @@ impl<'a, 'b> CompileContext<'a, 'b> {
 
                     if let Some(&var) = self.variables.get(var_name) {
                         // 释放旧值（调用者原本拥有的对象）
-                        if let Some(var_ty) = self.var_types.get(var_name).cloned() {
-                            if Self::is_rc_type(&var_ty) {
-                                if let Some(func_name) = Self::get_release_func_name(&var_ty) {
-                                    if let Some(&func_ref) = self.func_refs.get(func_name) {
-                                        let old_val = self.builder.use_var(var);
-                                        self.builder.ins().call(func_ref, &[old_val]);
+                        // 但对于生命周期函数，跳过释放（返回值可能就是参数本身）
+                        if !is_lifetime_func {
+                            if let Some(var_ty) = self.var_types.get(var_name).cloned() {
+                                if Self::is_rc_type(&var_ty) {
+                                    if let Some(func_name) = Self::get_release_func_name(&var_ty) {
+                                        if let Some(&func_ref) = self.func_refs.get(func_name) {
+                                            let old_val = self.builder.use_var(var);
+                                            self.builder.ins().call(func_ref, &[old_val]);
+                                        }
                                     }
                                 }
                             }
@@ -3236,9 +3808,12 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             let result = results[0];
 
             // 如果函数返回 RC 类型，跟踪为临时值
-            if let Some(Some(ret_ty)) = self.func_return_types.get(&func_name).cloned() {
-                if Self::is_rc_type(&ret_ty) {
-                    self.track_temp_rc_value(result, &ret_ty);
+            // 但对于生命周期函数，跳过（返回的是借用而非拥有的值）
+            if !is_lifetime_func {
+                if let Some(Some(ret_ty)) = self.func_return_types.get(&func_name).cloned() {
+                    if Self::is_rc_type(&ret_ty) {
+                        self.track_temp_rc_value(result, &ret_ty);
+                    }
                 }
             }
 
@@ -3457,6 +4032,8 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             BolideType::List(_) => self.ptr_type,
             BolideType::Tuple(_) => self.ptr_type,  // 元组作为指针
             BolideType::Custom(_) => self.ptr_type,
+            BolideType::Weak(inner) => self.bolide_type_to_cranelift(inner),
+            BolideType::Unowned(inner) => self.bolide_type_to_cranelift(inner),
         }
     }
 
@@ -3979,6 +4556,41 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         Ok(tuple_ptr)
     }
 
+    /// 编译列表字面量 [a, b, c]
+    fn compile_list(&mut self, items: &[Expr]) -> Result<Value, String> {
+        // 确定元素类型（默认 int = 0）
+        let elem_type = if items.is_empty() {
+            0u8 // int
+        } else {
+            match self.infer_expr_type(&items[0]) {
+                BolideType::Int => 0,
+                BolideType::Float => 1,
+                BolideType::Bool => 2,
+                BolideType::Str => 3,
+                BolideType::BigInt => 4,
+                BolideType::Decimal => 5,
+                _ => 0, // default to int
+            }
+        };
+
+        // 调用 list_new(elem_type) 创建列表
+        let list_new = *self.func_refs.get("list_new")
+            .ok_or("list_new not found")?;
+        let elem_type_val = self.builder.ins().iconst(types::I8, elem_type as i64);
+        let call = self.builder.ins().call(list_new, &[elem_type_val]);
+        let list_ptr = self.builder.inst_results(call)[0];
+
+        // 编译并添加每个元素
+        let list_push = *self.func_refs.get("list_push")
+            .ok_or("list_push not found")?;
+        for expr in items {
+            let val = self.compile_expr(expr)?;
+            self.builder.ins().call(list_push, &[list_ptr, val]);
+        }
+
+        Ok(list_ptr)
+    }
+
     /// 编译索引访问 (元组或列表)
     fn compile_index(&mut self, base: &Expr, index: &Expr) -> Result<Value, String> {
         let base_val = self.compile_expr(base)?;
@@ -4277,10 +4889,25 @@ impl<'a, 'b> CompileContext<'a, 'b> {
 
     /// 编译成员访问 (obj.field)
     fn compile_member_access(&mut self, base: &Expr, member: &str) -> Result<Value, String> {
-        let class_name = self.get_expr_type(base)?;
-        let class_name = match class_name {
-            BolideType::Custom(name) => name,
-            _ => return Err(format!("Member access on non-class type: {:?}", class_name)),
+        let base_type = self.get_expr_type(base)?;
+        // 处理 Weak/Unowned 类型，提取内部的 Custom 类型
+        let class_name = match &base_type {
+            BolideType::Custom(name) => name.clone(),
+            BolideType::Weak(inner) => {
+                if let BolideType::Custom(name) = inner.as_ref() {
+                    name.clone()
+                } else {
+                    return Err(format!("Member access on non-class weak type: {:?}", inner));
+                }
+            }
+            BolideType::Unowned(inner) => {
+                if let BolideType::Custom(name) = inner.as_ref() {
+                    name.clone()
+                } else {
+                    return Err(format!("Member access on non-class unowned type: {:?}", inner));
+                }
+            }
+            _ => return Err(format!("Member access on non-class type: {:?}", base_type)),
         };
 
         let class_info = self.classes.get(&class_name)

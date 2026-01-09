@@ -1,0 +1,40 @@
+// 测试 for 循环 - 完整版
+
+// 测试 range(n)
+print("range(5):");
+for i in range(5) {
+    print(i);
+}
+
+// 测试 range(start, end)
+print("range(3, 7):");
+for j in range(3, 7) {
+    print(j);
+}
+
+// 测试 range(start, end, step) - 步长2
+print("range(0, 10, 2):");
+for k in range(0, 10, 2) {
+    print(k);
+}
+
+// 测试负步长
+print("range(10, 0, -2):");
+for m in range(10, 0, -2) {
+    print(m);
+}
+
+// 测试列表遍历
+print("list iteration:");
+let nums: list<int> = [10, 20, 30, 40];
+for n in nums {
+    print(n);
+}
+
+// 计算列表求和
+let sum: int = 0;
+for x in [1, 2, 3, 4, 5] {
+    sum = sum + x;
+}
+print("sum [1,2,3,4,5]:");
+print(sum);

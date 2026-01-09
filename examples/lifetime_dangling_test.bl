@@ -1,0 +1,15 @@
+// 测试悬空引用检测
+// 这个应该报错：result 借用了 temp，但 temp 在 if 块结束后失效
+
+fn get_value(ref x: bigint) -> bigint from x {
+    return x;
+}
+
+let result: bigint;
+
+if true {
+    let temp: bigint = 100B;
+    result = get_value(temp);  // result 借用 temp
+}  // temp 离开作用域，result 悬空！
+
+print(result);

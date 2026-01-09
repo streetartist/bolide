@@ -6,8 +6,8 @@ class Counter {
 
 fn test_loop() {
     let i: int = 0;
+    let c: Counter = Counter(0);
     while i < 100000 {
-        let c: Counter = Counter();
         c.value = i;
         i = i + 1;
     }

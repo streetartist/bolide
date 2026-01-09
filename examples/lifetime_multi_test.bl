@@ -1,0 +1,21 @@
+// 测试多参数生命周期：from x, y
+
+fn select_value(ref x: bigint, ref y: bigint, flag: bool) -> bigint from x, y {
+    if flag {
+        return x;
+    } else {
+        return y;
+    }
+}
+
+let a: bigint = 10B;
+let b: bigint = 20B;
+
+let r1: bigint = select_value(a, b, true);
+print(r1);
+
+let r2: bigint = select_value(a, b, false);
+print(r2);
+
+print(a);
+print(b);

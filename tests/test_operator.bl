@@ -18,13 +18,9 @@ class Vector {
     }
 }
 
-let v1: Vector = Vector();
-v1.x = 10;
-v1.y = 20;
+let v1: Vector = Vector(10, 20);
 
-let v2: Vector = Vector();
-v2.x = 30;
-v2.y = 40;
+let v2: Vector = Vector(30, 40);
 
 let sum: int = v1 + v2;
 print(sum);

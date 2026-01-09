@@ -4,8 +4,7 @@ class BigCounter {
     value: bigint;
 }
 
-let c: BigCounter = BigCounter();
-c.value = 12345B;
+let c: BigCounter = BigCounter(12345B);
 print(c.value);
 
 bigint_debug_stats();

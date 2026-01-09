@@ -102,6 +102,7 @@ fn parse_func_def(pair: Pair<Rule>) -> Result<FuncDef, String> {
 
     let mut params = Vec::new();
     let mut return_type = None;
+    let mut lifetime_deps = None;
     let mut body = Vec::new();
 
     for item in inner {
@@ -114,6 +115,13 @@ fn parse_func_def(pair: Pair<Rule>) -> Result<FuncDef, String> {
             Rule::type_expr => {
                 return_type = Some(parse_type(item)?);
             }
+            Rule::lifetime_clause => {
+                // 解析生命周期依赖: from x, y
+                let deps: Vec<String> = item.into_inner()
+                    .map(|p| p.as_str().to_string())
+                    .collect();
+                lifetime_deps = Some(deps);
+            }
             Rule::block => {
                 body = parse_block(item)?;
             }
@@ -121,7 +129,7 @@ fn parse_func_def(pair: Pair<Rule>) -> Result<FuncDef, String> {
         }
     }
 
-    Ok(FuncDef { name, is_async, params, return_type, body })
+    Ok(FuncDef { name, is_async, params, return_type, lifetime_deps, body })
 }
 
 fn parse_param(pair: Pair<Rule>) -> Result<Param, String> {
@@ -146,28 +154,39 @@ fn parse_param(pair: Pair<Rule>) -> Result<Param, String> {
 }
 
 fn parse_type(pair: Pair<Rule>) -> Result<Type, String> {
-    let inner = pair.into_inner().next().unwrap();
-    match inner.as_rule() {
+    let mut inner_iter = pair.into_inner();
+    let first = inner_iter.next().unwrap();
+
+    // 检查是否有 ref_mode (weak/unowned)
+    let (ref_mode, type_pair) = if first.as_rule() == Rule::ref_mode {
+        let mode = first.as_str();
+        let type_pair = inner_iter.next().unwrap();
+        (Some(mode), type_pair)
+    } else {
+        (None, first)
+    };
+
+    // 解析基础类型
+    let base_type = match type_pair.as_rule() {
         Rule::tuple_type => {
-            let types: Result<Vec<_>, _> = inner.into_inner()
+            let types: Result<Vec<_>, _> = type_pair.into_inner()
                 .map(parse_type).collect();
-            Ok(Type::Tuple(types?))
+            Type::Tuple(types?)
         }
         Rule::list_type => {
-            let elem_type = parse_type(inner.into_inner().next().unwrap())?;
-            Ok(Type::List(Box::new(elem_type)))
+            let elem_type = parse_type(type_pair.into_inner().next().unwrap())?;
+            Type::List(Box::new(elem_type))
         }
         Rule::channel_type => {
-            let elem_type = parse_type(inner.into_inner().next().unwrap())?;
-            Ok(Type::Channel(Box::new(elem_type)))
+            let elem_type = parse_type(type_pair.into_inner().next().unwrap())?;
+            Type::Channel(Box::new(elem_type))
         }
         Rule::func_type => {
-            // func(params) -> return_type
-            let mut inner_iter = inner.into_inner();
+            let mut func_inner = type_pair.into_inner();
             let mut param_types = Vec::new();
             let mut return_type = None;
 
-            for item in inner_iter {
+            for item in func_inner {
                 match item.as_rule() {
                     Rule::func_type_params => {
                         for param in item.into_inner() {
@@ -175,17 +194,16 @@ fn parse_type(pair: Pair<Rule>) -> Result<Type, String> {
                         }
                     }
                     Rule::type_expr => {
-                        // 这是返回类型
                         return_type = Some(Box::new(parse_type(item)?));
                     }
                     _ => {}
                 }
             }
-            Ok(Type::FuncSig(param_types, return_type))
+            Type::FuncSig(param_types, return_type)
         }
         Rule::basic_type => {
-            let s = inner.as_str();
-            Ok(match s {
+            let s = type_pair.as_str();
+            match s {
                 "int" => Type::Int,
                 "float" => Type::Float,
                 "bool" => Type::Bool,
@@ -197,10 +215,17 @@ fn parse_type(pair: Pair<Rule>) -> Result<Type, String> {
                 "future" => Type::Future,
                 "func" => Type::Func,
                 _ => Type::Custom(s.to_string()),
-            })
+            }
         }
-        _ => Err(format!("Unknown type: {:?}", inner.as_rule())),
-    }
+        _ => return Err(format!("Unknown type: {:?}", type_pair.as_rule())),
+    };
+
+    // 应用 ref_mode
+    Ok(match ref_mode {
+        Some("weak") => Type::Weak(Box::new(base_type)),
+        Some("unowned") => Type::Unowned(Box::new(base_type)),
+        _ => base_type,
+    })
 }
 
 fn parse_block(pair: Pair<Rule>) -> Result<Vec<Statement>, String> {

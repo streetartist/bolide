@@ -1,0 +1,8 @@
+// 测试 weak 类型
+
+let x: int = 42;
+let w: weak int = x;  // weak 引用
+
+print(w);
+print("\n");
+print("Done!\n");

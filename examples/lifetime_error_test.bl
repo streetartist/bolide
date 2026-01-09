@@ -1,0 +1,11 @@
+// 测试生命周期错误检测
+// 这个函数声明返回值依赖于 x，但实际返回了一个新创建的值
+
+fn bad_lifetime(ref x: bigint) -> bigint from x {
+    let y: bigint = 100B;
+    return y;  // 错误：返回值不是来自 x
+}
+
+let a: bigint = 42B;
+let result: bigint = bad_lifetime(a);
+print(result);

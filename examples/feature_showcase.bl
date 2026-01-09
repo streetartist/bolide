@@ -1,0 +1,683 @@
+// ============================================================
+// Bolide 语言全特性展示 / Bolide Language Feature Showcase
+// 这个示例程序展示了 Bolide 语言的所有核心特性
+// ============================================================
+
+print("╔══════════════════════════════════════════════════════════╗");
+print("║          Bolide 语言特性全览 Feature Showcase            ║");
+print("╚══════════════════════════════════════════════════════════╝");
+
+// ============================================================
+// 1. 基本数据类型 / Basic Data Types
+// ============================================================
+
+print("");
+print("▶ 1. 基本数据类型 Basic Data Types");
+print("─────────────────────────────────────");
+
+// 整数类型
+let i: int = 42;
+print("int:");
+print(i);
+
+// 浮点类型
+let f: float = 3.14159265358979;
+print("float:");
+print(f);
+
+// 布尔类型
+let b: bool = true;
+print("bool:");
+print(b);
+
+// 字符串类型
+let s: str = "Hello, Bolide!";
+print("str:");
+print(s);
+
+// 任意精度整数 (bigint)
+let big: bigint = 123456789012345678901234567890B;
+print("bigint:");
+print(big);
+
+// 高精度小数 (decimal)
+let dec: decimal = 3.141592653589793238462643383279d;
+print("decimal:");
+print(dec);
+
+// ============================================================
+// 2. 元组类型 / Tuple Types
+// ============================================================
+
+print("");
+print("▶ 2. 元组类型 Tuple Types");
+print("─────────────────────────────────────");
+
+// 二元组
+let tuple2: (int, int) = (100, 200);
+print("二元组 2-tuple:");
+print(tuple2);
+print(tuple2[0]);
+print(tuple2[1]);
+
+// 三元组
+let tuple3: (int, int, int) = (1, 2, 3);
+print("三元组 3-tuple:");
+print(tuple3);
+
+// ============================================================
+// 2.5 列表类型 / List Types
+// ============================================================
+
+print("");
+print("▶ 2.5 列表类型 List Types");
+print("─────────────────────────────────────");
+
+// 创建列表 - 类似 Python 的 list
+let numbers: list<int> = [1, 2, 3, 4, 5];
+print("列表 list:");
+print(numbers);
+
+// 列表索引访问
+print("numbers[0] =");
+print(numbers[0]);
+print("numbers[2] =");
+print(numbers[2]);
+
+// 空列表
+let empty_list: list<int> = [];
+print("空列表:");
+print(empty_list);
+
+// 字符串列表 (表示)
+// let names: list<str> = ["Alice", "Bob", "Charlie"];
+// print(names);
+
+// 列表嵌套 (表示)
+// let matrix: list<list<int>> = [[1, 2], [3, 4], [5, 6]];
+
+// 遍历列表
+print("遍历列表:");
+for num in numbers {
+    print(num);
+}
+
+// ============================================================
+// 2.6 字典类型 / Dict Types (正在实现)
+// ============================================================
+
+print("");
+print("▶ 2.6 字典类型 Dict Types (🚧 正在实现)");
+print("─────────────────────────────────────");
+
+// 字典类型 - 类似 Python 的 dict (正在实现中)
+// 预计语法:
+print("// 创建字典");
+print("// let scores: dict<str, int> = {");
+print("//     \"Alice\": 95,");
+print("//     \"Bob\": 87,");
+print("//     \"Charlie\": 92");
+print("// };");
+print("");
+print("// 访问字典");
+print("// let alice_score: int = scores[\"Alice\"];");
+print("");
+print("// 遍历字典");
+print("// for key, value in scores {");
+print("//     print(key);");
+print("//     print(value);");
+print("// }");
+
+// ============================================================
+// 3. 控制流 / Control Flow
+// ============================================================
+
+print("");
+print("▶ 3. 控制流 Control Flow");
+print("─────────────────────────────────────");
+
+// if-elif-else
+let x: int = 42;
+if x > 50 {
+    print("x > 50");
+} elif x > 40 {
+    print("x > 40 (走这个分支)");
+} else {
+    print("x <= 40");
+}
+
+// for 循环
+print("for 循环 (0-4):");
+for i in range(5) {
+    print(i);
+}
+
+// while 循环
+print("while 循环:");
+let counter: int = 3;
+while counter > 0 {
+    print(counter);
+    counter = counter - 1;
+}
+
+// ============================================================
+// 4. 函数定义与调用 / Functions
+// ============================================================
+
+print("");
+print("▶ 4. 函数定义 Functions");
+print("─────────────────────────────────────");
+
+// 普通函数
+fn add(a: int, b: int) -> int {
+    return a + b;
+}
+
+fn greet(name: str) {
+    print("Hello, ");
+    print(name);
+}
+
+let sum: int = add(10, 20);
+print("add(10, 20) =");
+print(sum);
+
+greet("Bolide User");
+
+// 递归函数
+fn factorial(n: int) -> int {
+    if n <= 1 {
+        return 1;
+    }
+    return n * factorial(n - 1);
+}
+
+print("factorial(5) =");
+print(factorial(5));
+
+// fibonacci
+fn fib(n: int) -> int {
+    if n <= 1 {
+        return n;
+    }
+    return fib(n - 1) + fib(n - 2);
+}
+
+print("fib(10) =");
+print(fib(10));
+
+// ============================================================
+// 5. 参数传递模式 / Parameter Passing Modes
+// ============================================================
+
+print("");
+print("▶ 5. 参数传递模式 Parameter Modes");
+print("─────────────────────────────────────");
+
+// borrow 模式 (默认): 借用参数，不转移所有权
+fn borrow_mode(x: bigint) {
+    print("borrow: 借用参数");
+    print(x);
+}
+
+// owned 模式: 获取所有权，调用后原变量不可用
+fn owned_mode(owned x: bigint) {
+    print("owned: 获取所有权");
+    print(x);
+}
+
+// ref 模式: 引用模式，可修改原变量
+fn ref_mode(ref x: bigint) {
+    print("ref: 修改前");
+    print(x);
+    x = x + 1B;
+    print("ref: 修改后");
+    print(x);
+}
+
+let bval: bigint = 1000B;
+borrow_mode(bval);
+print("borrow后仍可使用:");
+print(bval);
+
+ref_mode(bval);
+print("ref修改后的值:");
+print(bval);
+
+let oval: bigint = 2000B;
+owned_mode(oval);
+// 注意：owned_mode 调用后 oval 不再可用
+
+// ============================================================
+// 6. 面向对象: 类与方法 / OOP: Classes and Methods
+// ============================================================
+
+print("");
+print("▶ 6. 面向对象编程 Classes");
+print("─────────────────────────────────────");
+
+class Point {
+    x: int;
+    y: int;
+
+    fn distance() -> int {
+        return self.x * self.x + self.y * self.y;
+    }
+
+    fn move_by(dx: int, dy: int) {
+        self.x = self.x + dx;
+        self.y = self.y + dy;
+    }
+}
+
+let p: Point = Point(3, 4);
+print("Point(3, 4)");
+print("distance^2 = ");
+print(p.distance());
+
+p.move_by(1, 1);
+print("After move_by(1, 1): x=");
+print(p.x);
+print("y=");
+print(p.y);
+
+// ============================================================
+// 7. 继承 / Inheritance
+// ============================================================
+
+print("");
+print("▶ 7. 类继承 Inheritance");
+print("─────────────────────────────────────");
+
+class Animal {
+    age: int;
+    
+    fn get_age() -> int {
+        return self.age;
+    }
+}
+
+class Dog: Animal {
+    breed: int;   // 使用int表示品种编号
+    
+    fn bark() -> int {
+        return 100;  // 模拟叫声
+    }
+}
+
+let dog: Dog = Dog(3, 1);
+
+print("Dog age:");
+print(dog.get_age());
+print("Dog bark:");
+print(dog.bark());
+
+// ============================================================
+// 8. 模块系统 / Module System
+// ============================================================
+
+print("");
+print("▶ 8. 模块导入 (示例代码)");
+print("─────────────────────────────────────");
+print("// import \"math_utils.bl\";");
+print("// let result: int = add(10, 20);");
+// 注：实际导入需要对应的模块文件
+
+// ============================================================
+// 9. FFI: C 语言互操作 / FFI: C Interop
+// ============================================================
+
+print("");
+print("▶ 9. FFI 调用 C 库");
+print("─────────────────────────────────────");
+
+extern "msvcrt.dll" {
+    fn abs(x: c_int) -> c_int;
+    fn sqrt(x: c_double) -> c_double;
+}
+
+let abs_result: int = abs(-42);
+print("abs(-42) =");
+print(abs_result);
+
+let sqrt_result: float = sqrt(16.0);
+print("sqrt(16.0) =");
+print(sqrt_result);
+
+// ============================================================
+// 10. 异步编程: async/await / Async Programming
+// ============================================================
+
+print("");
+print("▶ 10. 异步编程 async/await");
+print("─────────────────────────────────────");
+
+async fn async_double(n: int) -> int {
+    return n * 2;
+}
+
+async fn async_square(n: int) -> int {
+    return n * n;
+}
+
+// 启动异步任务
+let future1: future = async_double(21);
+let future2: future = async_square(10);
+
+// 等待结果
+let async_r1: int = await future1;
+let async_r2: int = await future2;
+
+print("async_double(21) =");
+print(async_r1);
+print("async_square(10) =");
+print(async_r2);
+
+// ============================================================
+// 11. 线程并发: spawn/join / Thread Concurrency
+// ============================================================
+
+print("");
+print("▶ 11. 线程并发 spawn/join");
+print("─────────────────────────────────────");
+
+fn heavy_compute(x: int) -> int {
+    return x * x + x;
+}
+
+// 启动多个线程
+let thread1: future = spawn heavy_compute(10);
+let thread2: future = spawn heavy_compute(20);
+let thread3: future = spawn heavy_compute(30);
+
+// 等待所有线程完成
+let tr1: int = join(thread1);
+let tr2: int = join(thread2);
+let tr3: int = join(thread3);
+
+print("heavy_compute(10) =");
+print(tr1);
+print("heavy_compute(20) =");
+print(tr2);
+print("heavy_compute(30) =");
+print(tr3);
+
+// ============================================================
+// 12. await all: 并发等待 / Concurrent Await
+// ============================================================
+
+print("");
+print("▶ 12. await all 并发等待");
+print("─────────────────────────────────────");
+
+async fn fetch_a() -> int {
+    return 100;
+}
+
+async fn fetch_b() -> int {
+    return 200;
+}
+
+async fn fetch_c() -> int {
+    return 300;
+}
+
+// 并发等待所有任务，返回元组
+let all_results: (int, int, int) = await all {
+    fetch_a(),
+    fetch_b(),
+    fetch_c()
+};
+
+print("await all results:");
+print(all_results);
+print(all_results[0]);
+print(all_results[1]);
+print(all_results[2]);
+
+// ============================================================
+// 13. async select: 竞争等待 / Race Condition
+// ============================================================
+
+print("");
+print("▶ 13. async select 竞争等待");
+print("─────────────────────────────────────");
+
+async fn fast_task() -> int {
+    return 1;
+}
+
+async fn slow_task() -> int {
+    return 2;
+}
+
+// 第一个完成的任务获胜
+async select {
+    result = fast_task() => {
+        print("fast_task won:");
+        print(result);
+    }
+    result2 = slow_task() => {
+        print("slow_task won:");
+        print(result2);
+    }
+}
+
+// ============================================================
+// 14. Channel 通道通信 / Channel Communication
+// ============================================================
+
+print("");
+print("▶ 14. 通道通信 Channel");
+print("─────────────────────────────────────");
+
+// 创建通道
+let ch: channel<int> = channel();
+
+// 发送数据
+ch <- 42;
+ch <- 100;
+
+// 接收数据
+let msg1: int = <- ch;
+let msg2: int = <- ch;
+
+print("Channel received:");
+print(msg1);
+print(msg2);
+
+// ============================================================
+// 15. 线程池 / Thread Pool
+// ============================================================
+
+print("");
+print("▶ 15. 线程池 Thread Pool");
+print("─────────────────────────────────────");
+
+fn pool_task(id: int) -> int {
+    return id * 100;
+}
+
+// 创建4个工作线程的线程池
+pool(4) {
+    let w1: future = spawn pool_task(1);
+    let w2: future = spawn pool_task(2);
+    let w3: future = spawn pool_task(3);
+    let w4: future = spawn pool_task(4);
+    
+    print("Pool task 1:");
+    print(join(w1));
+    print("Pool task 2:");
+    print(join(w2));
+    print("Pool task 3:");
+    print(join(w3));
+    print("Pool task 4:");
+    print(join(w4));
+}
+
+// ============================================================
+// 16. 线程间通道通信 / Thread Channel Communication
+// ============================================================
+
+print("");
+print("▶ 16. 线程间通道通信");
+print("─────────────────────────────────────");
+
+fn sender(ch: channel<int>, value: int) -> int {
+    ch <- value;
+    return value;
+}
+
+let comm_channel: channel<int> = channel();
+
+// 在多个线程中发送数据
+let sender1: future = spawn sender(comm_channel, 111);
+let sender2: future = spawn sender(comm_channel, 222);
+let sender3: future = spawn sender(comm_channel, 333);
+
+// 主线程接收
+let recv1: int = <- comm_channel;
+let recv2: int = <- comm_channel;
+let recv3: int = <- comm_channel;
+
+print("Received from threads:");
+print(recv1);
+print(recv2);
+print(recv3);
+
+// 等待发送线程完成
+join(sender1);
+join(sender2);
+join(sender3);
+
+// ============================================================
+// 17. BigInt 大数计算 / BigInt Arithmetic
+// ============================================================
+
+print("");
+print("▶ 17. 大数运算 BigInt");
+print("─────────────────────────────────────");
+
+// 大数阶乘
+fn bigint_factorial(n: bigint) -> bigint {
+    if n <= 1B {
+        return 1B;
+    }
+    return n * bigint_factorial(n - 1B);
+}
+
+// 大数 Fibonacci
+fn bigint_fib(n: int) -> bigint {
+    if n <= 1 {
+        return 1B;
+    }
+    let a: bigint = 0B;
+    let b: bigint = 1B;
+    for i in range(n) {
+        let temp: bigint = a + b;
+        a = b;
+        b = temp;
+    }
+    return b;
+}
+
+print("50! =");
+print(bigint_factorial(50B));
+
+print("fib(100) =");
+print(bigint_fib(100));
+
+// ============================================================
+// 18. 多线程 BigInt 计算 / Threaded BigInt
+// ============================================================
+
+print("");
+print("▶ 18. 多线程大数计算");
+print("─────────────────────────────────────");
+
+fn thread_bigint_square(x: bigint) -> bigint {
+    return x * x;
+}
+
+let big_a: bigint = 123456789B;
+let big_b: bigint = 987654321B;
+
+let bigint_t1: future = spawn thread_bigint_square(big_a);
+let bigint_t2: future = spawn thread_bigint_square(big_b);
+
+print("123456789^2 =");
+print(join(bigint_t1));
+print("987654321^2 =");
+print(join(bigint_t2));
+
+// ============================================================
+// 19. 嵌套异步调用 / Nested Async
+// ============================================================
+
+print("");
+print("▶ 19. 嵌套异步调用 Nested Async");
+print("─────────────────────────────────────");
+
+async fn inner_async(n: int) -> int {
+    return n + 10;
+}
+
+async fn outer_async(n: int) -> int {
+    let f: future = inner_async(n);
+    let result: int = await f;
+    return result * 2;
+}
+
+let nested_future: future = outer_async(5);
+let nested_result: int = await nested_future;
+print("outer_async(5) = (5+10)*2 =");
+print(nested_result);
+
+// ============================================================
+// 20. 综合示例: 并发流水线 / Pipeline
+// ============================================================
+
+print("");
+print("▶ 20. 并发流水线 Concurrent Pipeline");
+print("─────────────────────────────────────");
+
+fn pipeline_stage1(x: int) -> int {
+    return x * 2;
+}
+
+fn pipeline_stage2(x: int) -> int {
+    return x + 100;
+}
+
+fn pipeline_stage3(x: int) -> int {
+    return x / 2;
+}
+
+let input: int = 50;
+
+// Stage 1
+let s1: future = spawn pipeline_stage1(input);
+let mid1: int = join(s1);
+print("Stage 1 (x*2):");
+print(mid1);
+
+// Stage 2
+let s2: future = spawn pipeline_stage2(mid1);
+let mid2: int = join(s2);
+print("Stage 2 (+100):");
+print(mid2);
+
+// Stage 3
+let s3: future = spawn pipeline_stage3(mid2);
+let final_result: int = join(s3);
+print("Stage 3 (/2):");
+print(final_result);
+
+// ============================================================
+// 完成 / Complete
+// ============================================================
+
+print("");
+print("╔══════════════════════════════════════════════════════════╗");
+print("║                 All Features Demonstrated!               ║");
+print("╚══════════════════════════════════════════════════════════╝");
