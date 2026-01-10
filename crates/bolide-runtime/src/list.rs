@@ -505,27 +505,6 @@ pub extern "C" fn bolide_list_extend(list: *mut BolideList, other: *const Bolide
             let value = *other.data.add(i);
             list.push(value);
         }
-        
-        // 增加元素引用计数（如果是引用类型）
-        for i in (list.len - other.len)..list.len {
-            let ptr = *list.data.add(i) as *mut std::os::raw::c_void;
-            if ptr.is_null() { continue; }
-            match list.elem_type {
-                ElementType::String => {
-                    crate::bolide_string_retain(ptr as *mut crate::BolideString);
-                }
-                ElementType::BigInt => {
-                    crate::bolide_bigint_retain(ptr as *mut crate::BolideBigInt);
-                }
-                ElementType::Decimal => {
-                    crate::bolide_decimal_retain(ptr as *mut crate::BolideDecimal);
-                }
-                ElementType::List => {
-                    bolide_list_retain(ptr as *mut BolideList);
-                }
-                _ => {}
-            }
-        }
     }
 }
 
