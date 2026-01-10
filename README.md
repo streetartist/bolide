@@ -132,6 +132,87 @@ let r1: int = await f1;
 let r2: int = await f2;
 ```
 
+### 高级并发特性
+
+#### Await All (并发等待)
+
+```bolide
+async fn fetch_a() -> int { return 100; }
+async fn fetch_b() -> int { return 200; }
+
+// 并发执行所有任务并等待结果
+let (a, b) = await all {
+    fetch_a(),
+    fetch_b()
+};
+```
+
+#### Async Select (竞态等待)
+
+```bolide
+// 等待第一个完成的任务
+async select {
+    res1 = task_fast() => {
+        print("fast finished");
+    }
+    res2 = task_slow() => {
+        print("slow finished");
+    }
+}
+```
+
+### 多线程与并行
+
+#### Spawn & Join
+
+使用 `spawn`关键字在新的系统线程中启动任务：
+
+```bolide
+fn heavy_work(id: int) -> int {
+    // 耗时计算...
+    return id * id;
+}
+
+// 启动新线程
+let t: future = spawn heavy_work(10);
+
+// 等待线程结束并获取结果
+let result: int = join(t);
+```
+
+#### 线程池 (Thread Pool)
+
+使用 `pool` 块将任务分发到指定大小的线程池中执行：
+
+```bolide
+pool(4) {
+    // 这些任务将在4个工作线程中并发执行
+    spawn task(1);
+    spawn task(2);
+    spawn task(3);
+}
+// pool 块结束时会自动等待所有任务完成
+```
+
+#### 通道 (Channels)
+
+线程间安全的通信机制：
+
+```bolide
+// 创建通道
+let ch: channel<int> = channel();
+
+// 定义发送函数
+fn sender(c: channel<int>) {
+    c <- 42;
+}
+
+// 启动发送线程
+spawn sender(ch);
+
+let val: int = <- ch;  // 接收数据
+```
+
 ### 模块系统
 
 ```bolide
