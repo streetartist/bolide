@@ -74,7 +74,7 @@ elif_branch = { "elif" ~ expr ~ block }
 else_branch = { "else" ~ block }
 
 while_stmt = { "while" ~ expr ~ block }
-for_stmt = { "for" ~ ident ~ "in" ~ expr ~ block }
+for_stmt = { "for" ~ ident ~ ("," ~ ident)* ~ "in" ~ expr ~ block }
 
 // 线程池块
 pool_stmt = { "pool" ~ "(" ~ expr ~ ")" ~ block }
@@ -101,8 +101,9 @@ send_stmt = { ident ~ "<-" ~ expr ~ ";" }
 return_stmt = { "return" ~ expr? ~ ";" }
 var_decl = { "let" ~ ident ~ (":" ~ type_expr)? ~ ("=" ~ expr)? ~ ";" }
 assign_stmt = { assign_target ~ "=" ~ expr ~ ";" }
-assign_target = { (ident | self_lit) ~ member* }
+assign_target = { (ident | self_lit) ~ (member | index)* }
 expr_stmt = { expr ~ ";" }
+
 
 // 代码块
 block = { "{" ~ statement* ~ "}" }
@@ -135,6 +136,7 @@ primary = {
     await_expr |
     spawn_expr |
     recv_expr |
+    dict_literal |
     list_literal |
     bigint_lit |
     decimal_lit |
@@ -164,6 +166,8 @@ recv_expr = { "<-" ~ ident }
 
 // 字面量
 list_literal = { "[" ~ (expr ~ ("," ~ expr)*)? ~ "]" }
+dict_literal = { "{" ~ (dict_entry ~ ("," ~ dict_entry)*)? ~ "}" }
+dict_entry = { expr ~ ":" ~ expr }
 tuple_literal = { "(" ~ expr ~ "," ~ (expr ~ ("," ~ expr)*)? ~ ")" }
 
 // bigint 字面量: 123B 或 123b
@@ -180,10 +184,11 @@ bool_lit = { "true" | "false" }
 none_lit = { "none" }
 
 // 类型
-type_expr = { ref_mode? ~ (tuple_type | list_type | channel_type | func_type | basic_type) }
+type_expr = { ref_mode? ~ (tuple_type | list_type | dict_type | channel_type | func_type | basic_type) }
 ref_mode = { "weak" | "unowned" }
 tuple_type = { "(" ~ type_expr ~ ("," ~ type_expr)+ ~ ")" }
 list_type = { "list" ~ "<" ~ type_expr ~ ">" }
+dict_type = { "dict" ~ "<" ~ type_expr ~ "," ~ type_expr ~ ">" }
 channel_type = { "channel" ~ "<" ~ type_expr ~ ">" }
 func_type = { "func" ~ "(" ~ func_type_params? ~ ")" ~ ("->" ~ type_expr)? }
 func_type_params = { type_expr ~ ("," ~ type_expr)* }

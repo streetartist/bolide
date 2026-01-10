@@ -1,0 +1,7 @@
+// Test direct list printing
+print("Testing print(list)");
+
+let nums: list<int> = [1, 2, 3, 4, 5];
+print(nums);
+
+print("Done");

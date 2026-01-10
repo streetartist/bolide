@@ -1,0 +1,31 @@
+// Test list methods step by step
+
+print("Test 1: Basic list and push");
+let nums: list<int> = [3, 1, 4];
+nums.push(5);
+print(nums);
+
+print("Test 2: pop");
+let p: int = nums.pop();
+print(p);
+
+print("Test 3: len");
+print(nums.len());
+
+print("Test 4: contains");
+print(nums.contains(3));
+
+print("Test 5: index_of");
+print(nums.index_of(4));
+
+print("Test 6: count");
+print(nums.count(1));
+
+print("Test 7: first and last");
+print(nums.first());
+print(nums.last());
+
+print("Test 8: is_empty");
+print(nums.is_empty());
+
+print("All basic tests passed!");

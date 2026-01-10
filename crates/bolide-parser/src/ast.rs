@@ -110,7 +110,7 @@ pub struct WhileStmt {
 /// For 语句
 #[derive(Debug, Clone)]
 pub struct ForStmt {
-    pub var: String,
+    pub vars: Vec<String>,
     pub iter: Expr,
     pub body: Vec<Statement>,
 }
@@ -207,6 +207,8 @@ pub enum Expr {
     Index(Box<Expr>, Box<Expr>),
     Member(Box<Expr>, String),
     List(Vec<Expr>),
+    /// 字典字面量: {key: value, ...}
+    Dict(Vec<(Expr, Expr)>),
     /// spawn func(args) - 在新线程执行函数
     Spawn(String, Vec<Expr>),
     /// <- ch - 从通道接收
@@ -250,6 +252,7 @@ pub enum Type {
     Func,    // 函数类型（简单版本，无签名）
     FuncSig(Vec<Type>, Option<Box<Type>>),  // 带签名的函数类型: func(params) -> return_type
     List(Box<Type>),
+    Dict(Box<Type>, Box<Type>),  // dict<K, V>
     Tuple(Vec<Type>),  // 元组类型: (T1, T2, ...)
     Custom(String),
     Weak(Box<Type>),    // 弱引用: weak T

@@ -9,6 +9,7 @@
 //! - `decimal`: 任意精度小数
 //! - `dynamic`: 动态类型
 //! - `list`: 列表类型
+//! - `dict`: 字典类型
 //! - `print`: 统一打印功能
 //! - `thread`: 线程和线程池
 //! - `channel`: 线程安全通道
@@ -18,7 +19,8 @@ mod string;
 mod bigint;
 mod decimal;
 mod dynamic;
-mod list;
+pub mod list;
+pub mod dict;
 mod print;
 mod thread;
 mod channel;
@@ -33,6 +35,7 @@ pub use bigint::*;
 pub use decimal::*;
 pub use dynamic::*;
 pub use list::*;
+pub use dict::*;
 pub use print::*;
 pub use thread::*;
 pub use channel::*;
@@ -40,6 +43,7 @@ pub use object::*;
 pub use coroutine::*;
 pub use tuple::*;
 pub use ffi::*;
+
 
 use std::alloc::{alloc, dealloc, Layout};
 use std::os::raw::c_void;

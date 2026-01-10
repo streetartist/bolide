@@ -1,0 +1,63 @@
+// Test Dictionary Functionality
+
+// 1. Creation and Literal
+let d = {1: 10, 2: 20};
+print(d);
+
+// 2. Set/Get via methods
+d.set(3, 30);
+print(d.get(3)); // Should be 30
+
+// 3. Set/Get via index
+d[4] = 40;
+print(d[4]); // Should be 40
+
+// 4. Update existing
+d[1] = 100;
+print(d[1]); // Should be 100
+
+// 5. Contains
+print(d.contains(1)); // 1 (true)
+print(d.contains(99)); // 0 (false)
+
+// 6. Remove
+let removed = d.remove(2);
+print(removed); // 20
+print(d.contains(2)); // 0
+
+// 7. Len and IsEmpty
+print(d.len()); // 3 (1, 3, 4)
+print(d.is_empty()); // 0
+
+// 8. Keys and Values
+let keys = d.keys();
+print(keys); // Should contain 1, 3, 4 (order may vary)
+let values = d.values();
+print(values); // Should contain 100, 30, 40 (order may vary)
+
+// 9. Iteration
+print("Iterating:");
+for k in d {
+    print(k);
+    print(d[k]);
+}
+
+// 10. Clear
+d.clear();
+print(d.len()); // 0
+print(d.is_empty()); // 1
+
+// 11. Mixed types (keys are int/str, values any) - NOW SUPPORTED
+let d2 = {"name": "Bolide", "version": 1};
+print(d2["name"]);
+print(d2["version"]);
+
+print("Iterating key-value:");
+for k, v in d2 {
+    print("Key:");
+    print(k); // Dynamic key
+    print("Value:");
+    print(v); // Dynamic value
+}
+
+print("Dict tests completed");

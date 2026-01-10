@@ -117,6 +117,8 @@ impl JitCompiler {
         builder.symbol("dynamic_from_int", bolide_runtime::bolide_dynamic_from_int as *const u8);
         builder.symbol("dynamic_from_float", bolide_runtime::bolide_dynamic_from_float as *const u8);
         builder.symbol("dynamic_from_bool", bolide_runtime::bolide_dynamic_from_bool as *const u8);
+        builder.symbol("dynamic_from_string", bolide_runtime::bolide_dynamic_from_string as *const u8);
+        builder.symbol("dynamic_from_list", bolide_runtime::bolide_dynamic_from_list as *const u8);
         builder.symbol("dynamic_from_bigint", bolide_runtime::bolide_dynamic_from_bigint as *const u8);
         builder.symbol("dynamic_from_decimal", bolide_runtime::bolide_dynamic_from_decimal as *const u8);
         builder.symbol("dynamic_add", bolide_runtime::bolide_dynamic_add as *const u8);
@@ -129,7 +131,9 @@ impl JitCompiler {
         builder.symbol("dynamic_clone", bolide_runtime::bolide_dynamic_clone as *const u8);
 
         // 注册字符串函数
+        // 注册字符串函数
         builder.symbol("string_from_slice", bolide_runtime::bolide_string_from_slice as *const u8);
+        builder.symbol("string_literal", bolide_runtime::bolide_string_literal as *const u8);
         builder.symbol("string_as_cstr", bolide_runtime::bolide_string_as_cstr as *const u8);
 
         // 注册内存分配函数
@@ -231,10 +235,44 @@ impl JitCompiler {
         builder.symbol("list_clone", bolide_runtime::bolide_list_clone as *const u8);
         builder.symbol("list_new", bolide_runtime::bolide_list_new as *const u8);
         builder.symbol("list_push", bolide_runtime::bolide_list_push as *const u8);
+        builder.symbol("list_pop", bolide_runtime::bolide_list_pop as *const u8);
         builder.symbol("list_len", bolide_runtime::bolide_list_len as *const u8);
         builder.symbol("list_get", bolide_runtime::bolide_list_get as *const u8);
+        builder.symbol("list_set", bolide_runtime::bolide_list_set as *const u8);
+        builder.symbol("list_insert", bolide_runtime::bolide_list_insert as *const u8);
+        builder.symbol("list_remove", bolide_runtime::bolide_list_remove as *const u8);
+        builder.symbol("list_clear", bolide_runtime::bolide_list_clear as *const u8);
+        builder.symbol("list_reverse", bolide_runtime::bolide_list_reverse as *const u8);
+        builder.symbol("list_extend", bolide_runtime::bolide_list_extend as *const u8);
+        builder.symbol("list_contains", bolide_runtime::bolide_list_contains as *const u8);
+        builder.symbol("list_index_of", bolide_runtime::bolide_list_index_of as *const u8);
+        builder.symbol("list_count", bolide_runtime::bolide_list_count as *const u8);
+        builder.symbol("list_sort", bolide_runtime::bolide_list_sort as *const u8);
+        builder.symbol("list_slice", bolide_runtime::bolide_list_slice as *const u8);
+        builder.symbol("list_is_empty", bolide_runtime::bolide_list_is_empty as *const u8);
+        builder.symbol("list_first", bolide_runtime::bolide_list_first as *const u8);
+        builder.symbol("list_last", bolide_runtime::bolide_list_last as *const u8);
+        builder.symbol("print_list", bolide_runtime::bolide_print_list as *const u8);
+        // Dict symbols
+        builder.symbol("dict_new", bolide_runtime::bolide_dict_new as *const u8);
+        builder.symbol("dict_retain", bolide_runtime::bolide_dict_retain as *const u8);
+        builder.symbol("dict_release", bolide_runtime::bolide_dict_release as *const u8);
+        builder.symbol("dict_clone", bolide_runtime::bolide_dict_clone as *const u8);
+        builder.symbol("dict_set", bolide_runtime::bolide_dict_set as *const u8);
+        builder.symbol("dict_get", bolide_runtime::bolide_dict_get as *const u8);
+        builder.symbol("dict_contains", bolide_runtime::bolide_dict_contains as *const u8);
+        builder.symbol("dict_remove", bolide_runtime::bolide_dict_remove as *const u8);
+        builder.symbol("dict_len", bolide_runtime::bolide_dict_len as *const u8);
+        builder.symbol("dict_is_empty", bolide_runtime::bolide_dict_is_empty as *const u8);
+        builder.symbol("dict_clear", bolide_runtime::bolide_dict_clear as *const u8);
+        builder.symbol("dict_keys", bolide_runtime::bolide_dict_keys as *const u8);
+        builder.symbol("dict_values", bolide_runtime::bolide_dict_values as *const u8);
+        builder.symbol("dict_iter", bolide_runtime::bolide_dict_iter as *const u8);
+        builder.symbol("print_dict", bolide_runtime::bolide_print_dict as *const u8);
         builder.symbol("dynamic_retain", bolide_runtime::bolide_dynamic_retain as *const u8);
         builder.symbol("dynamic_release", bolide_runtime::bolide_dynamic_release as *const u8);
+        builder.symbol("print_dynamic", bolide_runtime::bolide_print_dynamic as *const u8);
+
 
         let module = JITModule::new(builder);
         let ptr_type = module.target_config().pointer_type();
@@ -577,7 +615,233 @@ impl JitCompiler {
         let id = self.module.declare_function("list_get", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
         self.functions.insert("list_get".to_string(), id);
 
+        // list_set(list: ptr, index: i64, value: i64) -> i64
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(ptr));
+        sig.params.push(AbiParam::new(types::I64));
+        sig.params.push(AbiParam::new(types::I64));
+        sig.returns.push(AbiParam::new(types::I64));
+        let id = self.module.declare_function("list_set", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        self.functions.insert("list_set".to_string(), id);
+
+        // list_pop(list: ptr) -> i64
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(ptr));
+        sig.returns.push(AbiParam::new(types::I64));
+        let id = self.module.declare_function("list_pop", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        self.functions.insert("list_pop".to_string(), id);
+
+        // list_insert(list: ptr, index: i64, value: i64) -> void
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(ptr));
+        sig.params.push(AbiParam::new(types::I64));
+        sig.params.push(AbiParam::new(types::I64));
+        let id = self.module.declare_function("list_insert", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        self.functions.insert("list_insert".to_string(), id);
+
+        // list_remove(list: ptr, index: i64) -> i64
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(ptr));
+        sig.params.push(AbiParam::new(types::I64));
+        sig.returns.push(AbiParam::new(types::I64));
+        let id = self.module.declare_function("list_remove", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        self.functions.insert("list_remove".to_string(), id);
+
+        // list_clear(list: ptr) -> void
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(ptr));
+        let id = self.module.declare_function("list_clear", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        self.functions.insert("list_clear".to_string(), id);
+
+        // list_reverse(list: ptr) -> void
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(ptr));
+        let id = self.module.declare_function("list_reverse", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        self.functions.insert("list_reverse".to_string(), id);
+
+        // list_extend(list: ptr, other: ptr) -> void
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(ptr));
+        sig.params.push(AbiParam::new(ptr));
+        let id = self.module.declare_function("list_extend", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        self.functions.insert("list_extend".to_string(), id);
+
+        // list_contains(list: ptr, value: i64) -> i64
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(ptr));
+        sig.params.push(AbiParam::new(types::I64));
+        sig.returns.push(AbiParam::new(types::I64));
+        let id = self.module.declare_function("list_contains", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        self.functions.insert("list_contains".to_string(), id);
+
+        // list_index_of(list: ptr, value: i64) -> i64
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(ptr));
+        sig.params.push(AbiParam::new(types::I64));
+        sig.returns.push(AbiParam::new(types::I64));
+        let id = self.module.declare_function("list_index_of", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        self.functions.insert("list_index_of".to_string(), id);
+
+        // list_count(list: ptr, value: i64) -> i64
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(ptr));
+        sig.params.push(AbiParam::new(types::I64));
+        sig.returns.push(AbiParam::new(types::I64));
+        let id = self.module.declare_function("list_count", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        self.functions.insert("list_count".to_string(), id);
+
+        // list_sort(list: ptr) -> void
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(ptr));
+        let id = self.module.declare_function("list_sort", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        self.functions.insert("list_sort".to_string(), id);
+
+        // list_slice(list: ptr, start: i64, end: i64) -> ptr
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(ptr));
+        sig.params.push(AbiParam::new(types::I64));
+        sig.params.push(AbiParam::new(types::I64));
+        sig.returns.push(AbiParam::new(ptr));
+        let id = self.module.declare_function("list_slice", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        self.functions.insert("list_slice".to_string(), id);
+
+        // list_is_empty(list: ptr) -> i64
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(ptr));
+        sig.returns.push(AbiParam::new(types::I64));
+        let id = self.module.declare_function("list_is_empty", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        self.functions.insert("list_is_empty".to_string(), id);
+
+        // list_first(list: ptr) -> i64
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(ptr));
+        sig.returns.push(AbiParam::new(types::I64));
+        let id = self.module.declare_function("list_first", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        self.functions.insert("list_first".to_string(), id);
+
+        // list_last(list: ptr) -> i64
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(ptr));
+        sig.returns.push(AbiParam::new(types::I64));
+        let id = self.module.declare_function("list_last", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        self.functions.insert("list_last".to_string(), id);
+
+        // print_list(list: ptr) -> void
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(ptr));
+        let id = self.module.declare_function("print_list", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        self.functions.insert("print_list".to_string(), id);
+
+        // ===== Dict 函数 =====
+        // dict_new(key_type: u8, value_type: u8) -> ptr
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(types::I8));
+        sig.params.push(AbiParam::new(types::I8));
+        sig.returns.push(AbiParam::new(ptr));
+        let id = self.module.declare_function("dict_new", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        self.functions.insert("dict_new".to_string(), id);
+
+        // dict_retain(dict: ptr) -> void
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(ptr));
+        let id = self.module.declare_function("dict_retain", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        self.functions.insert("dict_retain".to_string(), id);
+
+        // dict_release(dict: ptr) -> void
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(ptr));
+        let id = self.module.declare_function("dict_release", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        self.functions.insert("dict_release".to_string(), id);
+
+        // dict_clone(dict: ptr) -> ptr
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(ptr));
+        sig.returns.push(AbiParam::new(ptr));
+        let id = self.module.declare_function("dict_clone", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        self.functions.insert("dict_clone".to_string(), id);
+
+        // dict_set(dict: ptr, key: i64, value: i64) -> void
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(ptr));
+        sig.params.push(AbiParam::new(types::I64));
+        sig.params.push(AbiParam::new(types::I64));
+        let id = self.module.declare_function("dict_set", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        self.functions.insert("dict_set".to_string(), id);
+
+        // dict_get(dict: ptr, key: i64) -> i64
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(ptr));
+        sig.params.push(AbiParam::new(types::I64));
+        sig.returns.push(AbiParam::new(types::I64));
+        let id = self.module.declare_function("dict_get", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        self.functions.insert("dict_get".to_string(), id);
+
+        // dict_contains(dict: ptr, key: i64) -> i64
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(ptr));
+        sig.params.push(AbiParam::new(types::I64));
+        sig.returns.push(AbiParam::new(types::I64));
+        let id = self.module.declare_function("dict_contains", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        self.functions.insert("dict_contains".to_string(), id);
+
+        // dict_remove(dict: ptr, key: i64) -> i64
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(ptr));
+        sig.params.push(AbiParam::new(types::I64));
+        sig.returns.push(AbiParam::new(types::I64));
+        let id = self.module.declare_function("dict_remove", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        self.functions.insert("dict_remove".to_string(), id);
+
+        // dict_len(dict: ptr) -> i64
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(ptr));
+        sig.returns.push(AbiParam::new(types::I64));
+        let id = self.module.declare_function("dict_len", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        self.functions.insert("dict_len".to_string(), id);
+
+        // dict_is_empty(dict: ptr) -> i64
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(ptr));
+        sig.returns.push(AbiParam::new(types::I64));
+        let id = self.module.declare_function("dict_is_empty", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        self.functions.insert("dict_is_empty".to_string(), id);
+
+        // dict_clear(dict: ptr) -> void
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(ptr));
+        let id = self.module.declare_function("dict_clear", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        self.functions.insert("dict_clear".to_string(), id);
+
+        // dict_keys(dict: ptr) -> ptr (list)
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(ptr));
+        sig.returns.push(AbiParam::new(ptr));
+        let id = self.module.declare_function("dict_keys", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        self.functions.insert("dict_keys".to_string(), id);
+
+        // dict_values(dict: ptr) -> ptr (list)
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(ptr));
+        sig.returns.push(AbiParam::new(ptr));
+        let id = self.module.declare_function("dict_values", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        self.functions.insert("dict_values".to_string(), id);
+
+        // dict_iter(dict: ptr) -> ptr (list of keys for iteration)
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(ptr));
+        sig.returns.push(AbiParam::new(ptr));
+        let id = self.module.declare_function("dict_iter", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        self.functions.insert("dict_iter".to_string(), id);
+
+        // print_dict(dict: ptr) -> void
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(ptr));
+        let id = self.module.declare_function("print_dict", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        self.functions.insert("print_dict".to_string(), id);
+
         // dynamic_clone(ptr) -> ptr
+
+
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
         sig.returns.push(AbiParam::new(ptr));
@@ -768,6 +1032,20 @@ impl JitCompiler {
         let id = self.module.declare_function("dynamic_from_float", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
         self.functions.insert("dynamic_from_float".to_string(), id);
 
+        // dynamic_from_string(ptr) -> ptr
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(ptr));
+        sig.returns.push(AbiParam::new(ptr));
+        let id = self.module.declare_function("dynamic_from_string", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        self.functions.insert("dynamic_from_string".to_string(), id);
+
+        // dynamic_from_list(ptr) -> ptr
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(ptr));
+        sig.returns.push(AbiParam::new(ptr));
+        let id = self.module.declare_function("dynamic_from_list", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        self.functions.insert("dynamic_from_list".to_string(), id);
+
         // dynamic_add(ptr, ptr) -> ptr
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
@@ -800,6 +1078,12 @@ impl JitCompiler {
         let id = self.module.declare_function("dynamic_div", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
         self.functions.insert("dynamic_div".to_string(), id);
 
+        // print_dynamic(ptr) -> void
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(ptr));
+        let id = self.module.declare_function("print_dynamic", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        self.functions.insert("print_dynamic".to_string(), id);
+
         // dynamic_to_int(ptr) -> i64
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
@@ -815,6 +1099,14 @@ impl JitCompiler {
         sig.returns.push(AbiParam::new(ptr));     // BolideString 指针
         let id = self.module.declare_function("string_from_slice", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
         self.functions.insert("string_from_slice".to_string(), id);
+
+        // string_literal(ptr, i64) -> ptr
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(ptr));
+        sig.params.push(AbiParam::new(types::I64));
+        sig.returns.push(AbiParam::new(ptr));
+        let id = self.module.declare_function("string_literal", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        self.functions.insert("string_literal".to_string(), id);
 
         // string_as_cstr(ptr) -> ptr  (BolideString* -> char*)
         let mut sig = self.module.make_signature();
@@ -1667,7 +1959,9 @@ impl JitCompiler {
             BolideType::Func => self.ptr_type,  // 函数指针
             BolideType::FuncSig(_, _) => self.ptr_type,  // 带签名的函数指针
             BolideType::List(_) => self.ptr_type,
+            BolideType::Dict(_, _) => self.ptr_type,  // 字典作为指针
             BolideType::Tuple(_) => self.ptr_type,  // 元组作为指针
+
             BolideType::Custom(_) => self.ptr_type,
             BolideType::Weak(inner) => self.bolide_type_to_cranelift(inner),
             BolideType::Unowned(inner) => self.bolide_type_to_cranelift(inner),
@@ -2246,6 +2540,7 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                 BolideType::BigInt |
                 BolideType::Decimal |
                 BolideType::List(_) |
+                BolideType::Dict(_, _) |
                 BolideType::Dynamic |
                 BolideType::Custom(_)
             )
@@ -2259,6 +2554,7 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             BolideType::BigInt => Some("bigint_release"),
             BolideType::Decimal => Some("decimal_release"),
             BolideType::List(_) => Some("list_release"),
+            BolideType::Dict(_, _) => Some("dict_release"),
             BolideType::Dynamic => Some("dynamic_release"),
             BolideType::Custom(_) => Some("object_release"),
             _ => None,
@@ -2272,6 +2568,7 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             BolideType::BigInt => Some("bigint_clone"),
             BolideType::Decimal => Some("decimal_clone"),
             BolideType::List(_) => Some("list_clone"),
+            BolideType::Dict(_, _) => Some("dict_clone"),
             BolideType::Dynamic => Some("dynamic_clone"),
             BolideType::Custom(_) => Some("object_clone"),
             _ => None,
@@ -2376,6 +2673,19 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         var
     }
 
+    /// 定义变量 helper (Declare + Def + Type Register)
+    fn define_variable(&mut self, name: &str, val: Value, ty: BolideType) -> Result<(), String> {
+        let c_ty = self.bolide_type_to_cranelift(&ty);
+        // 如果变量已存在，重新声明？或者复用？Compile context variables.
+        // declare_variable checks if exists? 2636 implementation:
+        // usually declare_variable creates NEW variable slot. If reusing name, it overwrites in HashMap.
+        // This is shadowing.
+        let var = self.declare_variable(name, c_ty);
+        self.builder.def_var(var, val);
+        self.var_types.insert(name.to_string(), ty);
+        Ok(())
+    }
+
     /// 编译语句，返回是否已终止当前块
     fn compile_stmt(&mut self, stmt: &Statement) -> Result<bool, String> {
         let result = match stmt {
@@ -2445,9 +2755,42 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         match &assign.target {
             Expr::Ident(var_name) => self.compile_var_assign(var_name, &assign.value),
             Expr::Member(base, member) => self.compile_member_assign(base, member, &assign.value),
+            Expr::Index(base, index) => self.compile_index_assign(base, index, &assign.value),
             _ => Err("Invalid assignment target".to_string()),
         }
     }
+
+    /// 编译索引赋值 (list[i] = value)
+    fn compile_index_assign(&mut self, base: &Expr, index: &Expr, value: &Expr) -> Result<(), String> {
+        let base_type = self.infer_expr_type(base);
+        let base_val = self.compile_expr(base)?;
+        let index_val = self.compile_expr(index)?;
+        let value_val = self.compile_expr(value)?;
+
+        match base_type {
+            BolideType::List(_) => {
+                let list_set = *self.func_refs.get("list_set")
+                    .ok_or("list_set not found")?;
+                self.builder.ins().call(list_set, &[base_val, index_val, value_val]);
+                Ok(())
+            }
+            BolideType::Dict(_, _) => {
+                let dict_set = *self.func_refs.get("dict_set")
+                    .ok_or("dict_set not found")?;
+                self.builder.ins().call(dict_set, &[base_val, index_val, value_val]);
+                Ok(())
+            }
+
+            BolideType::Tuple(_) => {
+                let tuple_set = *self.func_refs.get("tuple_set")
+                    .ok_or("tuple_set not found")?;
+                self.builder.ins().call(tuple_set, &[base_val, index_val, value_val]);
+                Ok(())
+            }
+            _ => Err(format!("Index assignment not supported for type: {:?}", base_type)),
+        }
+    }
+
 
     /// 编译变量赋值
     fn compile_var_assign(&mut self, var_name: &str, value: &Expr) -> Result<(), String> {
@@ -2966,19 +3309,31 @@ impl<'a, 'b> CompileContext<'a, 'b> {
     /// 1. for i in range(n) { ... } - 整数范围迭代
     /// 2. for item in list { ... } - 列表迭代
     fn compile_for(&mut self, for_stmt: &bolide_parser::ForStmt) -> Result<(), String> {
-        let var_name = &for_stmt.var;
-        
+        let vars = &for_stmt.vars;
+        if vars.is_empty() {
+             return Err("For loop must have at least one variable".to_string());
+        }
+
         // 检查是否是 range(n) 调用
         if let Expr::Call(callee, args) = &for_stmt.iter {
             if let Expr::Ident(func_name) = callee.as_ref() {
                 if func_name == "range" {
-                    return self.compile_for_range(var_name, args, &for_stmt.body);
+                    if vars.len() != 1 {
+                        return Err("range() loop only supports single variable".to_string());
+                    }
+                    return self.compile_for_range(&vars[0], args, &for_stmt.body);
                 }
             }
         }
         
-        // 否则是列表迭代
-        self.compile_for_list(var_name, &for_stmt.iter, &for_stmt.body)
+        // 检查是否是字典迭代
+        if let BolideType::Dict(_, _) = self.infer_expr_type(&for_stmt.iter) {
+             return self.compile_for_dict(vars, &for_stmt.iter, &for_stmt.body);
+        }
+
+        // 否则当作列表迭代（支持解构）
+        self.compile_for_list(vars, &for_stmt.iter, &for_stmt.body)
+
     }
 
     /// 编译 for i in range(...) { ... }
@@ -3081,32 +3436,46 @@ impl<'a, 'b> CompileContext<'a, 'b> {
     }
 
     /// 编译 for item in list { ... }
-    fn compile_for_list(&mut self, var_name: &str, iter_expr: &Expr, body: &[Statement]) -> Result<(), String> {
-        // 编译列表表达式
-        let list_ptr = self.compile_expr(iter_expr)?;
-
+    /// 编译列表迭代逻辑 (通用)
+    fn compile_list_iteration_loop(
+        &mut self, 
+        vars: &[String], 
+        list_ptr: Value, 
+        elem_type: BolideType, 
+        body: &[Statement]
+    ) -> Result<(), String> {
         // 获取列表长度: list_len(list_ptr)
         let list_len_ref = *self.func_refs.get("list_len")
             .ok_or("list_len not found")?;
         let len_call = self.builder.ins().call(list_len_ref, &[list_ptr]);
         let list_length = self.builder.inst_results(len_call)[0];
 
+        // 使用第一个变量名作为索引变量后缀
+        let loop_base_name = if !vars.is_empty() { &vars[0] } else { "loop" };
+
         // 创建索引变量
-        let idx_var_name = format!("__for_idx_{}", var_name);
+        let idx_var_name = format!("__for_idx_{}", loop_base_name);
         let idx_var = self.declare_variable(&idx_var_name, types::I64);
         let zero = self.builder.ins().iconst(types::I64, 0);
         self.builder.def_var(idx_var, zero);
 
-        // 创建循环变量
-        let loop_var = self.declare_variable(var_name, types::I64);
-        self.builder.def_var(loop_var, zero);
-        
-        // 推断列表元素类型
-        let elem_type = match self.infer_expr_type(iter_expr) {
-            BolideType::List(inner) => (*inner).clone(),
-            _ => BolideType::Int, // 默认
+        // 创建循环变量 (如果是单个变量)
+        let loop_var = if vars.len() == 1 {
+            let v = self.declare_variable(&vars[0], types::I64); // 注意: declare_variable 需要具体类型吗? 这里的declare 是JIT internal mapping.
+            // Wait: declare_variable in jit.rs assigns Slot.
+            // Previous code:
+            // let loop_var = self.declare_variable(var_name, types::I64); -- TYPE I64?
+            // Element can be Ptr or I64.
+            // If elem_type is Ptr, we should declare valid Cranelift type.
+            // Step 630 line 3414: types::I64. (Maybe everything is I64/Ptr=I64 in current impl).
+            // I'll stick to I64.
+            self.builder.def_var(v, zero);
+            // 注册类型
+            self.var_types.insert(vars[0].to_string(), elem_type.clone());
+            Some(v)
+        } else {
+            None // Destructuring handled inside body
         };
-        self.var_types.insert(var_name.to_string(), elem_type.clone());
 
         // 创建基本块
         let header_block = self.builder.create_block();
@@ -3146,7 +3515,38 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         let idx_val = self.builder.use_var(idx_var);
         let get_call = self.builder.ins().call(list_get_ref, &[list_ptr, idx_val]);
         let elem_val = self.builder.inst_results(get_call)[0];
-        self.builder.def_var(loop_var, elem_val);
+        
+        if vars.len() == 1 {
+             if let Some(v) = loop_var {
+                 self.builder.def_var(v, elem_val);
+             }
+        } else {
+            // 解构 (Destructuring)
+            match elem_type {
+                BolideType::List(inner_type) => { // List unpacking
+                    let list_get_ref = *self.func_refs.get("list_get").ok_or("list_get not found")?;
+                    for (i, var_name) in vars.iter().enumerate() {
+                        let idx_const = self.builder.ins().iconst(types::I64, i as i64);
+                        let call = self.builder.ins().call(list_get_ref, &[elem_val, idx_const]);
+                        let val = self.builder.inst_results(call)[0];
+                        self.define_variable(var_name, val, *inner_type.clone())?;
+                    }
+                }
+                BolideType::Tuple(inner_types) => { // Tuple unpacking
+                    let tuple_get_ref = *self.func_refs.get("tuple_get").ok_or("tuple_get not found")?;
+                    // Ensure vars count matches tuple size? or min?
+                    for (i, var_name) in vars.iter().enumerate() {
+                         let idx_const = self.builder.ins().iconst(types::I64, i as i64);
+                         let call = self.builder.ins().call(tuple_get_ref, &[elem_val, idx_const]);
+                         let val = self.builder.inst_results(call)[0];
+                         
+                         let ty = if i < inner_types.len() { inner_types[i].clone() } else { BolideType::Int }; // Fallback
+                         self.define_variable(var_name, val, ty)?;
+                    }
+                }
+                _ => return Err(format!("Cannot unpack type {:?} in for loop", elem_type))
+            }
+        }
 
         self.enter_scope();
         let mut terminated = false;
@@ -3171,6 +3571,109 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         Ok(())
     }
 
+    /// 编译 for item in list { ... }
+    fn compile_for_list(&mut self, vars: &[String], iter_expr: &Expr, body: &[Statement]) -> Result<(), String> {
+        let list_ptr = self.compile_expr(iter_expr)?;
+        let elem_type = match self.infer_expr_type(iter_expr) {
+            BolideType::List(inner) => *inner,
+            _ => BolideType::Int,
+        };
+        self.compile_list_iteration_loop(vars, list_ptr, elem_type, body)
+    }
+
+    /// 编译 for key in dict { ... }
+    fn compile_for_dict(&mut self, vars: &[String], iter_expr: &Expr, body: &[Statement]) -> Result<(), String> {
+        let dict_ptr = self.compile_expr(iter_expr)?;
+        
+        let dict_iter = *self.func_refs.get("dict_iter").ok_or("dict_iter not found")?;
+        let call = self.builder.ins().call(dict_iter, &[dict_ptr]);
+        let keys_list_ptr = self.builder.inst_results(call)[0];
+        
+        let (key_type, val_type) = match self.infer_expr_type(iter_expr) {
+            BolideType::Dict(k, v) => (*k, *v),
+            _ => (BolideType::Int, BolideType::Int),
+        };
+
+        if vars.len() == 2 {
+            // 优化: for k, v in d. 直接在循环中获取 value，避免创建 items 列表
+            // 复用 list 迭代逻辑，但需要自定义 body 来注入 "let v = d[k]"
+            
+            // 我们不能直接修改 AST body，所以我们需要手动构建循环逻辑
+            // 或者，我们可以生成一个新的 Statement 列表，把 v 的定义加进去
+            // 但是 AST Statement 是结构体，需要构建。
+            // 更简单的方法是: 手动编写 loop 逻辑 (inline)
+            
+            // 1. 获取 length (keys list)
+            let list_len_ref = *self.func_refs.get("list_len").ok_or("list_len not found")?;
+            let len_call = self.builder.ins().call(list_len_ref, &[keys_list_ptr]);
+            let list_length = self.builder.inst_results(len_call)[0];
+
+            let idx_var = self.declare_variable(&format!("__for_idx_{}", vars[0]), types::I64);
+            let zero = self.builder.ins().iconst(types::I64, 0);
+            self.builder.def_var(idx_var, zero);
+
+            let header_block = self.builder.create_block();
+            let body_block = self.builder.create_block();
+            let exit_block = self.builder.create_block();
+
+            self.builder.ins().jump(header_block, &[]);
+
+            // Header
+            self.builder.switch_to_block(header_block);
+            let current_idx = self.builder.use_var(idx_var);
+            let cond = self.builder.ins().icmp(IntCC::SignedLessThan, current_idx, list_length);
+            self.builder.ins().brif(cond, body_block, &[], exit_block, &[]);
+
+            // Body
+            self.builder.switch_to_block(body_block);
+            self.builder.seal_block(body_block);
+
+            // Get Key
+            let list_get_ref = *self.func_refs.get("list_get").ok_or("list_get not found")?;
+            let get_key_call = self.builder.ins().call(list_get_ref, &[keys_list_ptr, current_idx]);
+            let key_val = self.builder.inst_results(get_key_call)[0];
+            
+            self.define_variable(&vars[0], key_val, key_type.clone())?;
+
+            // Get Value: val = dict_get(dict_ptr, key)
+            let dict_get_ref = *self.func_refs.get("dict_get").ok_or("dict_get not found")?;
+            let get_val_call = self.builder.ins().call(dict_get_ref, &[dict_ptr, key_val]);
+            let val_val = self.builder.inst_results(get_val_call)[0];
+            
+            self.define_variable(&vars[1], val_val, val_type.clone())?;
+
+            // Compile body
+            self.enter_scope();
+            let mut terminated = false;
+            for stmt in body {
+                if terminated { break; }
+                terminated = self.compile_stmt(stmt)?;
+            }
+            self.leave_scope()?;
+
+            if !terminated {
+                 let current = self.builder.use_var(idx_var);
+                 let next = self.builder.ins().iadd_imm(current, 1);
+                 self.builder.def_var(idx_var, next);
+                 self.builder.ins().jump(header_block, &[]);
+            }
+
+            self.builder.seal_block(header_block);
+            self.builder.switch_to_block(exit_block);
+            self.builder.seal_block(exit_block);
+
+        } else {
+            // 单变量迭代 (Keys)
+            self.compile_list_iteration_loop(vars, keys_list_ptr, key_type, body)?;
+        }
+
+        // Release keys list
+        let release_fn = *self.func_refs.get("list_release").ok_or("list_release not found")?;
+        self.builder.ins().call(release_fn, &[keys_list_ptr]);
+
+        Ok(())
+    }
+
     /// 编译表达式
     fn compile_expr(&mut self, expr: &Expr) -> Result<Value, String> {
         match expr {
@@ -3183,9 +3686,11 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                 let ptr = Box::leak(bytes).as_ptr();
                 let len = s.len();
 
-                // 获取 string_from_slice 函数引用
-                let func_ref = *self.func_refs.get("string_from_slice")
-                    .ok_or("string_from_slice not found")?;
+                let len = s.len();
+
+                // 获取 string_literal 函数引用 (Uses interning)
+                let func_ref = *self.func_refs.get("string_literal")
+                    .ok_or("string_literal not found")?;
 
                 // 创建指针和长度的立即数
                 let ptr_val = self.builder.ins().iconst(self.ptr_type, ptr as i64);
@@ -3211,8 +3716,10 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             Expr::Await(inner_expr) => self.compile_await(inner_expr),
             Expr::AwaitAll(exprs) => self.compile_await_all(exprs),
             Expr::Tuple(exprs) => self.compile_tuple(exprs),
+            Expr::Dict(entries) => self.compile_dict(entries),
         }
     }
+
 
     /// 编译 BigInt 字面量
     fn compile_bigint_literal(&mut self, s: &str) -> Result<Value, String> {
@@ -3606,6 +4113,19 @@ impl<'a, 'b> CompileContext<'a, 'b> {
 
     /// 编译函数调用
     fn compile_call(&mut self, callee: &Expr, args: &[Expr]) -> Result<Value, String> {
+        // Intercept 'print' for Dynamic type
+        if let Expr::Ident(name) = callee {
+            if name == "print" && args.len() == 1 {
+                if self.infer_expr_type(&args[0]) == BolideType::Dynamic {
+                    let func = *self.func_refs.get("print_dynamic")
+                        .ok_or("print_dynamic not found")?;
+                    let val = self.compile_expr(&args[0])?;
+                    self.builder.ins().call(func, &[val]);
+                    return Ok(self.builder.ins().iconst(types::I64, 0));
+                }
+            }
+        }
+
         // 检查是否是模块调用或方法调用 (obj.method(args))
         if let Expr::Member(base, member_name) = callee {
             // 先检查是否是模块调用
@@ -3880,8 +4400,12 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             BolideType::Str => "print_string",
             BolideType::Dynamic => "print_dynamic",
             BolideType::Tuple(_) => "print_tuple",
+            BolideType::List(_) => "print_list",
+            BolideType::Dict(_, _) => "print_dict",
+
             _ => "print_int",  // 默认用 int 打印
         };
+
 
         let func_ref = *self.func_refs.get(func_name)
             .ok_or_else(|| format!("{} not found", func_name))?;
@@ -3957,6 +4481,29 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                             }
                         }
                     }
+                } else if let Expr::Member(base, method) = callee.as_ref() {
+                    let base_ty = self.infer_expr_type(base);
+                    match base_ty {
+                        BolideType::Dict(k, v) => {
+                             match method.as_str() {
+                                 "keys" => BolideType::List(k),
+                                 "values" => BolideType::List(v),
+                                 "get" | "remove" => *v,
+                                 "clone" => BolideType::Dict(k, v),
+                                 "len" | "is_empty" | "contains" => BolideType::Int,
+                                 _ => BolideType::Int,
+                             }
+                        }
+                        BolideType::List(elem) => {
+                             match method.as_str() {
+                                 "pop" | "get" | "first" | "last" => *elem,
+                                 "slice" | "copy" | "clone" => BolideType::List(elem),
+                                 "len" | "index_of" | "count" | "is_empty" => BolideType::Int,
+                                 _ => BolideType::Int
+                             }
+                        }
+                        _ => BolideType::Int
+                    }
                 } else {
                     BolideType::Int
                 }
@@ -3981,17 +4528,20 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             }
             Expr::Index(base, idx) => {
                 let base_ty = self.infer_expr_type(base);
-                if let BolideType::Tuple(elem_types) = base_ty {
-                    // 根据索引获取对应元素类型
-                    if let Expr::Int(i) = idx.as_ref() {
-                        let index = *i as usize;
-                        elem_types.get(index).cloned().unwrap_or(BolideType::Int)
-                    } else {
-                        // 动态索引，返回第一个元素类型作为默认
-                        elem_types.first().cloned().unwrap_or(BolideType::Int)
+                match base_ty {
+                    BolideType::Tuple(elem_types) => {
+                        // 根据索引获取对应元素类型
+                        if let Expr::Int(i) = idx.as_ref() {
+                            let index = *i as usize;
+                            elem_types.get(index).cloned().unwrap_or(BolideType::Int)
+                        } else {
+                            // 动态索引，返回第一个元素类型作为默认
+                            elem_types.first().cloned().unwrap_or(BolideType::Int)
+                        }
                     }
-                } else {
-                    BolideType::Int
+                    BolideType::List(elem_ty) => *elem_ty,
+                    BolideType::Dict(_, val_ty) => *val_ty,
+                    _ => BolideType::Int,
                 }
             }
             Expr::Await(inner_expr) => {
@@ -4010,6 +4560,37 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                 } else {
                     BolideType::Int
                 }
+            }
+            Expr::List(items) => {
+                let item_type = if items.is_empty() {
+                    BolideType::Int
+                } else {
+                    let mut inferred = self.infer_expr_type(&items[0]);
+                    for item in items.iter().skip(1) {
+                        let next = self.infer_expr_type(item);
+                        if inferred != next {
+                            inferred = BolideType::Dynamic;
+                        }
+                    }
+                    inferred
+                };
+                BolideType::List(Box::new(item_type))
+            }
+            Expr::Dict(entries) => {
+                let (k_type, v_type) = if entries.is_empty() {
+                    (BolideType::Int, BolideType::Int)
+                } else {
+                    let mut k_ty = self.infer_expr_type(&entries[0].0);
+                    let mut v_ty = self.infer_expr_type(&entries[0].1);
+                    for (k, v) in entries.iter().skip(1) {
+                        let next_k = self.infer_expr_type(k);
+                        if k_ty != next_k { k_ty = BolideType::Dynamic; }
+                        let next_v = self.infer_expr_type(v);
+                        if v_ty != next_v { v_ty = BolideType::Dynamic; }
+                    }
+                    (k_ty, v_ty)
+                };
+                BolideType::Dict(Box::new(k_type), Box::new(v_type))
             }
             _ => BolideType::Int,
         }
@@ -4030,7 +4611,9 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             BolideType::Func => self.ptr_type,  // 函数指针
             BolideType::FuncSig(_, _) => self.ptr_type,  // 带签名的函数指针
             BolideType::List(_) => self.ptr_type,
+            BolideType::Dict(_, _) => self.ptr_type,
             BolideType::Tuple(_) => self.ptr_type,  // 元组作为指针
+
             BolideType::Custom(_) => self.ptr_type,
             BolideType::Weak(inner) => self.bolide_type_to_cranelift(inner),
             BolideType::Unowned(inner) => self.bolide_type_to_cranelift(inner),
@@ -4591,17 +5174,135 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         Ok(list_ptr)
     }
 
+
+
+    /// 将值转换为 Dynamic 类型 (Boxing)
+    fn convert_to_dynamic(&mut self, val: Value, ty: &BolideType) -> Result<Value, String> {
+        let func_name = match ty {
+            BolideType::Int => "dynamic_from_int",
+            BolideType::Float => "dynamic_from_float",
+            BolideType::Bool => "dynamic_from_bool",
+            BolideType::Str => "dynamic_from_string",
+            BolideType::BigInt => "dynamic_from_bigint",
+            BolideType::Decimal => "dynamic_from_decimal",
+            BolideType::List(_) => "dynamic_from_list",
+            BolideType::Dict(_, _) => return Err("Dynamic Dict not supported yet".to_string()),
+            BolideType::Dynamic => return Ok(val), // Already dynamic
+            _ => return Err(format!("Cannot convert {:?} to dynamic", ty)),
+        };
+        let func = *self.func_refs.get(func_name)
+            .ok_or_else(|| format!("{} not found", func_name))?;
+        let call = self.builder.ins().call(func, &[val]);
+        let res = self.builder.inst_results(call)[0];
+        self.track_temp_rc_value(res, &BolideType::Dynamic);
+        Ok(res)
+    }
+
+    /// 编译字典字面量 {k: v, ...}
+    fn compile_dict(&mut self, entries: &[(Expr, Expr)]) -> Result<Value, String> {
+        // 确定键和值类型 (需扫描所有元素以处理 Dynamic)
+        let (key_type_tag, val_type_tag) = if entries.is_empty() {
+             (0u8, 0u8) // default int: int
+        } else {
+             // 第一次扫描：推断统一类型 (Dynamic or specific)
+             let mut k_final_ty = self.infer_expr_type(&entries[0].0);
+             let mut v_final_ty = self.infer_expr_type(&entries[0].1);
+             
+             for (k, v) in entries.iter().skip(1) {
+                 let next_k = self.infer_expr_type(k);
+                 if k_final_ty != next_k { k_final_ty = BolideType::Dynamic; }
+                 let next_v = self.infer_expr_type(v);
+                 if v_final_ty != next_v { v_final_ty = BolideType::Dynamic; }
+             }
+
+             // 映射到 type tag
+             let map_tag = |ty: &BolideType| -> u8 {
+                 match ty {
+                    BolideType::Int => 0,
+                    BolideType::Float => 1,
+                    BolideType::Bool => 2,
+                    BolideType::Str => 3,
+                    BolideType::BigInt => 4,
+                    BolideType::Decimal => 5,
+                    BolideType::List(_) => 6,
+                    BolideType::Ptr => 7,
+                    BolideType::Dict(_, _) => 8,
+                    BolideType::Dynamic => 9,
+                    _ => 0 // fallback integer
+                 }
+             };
+             (map_tag(&k_final_ty), map_tag(&v_final_ty))
+        };
+
+        // 创建字典
+        let dict_new = *self.func_refs.get("dict_new")
+             .ok_or("dict_new not found")?;
+        let k_type_val = self.builder.ins().iconst(types::I8, key_type_tag as i64);
+        let v_type_val = self.builder.ins().iconst(types::I8, val_type_tag as i64);
+        let call = self.builder.ins().call(dict_new, &[k_type_val, v_type_val]);
+        let dict_ptr = self.builder.inst_results(call)[0];
+
+        // 设置元素
+        let dict_set = *self.func_refs.get("dict_set")
+             .ok_or("dict_set not found")?;
+        
+        for (key, val) in entries {
+            let mut k_val = self.compile_expr(key)?;
+            let mut v_val = self.compile_expr(val)?;
+            
+            // 如果目标是 Dynamic，但源不是，进行转换
+            if key_type_tag == 9 {
+                let k_ty = self.infer_expr_type(key);
+                if k_ty != BolideType::Dynamic {
+                    k_val = self.convert_to_dynamic(k_val, &k_ty)?;
+                }
+            }
+            if val_type_tag == 9 {
+                let v_ty = self.infer_expr_type(val);
+                if v_ty != BolideType::Dynamic {
+                    v_val = self.convert_to_dynamic(v_val, &v_ty)?;
+                }
+            }
+
+            self.builder.ins().call(dict_set, &[dict_ptr, k_val, v_val]);
+        }
+        
+        Ok(dict_ptr)
+    }
+
+
+
     /// 编译索引访问 (元组或列表)
     fn compile_index(&mut self, base: &Expr, index: &Expr) -> Result<Value, String> {
+        let base_type = self.infer_expr_type(base);
         let base_val = self.compile_expr(base)?;
         let index_val = self.compile_expr(index)?;
 
-        // 目前只支持元组索引
-        let tuple_get = *self.func_refs.get("tuple_get")
-            .ok_or("tuple_get not found")?;
-        let call = self.builder.ins().call(tuple_get, &[base_val, index_val]);
-        Ok(self.builder.inst_results(call)[0])
+        // 根据类型选择不同的索引函数
+        match base_type {
+            BolideType::List(_) => {
+                let list_get = *self.func_refs.get("list_get")
+                    .ok_or("list_get not found")?;
+                let call = self.builder.ins().call(list_get, &[base_val, index_val]);
+                Ok(self.builder.inst_results(call)[0])
+            }
+            BolideType::Dict(_, _) => {
+                let dict_get = *self.func_refs.get("dict_get")
+                    .ok_or("dict_get not found")?;
+                let call = self.builder.ins().call(dict_get, &[base_val, index_val]);
+                Ok(self.builder.inst_results(call)[0])
+            }
+
+            _ => {
+                // 默认使用元组索引
+                let tuple_get = *self.func_refs.get("tuple_get")
+                    .ok_or("tuple_get not found")?;
+                let call = self.builder.ins().call(tuple_get, &[base_val, index_val]);
+                Ok(self.builder.inst_results(call)[0])
+            }
+        }
     }
+
 
     /// 编译 await all 表达式
     fn compile_await_all(&mut self, exprs: &[Expr]) -> Result<Value, String> {
@@ -5013,10 +5714,24 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             }
         }
 
+        // 检查是否是 List 类型的方法调用
+        if matches!(class_name, BolideType::List(_)) {
+            let list_ptr = self.compile_expr(base)?;
+            return self.compile_list_method_call(list_ptr, method_name, args);
+        }
+
+        // 检查是否是 Dict 类型的方法调用
+        if matches!(class_name, BolideType::Dict(_, _)) {
+            let dict_ptr = self.compile_expr(base)?;
+            return self.compile_dict_method_call(dict_ptr, method_name, args);
+        }
+
+
         let class_name = match class_name {
             BolideType::Custom(name) => name,
             _ => return Err(format!("Method call on non-class type: {:?}", class_name)),
         };
+
 
         // 查找方法（支持继承链）
         let full_method_name = self.find_method(&class_name, method_name)?;
@@ -5045,7 +5760,235 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         }
     }
 
+    /// 编译列表方法调用
+    fn compile_list_method_call(&mut self, list_ptr: Value, method_name: &str, args: &[Expr]) -> Result<Value, String> {
+        match method_name {
+            // push(value) -> void
+            "push" | "append" => {
+                if args.len() != 1 {
+                    return Err(format!("{} expects 1 argument", method_name));
+                }
+                let value = self.compile_expr(&args[0])?;
+                let func_ref = *self.func_refs.get("list_push").ok_or("list_push not found")?;
+                self.builder.ins().call(func_ref, &[list_ptr, value]);
+                Ok(self.builder.ins().iconst(types::I64, 0))
+            }
+            // pop() -> value
+            "pop" => {
+                let func_ref = *self.func_refs.get("list_pop").ok_or("list_pop not found")?;
+                let call = self.builder.ins().call(func_ref, &[list_ptr]);
+                Ok(self.builder.inst_results(call)[0])
+            }
+            // len() -> int
+            "len" | "length" | "size" => {
+                let func_ref = *self.func_refs.get("list_len").ok_or("list_len not found")?;
+                let call = self.builder.ins().call(func_ref, &[list_ptr]);
+                Ok(self.builder.inst_results(call)[0])
+            }
+            // get(index) -> value
+            "get" => {
+                if args.len() != 1 {
+                    return Err("get expects 1 argument".to_string());
+                }
+                let index = self.compile_expr(&args[0])?;
+                let func_ref = *self.func_refs.get("list_get").ok_or("list_get not found")?;
+                let call = self.builder.ins().call(func_ref, &[list_ptr, index]);
+                Ok(self.builder.inst_results(call)[0])
+            }
+            // set(index, value) -> bool
+            "set" => {
+                if args.len() != 2 {
+                    return Err("set expects 2 arguments".to_string());
+                }
+                let index = self.compile_expr(&args[0])?;
+                let value = self.compile_expr(&args[1])?;
+                let func_ref = *self.func_refs.get("list_set").ok_or("list_set not found")?;
+                let call = self.builder.ins().call(func_ref, &[list_ptr, index, value]);
+                Ok(self.builder.inst_results(call)[0])
+            }
+            // insert(index, value) -> void
+            "insert" => {
+                if args.len() != 2 {
+                    return Err("insert expects 2 arguments".to_string());
+                }
+                let index = self.compile_expr(&args[0])?;
+                let value = self.compile_expr(&args[1])?;
+                let func_ref = *self.func_refs.get("list_insert").ok_or("list_insert not found")?;
+                self.builder.ins().call(func_ref, &[list_ptr, index, value]);
+                Ok(self.builder.ins().iconst(types::I64, 0))
+            }
+            // remove(index) -> value
+            "remove" => {
+                if args.len() != 1 {
+                    return Err("remove expects 1 argument".to_string());
+                }
+                let index = self.compile_expr(&args[0])?;
+                let func_ref = *self.func_refs.get("list_remove").ok_or("list_remove not found")?;
+                let call = self.builder.ins().call(func_ref, &[list_ptr, index]);
+                Ok(self.builder.inst_results(call)[0])
+            }
+            // clear() -> void
+            "clear" => {
+                let func_ref = *self.func_refs.get("list_clear").ok_or("list_clear not found")?;
+                self.builder.ins().call(func_ref, &[list_ptr]);
+                Ok(self.builder.ins().iconst(types::I64, 0))
+            }
+            // reverse() -> void
+            "reverse" => {
+                let func_ref = *self.func_refs.get("list_reverse").ok_or("list_reverse not found")?;
+                self.builder.ins().call(func_ref, &[list_ptr]);
+                Ok(self.builder.ins().iconst(types::I64, 0))
+            }
+            // extend(other_list) -> void
+            "extend" => {
+                if args.len() != 1 {
+                    return Err("extend expects 1 argument".to_string());
+                }
+                let other = self.compile_expr(&args[0])?;
+                let func_ref = *self.func_refs.get("list_extend").ok_or("list_extend not found")?;
+                self.builder.ins().call(func_ref, &[list_ptr, other]);
+                Ok(self.builder.ins().iconst(types::I64, 0))
+            }
+            // contains(value) -> bool
+            "contains" | "includes" => {
+                if args.len() != 1 {
+                    return Err(format!("{} expects 1 argument", method_name));
+                }
+                let value = self.compile_expr(&args[0])?;
+                let func_ref = *self.func_refs.get("list_contains").ok_or("list_contains not found")?;
+                let call = self.builder.ins().call(func_ref, &[list_ptr, value]);
+                Ok(self.builder.inst_results(call)[0])
+            }
+            // index_of(value) -> int (-1 if not found)
+            "index_of" | "index" | "find" => {
+                if args.len() != 1 {
+                    return Err(format!("{} expects 1 argument", method_name));
+                }
+                let value = self.compile_expr(&args[0])?;
+                let func_ref = *self.func_refs.get("list_index_of").ok_or("list_index_of not found")?;
+                let call = self.builder.ins().call(func_ref, &[list_ptr, value]);
+                Ok(self.builder.inst_results(call)[0])
+            }
+            // count(value) -> int
+            "count" => {
+                if args.len() != 1 {
+                    return Err("count expects 1 argument".to_string());
+                }
+                let value = self.compile_expr(&args[0])?;
+                let func_ref = *self.func_refs.get("list_count").ok_or("list_count not found")?;
+                let call = self.builder.ins().call(func_ref, &[list_ptr, value]);
+                Ok(self.builder.inst_results(call)[0])
+            }
+            // sort() -> void
+            "sort" => {
+                let func_ref = *self.func_refs.get("list_sort").ok_or("list_sort not found")?;
+                self.builder.ins().call(func_ref, &[list_ptr]);
+                Ok(self.builder.ins().iconst(types::I64, 0))
+            }
+            // slice(start, end) -> list
+            "slice" => {
+                if args.len() != 2 {
+                    return Err("slice expects 2 arguments".to_string());
+                }
+                let start = self.compile_expr(&args[0])?;
+                let end = self.compile_expr(&args[1])?;
+                let func_ref = *self.func_refs.get("list_slice").ok_or("list_slice not found")?;
+                let call = self.builder.ins().call(func_ref, &[list_ptr, start, end]);
+                Ok(self.builder.inst_results(call)[0])
+            }
+            // is_empty() -> bool
+            "is_empty" | "empty" => {
+                let func_ref = *self.func_refs.get("list_is_empty").ok_or("list_is_empty not found")?;
+                let call = self.builder.ins().call(func_ref, &[list_ptr]);
+                Ok(self.builder.inst_results(call)[0])
+            }
+            // first() -> value
+            "first" => {
+                let func_ref = *self.func_refs.get("list_first").ok_or("list_first not found")?;
+                let call = self.builder.ins().call(func_ref, &[list_ptr]);
+                Ok(self.builder.inst_results(call)[0])
+            }
+            // last() -> value
+            "last" => {
+                let func_ref = *self.func_refs.get("list_last").ok_or("list_last not found")?;
+                let call = self.builder.ins().call(func_ref, &[list_ptr]);
+                Ok(self.builder.inst_results(call)[0])
+            }
+            // copy() -> list (shallow copy, same as clone)
+            "copy" | "clone" => {
+                let func_ref = *self.func_refs.get("list_clone").ok_or("list_clone not found")?;
+                let call = self.builder.ins().call(func_ref, &[list_ptr]);
+                Ok(self.builder.inst_results(call)[0])
+            }
+            _ => Err(format!("Unknown list method: {}", method_name)),
+        }
+    }
+
+    /// 编译字典方法调用
+    fn compile_dict_method_call(&mut self, dict_ptr: Value, method_name: &str, args: &[Expr]) -> Result<Value, String> {
+        match method_name {
+            "set" => {
+                 let set_fn = *self.func_refs.get("dict_set").ok_or("dict_set failed")?;
+                 let k = self.compile_expr(&args[0])?;
+                 let v = self.compile_expr(&args[1])?;
+                 self.builder.ins().call(set_fn, &[dict_ptr, k, v]);
+                 Ok(self.builder.ins().iconst(types::I64, 0))
+            }
+            "get" => {
+                let get_fn = *self.func_refs.get("dict_get").ok_or("dict_get failed")?;
+                let k = self.compile_expr(&args[0])?;
+                let call = self.builder.ins().call(get_fn, &[dict_ptr, k]);
+                Ok(self.builder.inst_results(call)[0])
+            }
+            "contains" => {
+                let contains_fn = *self.func_refs.get("dict_contains").ok_or("dict_contains failed")?;
+                let k = self.compile_expr(&args[0])?;
+                let call = self.builder.ins().call(contains_fn, &[dict_ptr, k]);
+                Ok(self.builder.inst_results(call)[0])
+            }
+            "remove" => {
+                let remove_fn = *self.func_refs.get("dict_remove").ok_or("dict_remove failed")?;
+                let k = self.compile_expr(&args[0])?;
+                let call = self.builder.ins().call(remove_fn, &[dict_ptr, k]);
+                Ok(self.builder.inst_results(call)[0])
+            }
+             "len" => {
+                let len_fn = *self.func_refs.get("dict_len").ok_or("dict_len failed")?;
+                let call = self.builder.ins().call(len_fn, &[dict_ptr]);
+                Ok(self.builder.inst_results(call)[0])
+            }
+             "is_empty" => {
+                let is_empty_fn = *self.func_refs.get("dict_is_empty").ok_or("dict_is_empty failed")?;
+                let call = self.builder.ins().call(is_empty_fn, &[dict_ptr]);
+                Ok(self.builder.inst_results(call)[0])
+            }
+            "clear" => {
+                let clear_fn = *self.func_refs.get("dict_clear").ok_or("dict_clear failed")?;
+                self.builder.ins().call(clear_fn, &[dict_ptr]);
+                Ok(self.builder.ins().iconst(types::I64, 0))
+            }
+             "keys" => {
+                let keys_fn = *self.func_refs.get("dict_keys").ok_or("dict_keys failed")?;
+                let call = self.builder.ins().call(keys_fn, &[dict_ptr]);
+                Ok(self.builder.inst_results(call)[0])
+            }
+             "values" => {
+                let values_fn = *self.func_refs.get("dict_values").ok_or("dict_values failed")?;
+                let call = self.builder.ins().call(values_fn, &[dict_ptr]);
+                Ok(self.builder.inst_results(call)[0])
+            }
+             "clone" => {
+                let clone_fn = *self.func_refs.get("dict_clone").ok_or("dict_clone failed")?;
+                let call = self.builder.ins().call(clone_fn, &[dict_ptr]);
+                Ok(self.builder.inst_results(call)[0])
+            }
+            _ => Err(format!("Unknown dictionary method: {}", method_name)),
+        }
+    }
+
+
     /// 在继承链中查找方法
+
     fn find_method(&self, class_name: &str, method_name: &str) -> Result<String, String> {
         let mut current = class_name.to_string();
         loop {

@@ -22,7 +22,9 @@ pub enum TypeTag {
     Object = 5,    // 用户自定义对象
     Closure = 6,   // 闭包
     Future = 7,    // Future/Promise
+    Dict = 8,      // 字典/哈希表
 }
+
 
 /// 对象头，位于每个堆分配对象之前
 ///

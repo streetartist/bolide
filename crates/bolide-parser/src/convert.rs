@@ -78,14 +78,24 @@ fn parse_assign_target(pair: Pair<Rule>) -> Result<Expr, String> {
     };
     let mut expr = Expr::Ident(ident);
 
-    // 处理成员访问链 (obj.field1.field2)
-    for member_pair in inner {
-        let member_name = member_pair.into_inner().next().unwrap().as_str().to_string();
-        expr = Expr::Member(Box::new(expr), member_name);
+    // 处理成员访问链和索引访问 (obj.field1.field2 或 list[0])
+    for item in inner {
+        match item.as_rule() {
+            Rule::member => {
+                let member_name = item.into_inner().next().unwrap().as_str().to_string();
+                expr = Expr::Member(Box::new(expr), member_name);
+            }
+            Rule::index => {
+                let idx = parse_expr(item.into_inner().next().unwrap())?;
+                expr = Expr::Index(Box::new(expr), Box::new(idx));
+            }
+            _ => {}
+        }
     }
 
     Ok(expr)
 }
+
 
 fn parse_func_def(pair: Pair<Rule>) -> Result<FuncDef, String> {
     let mut inner = pair.into_inner();
@@ -177,10 +187,17 @@ fn parse_type(pair: Pair<Rule>) -> Result<Type, String> {
             let elem_type = parse_type(type_pair.into_inner().next().unwrap())?;
             Type::List(Box::new(elem_type))
         }
+        Rule::dict_type => {
+            let mut inner = type_pair.into_inner();
+            let key_type = parse_type(inner.next().unwrap())?;
+            let value_type = parse_type(inner.next().unwrap())?;
+            Type::Dict(Box::new(key_type), Box::new(value_type))
+        }
         Rule::channel_type => {
             let elem_type = parse_type(type_pair.into_inner().next().unwrap())?;
             Type::Channel(Box::new(elem_type))
         }
+
         Rule::func_type => {
             let mut func_inner = type_pair.into_inner();
             let mut param_types = Vec::new();
@@ -295,10 +312,30 @@ fn parse_while_stmt(pair: Pair<Rule>) -> Result<WhileStmt, String> {
 
 fn parse_for_stmt(pair: Pair<Rule>) -> Result<ForStmt, String> {
     let mut inner = pair.into_inner();
-    let var = inner.next().unwrap().as_str().to_string();
-    let iter = parse_expr(inner.next().unwrap())?;
-    let body = parse_block(inner.next().unwrap())?;
-    Ok(ForStmt { var, iter, body })
+    let mut vars = Vec::new();
+    
+    // Collect loop variables
+    while let Some(p) = inner.peek() {
+        if p.as_rule() == Rule::ident {
+            vars.push(inner.next().unwrap().as_str().to_string());
+        } else {
+            break;
+        }
+    }
+    
+    if vars.is_empty() {
+        return Err("For loop must have at least one variable".to_string());
+    }
+
+    // Next is iterator expression
+    let iter_pair = inner.next().ok_or("Missing iterator expression")?;
+    let iter = parse_expr(iter_pair)?;
+    
+    // Next is block
+    let block_pair = inner.next().ok_or("Missing loop body")?;
+    let body = parse_block(block_pair)?;
+
+    Ok(ForStmt { vars, iter, body })
 }
 
 fn parse_pool_stmt(pair: Pair<Rule>) -> Result<PoolStmt, String> {
@@ -608,7 +645,20 @@ fn parse_primary(pair: Pair<Rule>) -> Result<Expr, String> {
                 .map(parse_expr).collect();
             Ok(Expr::List(items?))
         }
+        Rule::dict_literal => {
+            let mut entries = Vec::new();
+            for entry in inner.into_inner() {
+                if entry.as_rule() == Rule::dict_entry {
+                    let mut entry_inner = entry.into_inner();
+                    let key = parse_expr(entry_inner.next().unwrap())?;
+                    let value = parse_expr(entry_inner.next().unwrap())?;
+                    entries.push((key, value));
+                }
+            }
+            Ok(Expr::Dict(entries))
+        }
         Rule::spawn_expr => {
+
             let mut spawn_inner = inner.into_inner();
             let func_name = spawn_inner.next().unwrap().as_str().to_string();
             let args: Result<Vec<_>, _> = spawn_inner.next().unwrap()

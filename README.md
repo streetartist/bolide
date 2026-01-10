@@ -12,7 +12,7 @@
     <img src="https://img.shields.io/badge/License-MIT-brightgreen.svg" alt="License: MIT">
   </a>
   <a href="#">
-    <img src="https://img.shields.io/badge/version-0.6.3-blue.svg" alt="Version">
+    <img src="https://img.shields.io/badge/version-0.6.5-blue.svg" alt="Version">
   </a>
   <a href="#">
     <img src="https://img.shields.io/badge/platform-windows%20%7C%20linux-lightgrey.svg" alt="Platform">
@@ -114,9 +114,88 @@ for n in nums {
 while x > 0 {
     x = x - 1;
 }
+
+// for 循环 - 字典遍历 (Python 风格)
+let scores = {"Alice": 100, "Bob": 85};
+for k, v in scores {
+    print(k);  // 键
+    print(v);  // 值
+}
+```
+
+### 列表操作
+
+Bolide 提供了丰富的 Python 风格列表操作：
+
+```bolide
+let nums: list<int> = [3, 1, 4, 1, 5, 9];
+
+// 基本操作
+nums.push(10);           // 追加元素
+let x: int = nums.pop(); // 弹出最后一个元素
+print(nums.len());       // 获取长度
+
+// 索引访问
+print(nums[0]);          // 获取元素
+nums[0] = 100;           // 设置元素
+
+// 插入和删除
+nums.insert(1, 42);      // 在索引 1 处插入
+let removed: int = nums.remove(2);  // 移除索引 2 的元素
+
+// 搜索
+print(nums.contains(4)); // 是否包含值 (返回 0 或 1)
+print(nums.index_of(4)); // 查找索引 (找不到返回 -1)
+print(nums.count(1));    // 统计出现次数
+
+// 工具方法
+print(nums.first());     // 第一个元素
+print(nums.last());      // 最后一个元素
+print(nums.is_empty());  // 是否为空
+
+// 修改操作
+nums.reverse();          // 原地反转
+nums.sort();             // 原地排序
+
+// 切片和扩展
+let sliced: list<int> = nums.slice(1, 4);  // 切片 [1:4)
+let more: list<int> = [100, 200];
+nums.extend(more);       // 扩展列表
+
+// 复制和清空
+let copy: list<int> = nums.copy();  // 复制列表
+nums.clear();            // 清空列表
+
+// 直接打印列表
+print(nums);             // 输出: [1, 2, 3, ...]
+```
+
+### 字典 (Dictionaries)
+
+Bolide 支持强类型和混合类型的动态字典，语法类似于 Python：
+
+```bolide
+// 强类型字典
+let scores: dict<str, int> = {"Alice": 100, "Bob": 90};
+print(scores["Alice"]);  // 100
+
+// 混合类型字典 (自动推导为 dict<dynamic, dynamic>)
+// 支持异构键和值，自动进行装箱处理
+let profile = {"name": "Bolide", 1: "Version", "active": true};
+print(profile["name"]);  // "Bolide"
+print(profile[1]);       // "Version"
+
+// 常用操作
+scores["Charlie"] = 95;     // 插入/更新
+scores.remove("Bob");       // 删除
+print(scores.len());        // 获取长度
+print(scores.contains("Alice")); // 检查键是否存在
+print(scores.keys());       // 获取所有键
+print(scores.values());     // 获取所有值
 ```
 
 ### Async/Await
+
 
 ```bolide
 async fn fetch_data(id: int) -> int {
@@ -213,6 +292,24 @@ spawn sender(ch);
 let val: int = <- ch;  // 接收数据
 ```
 
+#### Channel Select (多路复用)
+
+使用 `select` 语句处理多个通道操作，支持超时和默认分支：
+
+```bolide
+select {
+    val1 <- ch1 => {
+        print("Received from ch1");
+    }
+    timeout(100) => {
+        print("Timed out");
+    }
+    default => {
+        print("No data available");
+    }
+}
+```
+
 ### 模块系统
 
 ```bolide
@@ -298,8 +395,13 @@ let r: int = test_callback(my_callback, 10, 20);
 | `str` | 字符串 | `let s: str = "hello";` |
 | `bigint` | 任意精度整数 | `let b: bigint = 999b;` |
 | `decimal` | 高精度小数 | `let d: decimal = 3.14d;` |
+| `list<T>` | 泛型列表 | `let l: list<int> = [1, 2, 3];` |
 | `tuple` | 元组 | `let t: tuple = (1, 2, 3);` |
+| `channel<T>` | 通道 | `let ch: channel<int> = channel();` |
+| `dict<K, V>` | 字典 | `let d: dict<str, int> = {"a": 1};` |
+| `dynamic` | 动态类型 | (运行时自动推导) |
 | `future` | 协程 Future | `let f: future = async_fn();` |
+
 
 ## 内存管理
 

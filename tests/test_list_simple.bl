@@ -1,0 +1,20 @@
+// Simple list test
+print("Testing basic list operations");
+
+let nums: list<int> = [1, 2, 3];
+
+// Test method calls
+nums.push(4);
+print("After push:");
+print(nums.len());
+
+// Test indexing
+print("First element:");
+print(nums[0]);
+
+// Test pop
+let p: int = nums.pop();
+print("Popped:");
+print(p);
+
+print("Done");

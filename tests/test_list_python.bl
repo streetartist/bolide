@@ -1,0 +1,105 @@
+// Test Python-like List Operations in Bolide
+
+print("=== Testing Python-like List Methods ===");
+
+// Create a list
+let nums: list<int> = [3, 1, 4, 1, 5, 9, 2, 6];
+print("Original list:");
+print(nums);
+
+// Test len()
+print("Length:");
+print(nums.len());
+
+// Test push/append
+nums.push(10);
+print("After push(10):");
+print(nums);
+
+// Test pop()
+let popped: int = nums.pop();
+print("Popped value:");
+print(popped);
+print("After pop:");
+print(nums);
+
+// Test get/set by index
+print("Element at index 0:");
+print(nums[0]);
+
+nums[0] = 100;
+print("After nums[0] = 100:");
+print(nums);
+
+// Test insert
+nums.insert(1, 42);
+print("After insert(1, 42):");
+print(nums);
+
+// Test remove
+let removed: int = nums.remove(1);
+print("Removed element:");
+print(removed);
+print("After remove(1):");
+print(nums);
+
+// Test contains
+print("Contains 4:");
+print(nums.contains(4));
+print("Contains 999:");
+print(nums.contains(999));
+
+// Test index_of
+print("Index of 4:");
+print(nums.index_of(4));
+print("Index of 999:");
+print(nums.index_of(999));
+
+// Test count
+print("Count of 1:");
+print(nums.count(1));
+
+// Test first/last
+print("First element:");
+print(nums.first());
+print("Last element:");
+print(nums.last());
+
+// Test is_empty
+print("Is empty:");
+print(nums.is_empty());
+
+// Test reverse
+nums.reverse();
+print("After reverse:");
+print(nums);
+
+// Test sort
+nums.sort();
+print("After sort:");
+print(nums);
+
+// Test slice
+let sliced: list<int> = nums.slice(1, 4);
+print("Slice 1 to 4:");
+print(sliced);
+
+// Test extend
+let more: list<int> = [100, 200, 300];
+nums.extend(more);
+print("After extend:");
+print(nums);
+
+// Test copy/clone
+let copy_nums: list<int> = nums.copy();
+print("Copy of list:");
+print(copy_nums);
+
+// Test clear
+nums.clear();
+print("After clear:");
+print(nums);
+print("Is empty after clear:");
+print(nums.is_empty());
+
+print("=== All tests completed! ===");

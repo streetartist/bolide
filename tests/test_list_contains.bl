@@ -1,0 +1,5 @@
+// Test list contains - just print directly
+print("Testing contains");
+let nums: list<int> = [3, 1, 4];
+print(nums.contains(3));
+print("Done");

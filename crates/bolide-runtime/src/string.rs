@@ -7,7 +7,13 @@
 
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
+
+thread_local! {
+    // String interner for literals (stores raw pointers with Strong RC=1 owned by interner)
+    static STRING_LITERALS: RefCell<HashMap<String, *mut BolideString>> = RefCell::new(HashMap::new());
+}
 
 use crate::rc::{TypeTag, flags};
 
@@ -146,6 +152,30 @@ pub extern "C" fn bolide_string_from_slice(s: *const i8, len: usize) -> *mut Bol
     let slice = unsafe { std::slice::from_raw_parts(s as *const u8, len) };
     let s = std::str::from_utf8(slice).unwrap_or("");
     BolideString::new(s)
+}
+
+/// 获取字符串字面量（带 Interning）
+#[no_mangle]
+pub extern "C" fn bolide_string_literal(s: *const i8, len: usize) -> *mut BolideString {
+    let slice = unsafe { std::slice::from_raw_parts(s as *const u8, len) };
+    let s_str = std::str::from_utf8(slice).unwrap_or("");
+    
+    STRING_LITERALS.with(|interner| {
+        let mut map = interner.borrow_mut();
+        if let Some(&ptr) = map.get(s_str) {
+             // Found. Retain and return a NEW reference.
+             unsafe { (*ptr).retain(); }
+             ptr
+        } else {
+             // Not found. Create (RC=1).
+             let ptr = BolideString::new(s_str);
+             // Interner keeps the original RC=1.
+             // We retain to give caller their own reference (RC=2).
+             unsafe { (*ptr).retain(); }
+             map.insert(s_str.to_string(), ptr);
+             ptr
+        }
+    })
 }
 
 /// 增加引用计数（浅拷贝）

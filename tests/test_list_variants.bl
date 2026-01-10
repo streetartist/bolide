@@ -1,0 +1,12 @@
+
+print("Testing List Variants");
+let l: list<int> = [1, 2];
+
+// Variant A: Method call (commented out if failed before, but let's try strict isolation)
+// l.push(3); 
+
+// Variant B: Builtin function call
+list_push(l, 3);
+
+// Variant C: push global function
+// push(l, 3);
