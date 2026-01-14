@@ -19,10 +19,10 @@
             "include": "#literals"
         },
         {
-            "include": "#operators"
+            "include": "#functions"
         },
         {
-            "include": "#functions"
+            "include": "#operators"
         },
         {
             "include": "#punctuation"
@@ -68,11 +68,11 @@
                     "match": "\\b(fn|let|class|extern|struct|type|from)\\b"
                 },
                 {
-                    "name": "keyword.async.bolide",
+                    "name": "keyword.control.async.bolide",
                     "match": "\\b(async|await|spawn|pool|scope|all)\\b"
                 },
                 {
-                    "name": "keyword.modifier.bolide",
+                    "name": "storage.modifier.bolide",
                     "match": "\\b(owned|ref|weak|unowned)\\b"
                 },
                 {
@@ -108,11 +108,11 @@
                     "match": "\\b(true|false|none)\\b"
                 },
                 {
-                    "name": "constant.numeric.bigint.bolide",
+                    "name": "constant.numeric.integer.bigint.bolide",
                     "match": "\\b[0-9]+[Bb]\\b"
                 },
                 {
-                    "name": "constant.numeric.decimal.bolide",
+                    "name": "constant.numeric.float.decimal.bolide",
                     "match": "\\b[0-9]+(\\.[0-9]+)?[Dd]\\b"
                 },
                 {
@@ -128,20 +128,28 @@
         "operators": {
             "patterns": [
                 {
-                    "name": "keyword.operator.channel.bolide",
-                    "match": "<-|=>"
+                    "name": "keyword.operator.arrow.skinny.bolide",
+                    "match": "\\->"
                 },
                 {
-                    "name": "keyword.operator.arrow.bolide",
-                    "match": "->"
+                    "name": "keyword.operator.channel.bolide",
+                    "match": "<-"
+                },
+                {
+                    "name": "keyword.operator.arrow.fat.bolide",
+                    "match": "=>"
                 },
                 {
                     "name": "keyword.operator.comparison.bolide",
-                    "match": "==|!=|<=|>=|<|(?<!-)>"
+                    "match": "==|!=|<=|>=|<|>"
                 },
                 {
                     "name": "keyword.operator.arithmetic.bolide",
-                    "match": "\\+|-(?!>)|\\*|/|%"
+                    "match": "[+*/%]"
+                },
+                {
+                    "name": "keyword.operator.arithmetic.bolide",
+                    "match": "-"
                 },
                 {
                     "name": "keyword.operator.assignment.bolide",
@@ -166,6 +174,10 @@
                 {
                     "name": "punctuation.bracket.bolide",
                     "match": "[{}\\[\\]()]"
+                },
+                {
+                    "name": "punctuation.accessor.bolide",
+                    "match": "\\."
                 }
             ]
         }
