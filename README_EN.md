@@ -3,7 +3,7 @@
   <br>
   <b style="font-size: 32px;">Bolide</b>
   <br>
-  <i>Modern JIT-Compiled Programming Language</i>
+  <i>Modern JIT/AOT Compiled Programming Language</i>
   <br>
 </p>
 
@@ -12,7 +12,7 @@
     <img src="https://img.shields.io/badge/License-MIT-brightgreen.svg" alt="License: MIT">
   </a>
   <a href="#">
-    <img src="https://img.shields.io/badge/version-0.6.5-blue.svg" alt="Version">
+    <img src="https://img.shields.io/badge/version-0.7.1-blue.svg" alt="Version">
   </a>
   <a href="#">
     <img src="https://img.shields.io/badge/platform-windows%20%7C%20linux-lightgrey.svg" alt="Platform">
@@ -21,11 +21,12 @@
 
 ---
 
-**Bolide** is a modern programming language with JIT compilation based on **Cranelift**, combining clean syntax with native performance.
+**Bolide** is a modern programming language with JIT/AOT compilation based on **Cranelift**, combining clean syntax with native performance.
 
 ## Features
 
-- **JIT Compilation** - Native performance via Cranelift
+- **JIT Compilation** - Native performance via Cranelift, fast startup
+- **AOT Compilation** - Compile to native executables, no runtime needed
 - **Async Coroutines** - First-class async/await support
 - **FFI** - Seamless C library interop with callback support
 - **Module System** - Namespace-isolated module imports
@@ -60,6 +61,26 @@ bolide.exe run your_program.bl
 # Linux / macOS
 ./bolide run your_program.bl
 ```
+
+### AOT Compilation
+
+Compile Bolide programs to standalone native executables:
+
+```bash
+# Compile to executable
+bolide compile your_program.bl -o your_program
+
+# Windows generates your_program.exe
+# Linux/macOS generates your_program
+
+# Run the compiled program directly
+./your_program
+```
+
+AOT compilation advantages:
+- **No runtime needed** - Generated executables run independently
+- **Faster startup** - Skip JIT compilation phase
+- **Easy distribution** - Single file deployment, no dependencies
 
 ## Syntax Examples
 

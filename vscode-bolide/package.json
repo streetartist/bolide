@@ -2,7 +2,7 @@
   "name": "bolide",
   "displayName": "Bolide Language",
   "description": "Syntax highlighting and run support for Bolide programming language",
-  "version": "0.1.0",
+  "version": "0.7.1",
   "publisher": "bolide",
   "engines": {
     "vscode": "^1.80.0"
@@ -35,6 +35,11 @@
         "command": "bolide.run",
         "title": "Bolide: Run Current File",
         "icon": "$(play)"
+      },
+      {
+        "command": "bolide.build",
+        "title": "Bolide: Build Current File (AOT)",
+        "icon": "$(package)"
       }
     ],
     "keybindings": [
@@ -43,6 +48,12 @@
         "key": "ctrl+shift+r",
         "mac": "cmd+shift+r",
         "when": "editorLangId == bolide"
+      },
+      {
+        "command": "bolide.build",
+        "key": "ctrl+shift+b",
+        "mac": "cmd+shift+b",
+        "when": "editorLangId == bolide"
       }
     ],
     "menus": {
@@ -50,7 +61,12 @@
         {
           "command": "bolide.run",
           "when": "editorLangId == bolide",
-          "group": "navigation"
+          "group": "navigation@1"
+        },
+        {
+          "command": "bolide.build",
+          "when": "editorLangId == bolide",
+          "group": "navigation@2"
         }
       ]
     },

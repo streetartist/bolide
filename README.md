@@ -3,7 +3,7 @@
   <br>
   <b style="font-size: 32px;">Bolide</b>
   <br>
-  <i>现代化 JIT 编译型编程语言</i>
+  <i>现代化 JIT/AOT 编译型编程语言</i>
   <br>
 </p>
 
@@ -12,7 +12,7 @@
     <img src="https://img.shields.io/badge/License-MIT-brightgreen.svg" alt="License: MIT">
   </a>
   <a href="#">
-    <img src="https://img.shields.io/badge/version-0.6.5-blue.svg" alt="Version">
+    <img src="https://img.shields.io/badge/version-0.7.1-blue.svg" alt="Version">
   </a>
   <a href="#">
     <img src="https://img.shields.io/badge/platform-windows%20%7C%20linux-lightgrey.svg" alt="Platform">
@@ -21,11 +21,12 @@
 
 ---
 
-**Bolide** 是一门现代化编程语言，基于 **Cranelift** 实现 JIT 编译，兼具简洁语法与原生性能。
+**Bolide** 是一门现代化编程语言，基于 **Cranelift** 实现 JIT/AOT 编译，兼具简洁语法与原生性能。
 
 ## 特性
 
-- **JIT 编译** - 基于 Cranelift 的原生性能
+- **JIT 编译** - 基于 Cranelift 的即时编译，快速启动
+- **AOT 编译** - 提前编译为原生可执行文件，无需运行时
 - **异步协程** - 一等公民的 async/await 支持
 - **FFI** - 无缝调用 C 库，支持回调函数
 - **模块系统** - 命名空间隔离的模块导入
@@ -60,6 +61,26 @@ bolide.exe run your_program.bl
 # Linux / macOS
 ./bolide run your_program.bl
 ```
+
+### AOT 编译
+
+将 Bolide 程序编译为独立的原生可执行文件：
+
+```bash
+# 编译为可执行文件
+bolide compile your_program.bl -o your_program
+
+# Windows 会生成 your_program.exe
+# Linux/macOS 会生成 your_program
+
+# 直接运行编译后的程序
+./your_program
+```
+
+AOT 编译的优势：
+- **无需运行时** - 生成的可执行文件可独立运行
+- **更快启动** - 跳过 JIT 编译阶段
+- **便于分发** - 单文件部署，无依赖
 
 ## 语法示例
 

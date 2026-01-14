@@ -1,10 +1,11 @@
 use clap::{Parser, Subcommand};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::fs;
 use std::io::{self, Write};
+use std::process::Command;
 
 use bolide_parser::parse_source;
-use bolide_compiler::JitCompiler;
+use bolide_compiler::{JitCompiler, AotCompiler};
 
 /// REPL 状态，维护累积的代码
 struct ReplState {
@@ -109,8 +110,7 @@ fn main() -> miette::Result<()> {
         }
         Some(Commands::Compile { file, output }) => {
             let out = output.unwrap_or_else(|| file.with_extension("exe"));
-            println!("Compiling: {} -> {}", file.display(), out.display());
-            // TODO: 实现 AOT 编译
+            compile_file(&file, &out)?;
         }
         None => {
             run_repl()?;
@@ -136,6 +136,199 @@ fn run_file(file: &PathBuf) -> miette::Result<()> {
     let result = main_fn();
     println!("Result: {}", result);
     Ok(())
+}
+
+/// AOT 编译文件
+fn compile_file(file: &PathBuf, output: &PathBuf) -> miette::Result<()> {
+    println!("Compiling: {} -> {}", file.display(), output.display());
+
+    // 读取源文件
+    let source = fs::read_to_string(file)
+        .map_err(|e| miette::miette!("Failed to read file: {}", e))?;
+
+    // 解析
+    let ast = parse_source(&source)
+        .map_err(|e| miette::miette!("Parse error: {}", e))?;
+
+    // AOT 编译
+    let compiler = AotCompiler::new()
+        .map_err(|e| miette::miette!("Compiler init error: {}", e))?;
+
+    let result = compiler.compile(&ast)
+        .map_err(|e| miette::miette!("Compile error: {}", e))?;
+
+    // 打印外部库信息
+    if !result.extern_libs.is_empty() {
+        println!("External libraries: {:?}", result.extern_libs);
+    }
+
+    // 写入目标文件
+    let obj_path = output.with_extension("o");
+    fs::write(&obj_path, &result.object_code)
+        .map_err(|e| miette::miette!("Failed to write object file: {}", e))?;
+
+    println!("Generated object file: {}", obj_path.display());
+
+    // 链接
+    link_executable(&obj_path, output, &result.extern_libs)?;
+
+    // 清理目标文件
+    let _ = fs::remove_file(&obj_path);
+
+    println!("Successfully compiled: {}", output.display());
+    Ok(())
+}
+
+/// 查找运行时库路径
+fn find_runtime_lib() -> miette::Result<String> {
+    // 获取当前可执行文件路径
+    let exe_path = std::env::current_exe()
+        .map_err(|e| miette::miette!("Failed to get executable path: {}", e))?;
+
+    // 尝试在可执行文件同目录下查找
+    let exe_dir = exe_path.parent().unwrap_or(Path::new("."));
+
+    #[cfg(target_os = "windows")]
+    let lib_name = "bolide_runtime.lib";
+    #[cfg(not(target_os = "windows"))]
+    let lib_name = "libbolide_runtime.a";
+
+    let lib_path = exe_dir.join(lib_name);
+    if lib_path.exists() {
+        println!("Found runtime library: {}", lib_path.display());
+        return Ok(lib_path.display().to_string());
+    }
+
+    // 尝试在 target/debug 目录下查找
+    let debug_path = exe_dir.join("..").join(lib_name);
+    if debug_path.exists() {
+        let path = debug_path.canonicalize().unwrap();
+        println!("Found runtime library: {}", path.display());
+        return Ok(path.display().to_string());
+    }
+
+    // 尝试在当前工作目录的 target/debug 下查找
+    let cwd_path = PathBuf::from("target/debug").join(lib_name);
+    if cwd_path.exists() {
+        let path = cwd_path.canonicalize().unwrap();
+        println!("Found runtime library: {}", path.display());
+        return Ok(path.display().to_string());
+    }
+
+    Err(miette::miette!("Runtime library not found: {}", lib_name))
+}
+
+/// 链接可执行文件
+fn link_executable(obj_path: &PathBuf, output: &PathBuf, extern_libs: &[String]) -> miette::Result<()> {
+    #[cfg(target_os = "windows")]
+    {
+        link_windows(obj_path, output, extern_libs)
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        link_unix(obj_path, output, extern_libs)
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn link_windows(obj_path: &PathBuf, output: &PathBuf, extern_libs: &[String]) -> miette::Result<()> {
+    // 查找运行时库
+    let runtime_lib_path = PathBuf::from(find_runtime_lib()?);
+    let runtime_lib_dir = runtime_lib_path.parent().unwrap().display().to_string();
+    let runtime_lib_name = runtime_lib_path.file_name().unwrap().to_str().unwrap();
+
+    println!("Runtime lib dir: {}", runtime_lib_dir);
+    println!("Runtime lib name: {}", runtime_lib_name);
+
+    // 构建链接参数
+    let libpath_arg = format!("/LIBPATH:{}", runtime_lib_dir);
+    let out_arg = format!("/OUT:{}", output.display());
+
+    let mut args = vec![
+        "/ENTRY:main".to_string(),
+        "/SUBSYSTEM:CONSOLE".to_string(),
+        out_arg,
+        obj_path.display().to_string(),
+        runtime_lib_name.to_string(),
+        libpath_arg,
+        "kernel32.lib".to_string(),
+        "msvcrt.lib".to_string(),
+        "ucrt.lib".to_string(),
+        "vcruntime.lib".to_string(),
+        "libcmt.lib".to_string(),
+        "ws2_32.lib".to_string(),
+        "userenv.lib".to_string(),
+        "advapi32.lib".to_string(),
+        "bcrypt.lib".to_string(),
+        "ntdll.lib".to_string(),
+        "legacy_stdio_definitions.lib".to_string(),
+    ];
+
+    // 添加外部库 (将 .dll 转换为 .lib)
+    for lib in extern_libs {
+        let lib_name = if lib.to_lowercase().ends_with(".dll") {
+            lib[..lib.len()-4].to_string() + ".lib"
+        } else {
+            lib.clone()
+        };
+        println!("Adding external library: {}", lib_name);
+        args.push(lib_name);
+    }
+
+    println!("Running lld-link...");
+    let status = Command::new("lld-link")
+        .args(&args)
+        .status()
+        .map_err(|e| miette::miette!("Linker not found: {}", e))?;
+
+    if status.success() {
+        Ok(())
+    } else {
+        Err(miette::miette!("Linking failed"))
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn link_unix(obj_path: &PathBuf, output: &PathBuf, extern_libs: &[String]) -> miette::Result<()> {
+    let runtime_lib = find_runtime_lib()?;
+
+    let mut args = vec![
+        "-o".to_string(),
+        output.display().to_string(),
+        obj_path.display().to_string(),
+        runtime_lib,
+        "-lm".to_string(),
+        "-lpthread".to_string(),
+        "-ldl".to_string(),
+    ];
+
+    // 添加外部库 (将 .so 转换为 -l 参数)
+    for lib in extern_libs {
+        let lib_name = if lib.starts_with("lib") && lib.ends_with(".so") {
+            // libfoo.so -> -lfoo
+            format!("-l{}", &lib[3..lib.len()-3])
+        } else if lib.ends_with(".so") {
+            // foo.so -> -l:foo.so
+            format!("-l:{}", lib)
+        } else {
+            // 直接使用
+            lib.clone()
+        };
+        println!("Adding external library: {}", lib_name);
+        args.push(lib_name);
+    }
+
+    let status = Command::new("cc")
+        .args(&args)
+        .status()
+        .map_err(|e| miette::miette!("Linker not found: {}", e))?;
+
+    if status.success() {
+        Ok(())
+    } else {
+        Err(miette::miette!("Linking failed"))
+    }
 }
 
 fn run_repl() -> miette::Result<()> {
