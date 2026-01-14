@@ -1,0 +1,79 @@
+{
+  "name": "bolide",
+  "displayName": "Bolide Language",
+  "description": "Syntax highlighting and run support for Bolide programming language",
+  "version": "0.1.0",
+  "publisher": "bolide",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "activationEvents": [
+    "onLanguage:bolide"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "bolide",
+        "aliases": ["Bolide", "bolide"],
+        "extensions": [".bl"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "bolide",
+        "scopeName": "source.bolide",
+        "path": "./syntaxes/bolide.tmLanguage.json"
+      }
+    ],
+    "commands": [
+      {
+        "command": "bolide.run",
+        "title": "Bolide: Run Current File",
+        "icon": "$(play)"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "bolide.run",
+        "key": "ctrl+shift+r",
+        "mac": "cmd+shift+r",
+        "when": "editorLangId == bolide"
+      }
+    ],
+    "menus": {
+      "editor/title/run": [
+        {
+          "command": "bolide.run",
+          "when": "editorLangId == bolide",
+          "group": "navigation"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Bolide",
+      "properties": {
+        "bolide.executablePath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the Bolide executable (bolide or bolide.exe)"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile"
+  },
+  "devDependencies": {
+    "@types/node": "^18.0.0",
+    "@types/vscode": "^1.80.0",
+    "typescript": "^5.0.0"
+  }
+}

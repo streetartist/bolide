@@ -91,3 +91,32 @@ pub extern "C" fn bolide_print_int_inline(value: i64) {
 pub extern "C" fn bolide_print_float_inline(value: f64) {
     print!("{}", value);
 }
+
+// ==================== 输入函数 ====================
+
+/// 读取用户输入（无提示）
+#[no_mangle]
+pub extern "C" fn bolide_input() -> *mut BolideString {
+    use std::io::{self, BufRead, Write};
+    io::stdout().flush().ok();
+    let mut input = String::new();
+    io::stdin().lock().read_line(&mut input).ok();
+    // 移除末尾的换行符
+    let trimmed = input.trim_end_matches(&['\r', '\n'][..]);
+    BolideString::new(trimmed)
+}
+
+/// 读取用户输入（带提示）
+#[no_mangle]
+pub extern "C" fn bolide_input_prompt(prompt: *const BolideString) -> *mut BolideString {
+    use std::io::{self, BufRead, Write};
+    if !prompt.is_null() {
+        let prompt_str = unsafe { &*prompt };
+        print!("{}", prompt_str.as_str());
+        io::stdout().flush().ok();
+    }
+    let mut input = String::new();
+    io::stdin().lock().read_line(&mut input).ok();
+    let trimmed = input.trim_end_matches(&['\r', '\n'][..]);
+    BolideString::new(trimmed)
+}

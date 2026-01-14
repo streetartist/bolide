@@ -1,0 +1,71 @@
+// 测试类型转换函数
+
+// ===== int() 测试 =====
+print("--- int() 测试 ---");
+
+// int -> int (恒等)
+let a: int = int(42);
+print(a);
+
+// float -> int (截断)
+let b: int = int(3.7);
+print(b);
+
+// str -> int (解析)
+let c: int = int("123");
+print(c);
+
+// bigint -> int
+let d: int = int(999B);
+print(d);
+
+// decimal -> int
+let e: int = int(45.6D);
+print(e);
+
+// ===== float() 测试 =====
+print("--- float() 测试 ---");
+
+// float -> float (恒等)
+let f: float = float(3.14);
+print(f);
+
+// int -> float
+let g: float = float(100);
+print(g);
+
+// str -> float (解析)
+let h: float = float("2.718");
+print(h);
+
+// decimal -> float
+let i: float = float(1.5D);
+print(i);
+
+// ===== str() 测试 =====
+print("--- str() 测试 ---");
+
+// int -> str
+let j: str = str(12345);
+print(j);
+
+// float -> str
+let k: str = str(3.14159);
+print(k);
+
+// bool -> str
+let l: str = str(true);
+print(l);
+
+let m: str = str(false);
+print(m);
+
+// bigint -> str
+let n: str = str(123456789B);
+print(n);
+
+// decimal -> str
+let o: str = str(99.99D);
+print(o);
+
+print("--- 完成 ---");

@@ -283,6 +283,8 @@ pub extern "C" fn bolide_string_mark_moved(s: *mut BolideString) {
 
 // ==================== 类型转换 ====================
 
+// --- 转为字符串 ---
+
 #[no_mangle]
 pub extern "C" fn bolide_string_from_int(value: i64) -> *mut BolideString {
     BolideString::new(&value.to_string())
@@ -297,6 +299,48 @@ pub extern "C" fn bolide_string_from_float(value: f64) -> *mut BolideString {
 pub extern "C" fn bolide_string_from_bool(value: i64) -> *mut BolideString {
     let s = if value != 0 { "true" } else { "false" };
     BolideString::new(s)
+}
+
+/// bigint 转字符串
+#[no_mangle]
+pub extern "C" fn bolide_string_from_bigint(ptr: *const crate::BolideBigInt) -> *mut BolideString {
+    if ptr.is_null() {
+        return BolideString::new("0");
+    }
+    let bigint = unsafe { &*ptr };
+    BolideString::new(&bigint.to_string())
+}
+
+/// decimal 转字符串
+#[no_mangle]
+pub extern "C" fn bolide_string_from_decimal(ptr: *const crate::BolideDecimal) -> *mut BolideString {
+    if ptr.is_null() {
+        return BolideString::new("0");
+    }
+    let decimal = unsafe { &*ptr };
+    BolideString::new(&decimal.to_string())
+}
+
+// --- 从字符串转换 ---
+
+/// 字符串转 int
+#[no_mangle]
+pub extern "C" fn bolide_string_to_int(s: *const BolideString) -> i64 {
+    if s.is_null() {
+        return 0;
+    }
+    let str_val = unsafe { (*s).as_str() };
+    str_val.trim().parse::<i64>().unwrap_or(0)
+}
+
+/// 字符串转 float
+#[no_mangle]
+pub extern "C" fn bolide_string_to_float(s: *const BolideString) -> f64 {
+    if s.is_null() {
+        return 0.0;
+    }
+    let str_val = unsafe { (*s).as_str() };
+    str_val.trim().parse::<f64>().unwrap_or(0.0)
 }
 
 /// 从 Rust String 创建 BolideString（内部使用）

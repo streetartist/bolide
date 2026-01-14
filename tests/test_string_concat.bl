@@ -1,0 +1,10 @@
+// 测试字符串拼接
+let a: str = "Hello";
+let b: str = " World";
+let c: str = a + b;
+print(c);
+
+// 测试 str() 转换和拼接
+let n: int = 10;
+let result: str = "F(" + str(n) + ") = " + str(55);
+print(result);

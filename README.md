@@ -74,6 +74,47 @@ let big: bigint = 123456789012345678901234567890b;
 let precise: decimal = 3.14159265358979d;
 ```
 
+### 用户输入
+
+使用 `input()` 函数从标准输入读取用户输入（类似 Python）：
+
+```bolide
+// 带提示的输入
+let name: str = input("请输入你的名字: ");
+print(name);
+
+// 无提示的输入
+let content: str = input();
+```
+
+### 类型转换
+
+Bolide 提供了完整的类型转换函数：
+
+```bolide
+// int() - 转整数
+let a: int = int(3.7);       // float -> int (截断) = 3
+let b: int = int("123");     // str -> int = 123
+let c: int = int(999B);      // bigint -> int = 999
+let d: int = int(45.6D);     // decimal -> int = 45
+
+// float() - 转浮点数
+let e: float = float(100);       // int -> float = 100.0
+let f: float = float("2.718");   // str -> float = 2.718
+let g: float = float(1.5D);      // decimal -> float = 1.5
+
+// str() - 转字符串
+let h: str = str(12345);         // int -> str = "12345"
+let i: str = str(3.14159);       // float -> str = "3.14159"
+let j: str = str(true);          // bool -> str = "true"
+let k: str = str(123456789B);    // bigint -> str = "123456789"
+let l: str = str(99.99D);        // decimal -> str = "99.99"
+
+// bigint() 和 decimal()
+let m: bigint = bigint(100);     // int -> bigint
+let n: decimal = decimal(3.14);  // float -> decimal
+```
+
 ### 函数
 
 ```bolide
@@ -461,9 +502,52 @@ bolide/
 │   ├── bolide-compiler/  # JIT 编译器 (Cranelift)
 │   ├── bolide-parser/    # 词法/语法分析器 (PEG)
 │   └── bolide-runtime/   # 运行时库
+├── vscode-bolide/        # VS Code 插件
 ├── examples/             # 示例程序
 └── README.md
 ```
+
+## VS Code 插件
+
+Bolide 提供了 VS Code 插件，支持语法高亮和一键运行。
+
+### 安装方法
+
+#### 方法 1: 复制到扩展目录（推荐）
+
+将 `vscode-bolide` 文件夹复制到 VS Code 扩展目录：
+
+- **Windows**: `%USERPROFILE%\.vscode\extensions\`
+- **macOS**: `~/.vscode/extensions/`
+- **Linux**: `~/.vscode/extensions/`
+
+然后重启 VS Code。
+
+#### 方法 2: 打包为 VSIX 安装
+
+```bash
+cd vscode-bolide
+npm install
+npm install -g @vscode/vsce
+vsce package
+```
+
+然后在 VS Code 中按 `Ctrl+Shift+P`，输入 "Install from VSIX"，选择生成的 `.vsix` 文件。
+
+### 配置
+
+在 VS Code 设置中配置 Bolide 可执行文件路径：
+
+```json
+{
+  "bolide.executablePath": "D:\\Project\\bolide_new\\target\\release\\bolide.exe"
+}
+```
+
+### 使用
+
+1. 打开 `.bl` 文件
+2. 按 `Ctrl+Shift+R` 运行当前文件
 
 ## 许可证
 

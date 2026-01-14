@@ -80,6 +80,10 @@ impl JitCompiler {
         builder.symbol("print_string", bolide_runtime::bolide_print_string as *const u8);
         builder.symbol("print_dynamic", bolide_runtime::bolide_print_dynamic as *const u8);
 
+        // 注册运行时函数 - 用户输入
+        builder.symbol("input", bolide_runtime::bolide_input as *const u8);
+        builder.symbol("input_prompt", bolide_runtime::bolide_input_prompt as *const u8);
+
         // 注册运行时函数 - BigInt
         builder.symbol("bigint_from_i64", bolide_runtime::bolide_bigint_from_i64 as *const u8);
         builder.symbol("bigint_from_str", bolide_runtime::bolide_bigint_from_str as *const u8);
@@ -131,10 +135,20 @@ impl JitCompiler {
         builder.symbol("dynamic_clone", bolide_runtime::bolide_dynamic_clone as *const u8);
 
         // 注册字符串函数
-        // 注册字符串函数
         builder.symbol("string_from_slice", bolide_runtime::bolide_string_from_slice as *const u8);
         builder.symbol("string_literal", bolide_runtime::bolide_string_literal as *const u8);
         builder.symbol("string_as_cstr", bolide_runtime::bolide_string_as_cstr as *const u8);
+        builder.symbol("string_concat", bolide_runtime::bolide_string_concat as *const u8);
+        builder.symbol("string_eq", bolide_runtime::bolide_string_eq as *const u8);
+
+        // 注册类型转换函数
+        builder.symbol("string_from_int", bolide_runtime::bolide_string_from_int as *const u8);
+        builder.symbol("string_from_float", bolide_runtime::bolide_string_from_float as *const u8);
+        builder.symbol("string_from_bool", bolide_runtime::bolide_string_from_bool as *const u8);
+        builder.symbol("string_from_bigint", bolide_runtime::bolide_string_from_bigint as *const u8);
+        builder.symbol("string_from_decimal", bolide_runtime::bolide_string_from_decimal as *const u8);
+        builder.symbol("string_to_int", bolide_runtime::bolide_string_to_int as *const u8);
+        builder.symbol("string_to_float", bolide_runtime::bolide_string_to_float as *const u8);
 
         // 注册内存分配函数
         builder.symbol("bolide_alloc", bolide_runtime::bolide_alloc as *const u8);
@@ -525,6 +539,70 @@ impl JitCompiler {
         sig.params.push(AbiParam::new(ptr));
         let id = self.module.declare_function("print_string", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
         self.functions.insert("print_string".to_string(), id);
+
+        // ===== 用户输入函数 =====
+        // input() -> ptr
+        let mut sig = self.module.make_signature();
+        sig.returns.push(AbiParam::new(ptr));
+        let id = self.module.declare_function("input", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        self.functions.insert("input".to_string(), id);
+
+        // input_prompt(ptr) -> ptr
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(ptr));
+        sig.returns.push(AbiParam::new(ptr));
+        let id = self.module.declare_function("input_prompt", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        self.functions.insert("input_prompt".to_string(), id);
+
+        // ===== 类型转换函数 =====
+        // string_from_int(i64) -> ptr
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(types::I64));
+        sig.returns.push(AbiParam::new(ptr));
+        let id = self.module.declare_function("string_from_int", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        self.functions.insert("string_from_int".to_string(), id);
+
+        // string_from_float(f64) -> ptr
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(types::F64));
+        sig.returns.push(AbiParam::new(ptr));
+        let id = self.module.declare_function("string_from_float", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        self.functions.insert("string_from_float".to_string(), id);
+
+        // string_from_bool(i64) -> ptr
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(types::I64));
+        sig.returns.push(AbiParam::new(ptr));
+        let id = self.module.declare_function("string_from_bool", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        self.functions.insert("string_from_bool".to_string(), id);
+
+        // string_from_bigint(ptr) -> ptr
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(ptr));
+        sig.returns.push(AbiParam::new(ptr));
+        let id = self.module.declare_function("string_from_bigint", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        self.functions.insert("string_from_bigint".to_string(), id);
+
+        // string_from_decimal(ptr) -> ptr
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(ptr));
+        sig.returns.push(AbiParam::new(ptr));
+        let id = self.module.declare_function("string_from_decimal", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        self.functions.insert("string_from_decimal".to_string(), id);
+
+        // string_to_int(ptr) -> i64
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(ptr));
+        sig.returns.push(AbiParam::new(types::I64));
+        let id = self.module.declare_function("string_to_int", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        self.functions.insert("string_to_int".to_string(), id);
+
+        // string_to_float(ptr) -> f64
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(ptr));
+        sig.returns.push(AbiParam::new(types::F64));
+        let id = self.module.declare_function("string_to_float", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        self.functions.insert("string_to_float".to_string(), id);
 
         // ===== RC Release 函数 =====
         // string_release(ptr) -> void
@@ -1114,6 +1192,22 @@ impl JitCompiler {
         sig.returns.push(AbiParam::new(ptr));
         let id = self.module.declare_function("string_as_cstr", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
         self.functions.insert("string_as_cstr".to_string(), id);
+
+        // string_concat(ptr, ptr) -> ptr  (字符串拼接)
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(ptr));
+        sig.params.push(AbiParam::new(ptr));
+        sig.returns.push(AbiParam::new(ptr));
+        let id = self.module.declare_function("string_concat", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        self.functions.insert("string_concat".to_string(), id);
+
+        // string_eq(ptr, ptr) -> i64  (字符串比较)
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(ptr));
+        sig.params.push(AbiParam::new(ptr));
+        sig.returns.push(AbiParam::new(types::I64));
+        let id = self.module.declare_function("string_eq", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        self.functions.insert("string_eq".to_string(), id);
 
         // ===== 内存分配函数 =====
         // bolide_alloc(i64) -> ptr
@@ -3855,6 +3949,32 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             return self.compile_decimal_binop(lhs, op, rhs);
         }
 
+        // 字符串拼接
+        if matches!(left_ty, BolideType::Str) && matches!(right_ty, BolideType::Str) {
+            if matches!(op, BinOp::Add) {
+                let func_ref = *self.func_refs.get("string_concat")
+                    .ok_or("string_concat not found")?;
+                let call = self.builder.ins().call(func_ref, &[lhs, rhs]);
+                let result = self.builder.inst_results(call)[0];
+                self.track_temp_rc_value(result, &BolideType::Str);
+                return Ok(result);
+            } else if matches!(op, BinOp::Eq) {
+                let func_ref = *self.func_refs.get("string_eq")
+                    .ok_or("string_eq not found")?;
+                let call = self.builder.ins().call(func_ref, &[lhs, rhs]);
+                return Ok(self.builder.inst_results(call)[0]);
+            } else if matches!(op, BinOp::Ne) {
+                let func_ref = *self.func_refs.get("string_eq")
+                    .ok_or("string_eq not found")?;
+                let call = self.builder.ins().call(func_ref, &[lhs, rhs]);
+                let eq_result = self.builder.inst_results(call)[0];
+                let one = self.builder.ins().iconst(types::I64, 1);
+                return Ok(self.builder.ins().isub(one, eq_result));
+            } else {
+                return Err(format!("Unsupported string operation: {:?}", op));
+            }
+        }
+
         // Float 运算
         let is_float = matches!(left_ty, BolideType::Float) || matches!(right_ty, BolideType::Float);
         let result = if is_float {
@@ -4177,8 +4297,10 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         match func_name.as_str() {
             "int" => return self.compile_type_conversion_to_int(args),
             "float" => return self.compile_type_conversion_to_float(args),
+            "str" => return self.compile_type_conversion_to_str(args),
             "bigint" => return self.compile_type_conversion_to_bigint(args),
             "decimal" => return self.compile_type_conversion_to_decimal(args),
+
             // 通用 print 函数 - 根据参数类型自动选择
             "print" => {
                 if args.len() != 1 {
@@ -4204,7 +4326,12 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                 self.builder.ins().call(func_ref, &[]);
                 return Ok(self.builder.ins().iconst(types::I64, 0));
             }
+            // input 函数 - 读取用户输入
+            "input" => {
+                return self.compile_input(args);
+            }
             _ => {}
+
         }
 
         // 检查是否是 async 函数
@@ -4341,49 +4468,175 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         }
     }
 
-    /// 类型转换: int(x)
+    /// 类型转换: int(x) - 支持 int, float, str, bigint, decimal
     fn compile_type_conversion_to_int(&mut self, args: &[Expr]) -> Result<Value, String> {
         if args.len() != 1 {
             return Err("int() expects 1 argument".to_string());
         }
-        // 目前只支持从 int 到 int 的恒等转换
-        self.compile_expr(&args[0])
+        let arg_type = self.infer_expr_type(&args[0]);
+        let val = self.compile_expr(&args[0])?;
+
+        match arg_type {
+            BolideType::Int => Ok(val),  // 恒等转换
+            BolideType::Float => {
+                // float -> int: 截断
+                Ok(self.builder.ins().fcvt_to_sint(types::I64, val))
+            }
+            BolideType::Str => {
+                // str -> int: 调用 string_to_int
+                let func_ref = *self.func_refs.get("string_to_int")
+                    .ok_or("string_to_int not found")?;
+                let call = self.builder.ins().call(func_ref, &[val]);
+                Ok(self.builder.inst_results(call)[0])
+            }
+            BolideType::BigInt => {
+                // bigint -> int: 调用 bigint_to_i64
+                let func_ref = *self.func_refs.get("bigint_to_i64")
+                    .ok_or("bigint_to_i64 not found")?;
+                let call = self.builder.ins().call(func_ref, &[val]);
+                Ok(self.builder.inst_results(call)[0])
+            }
+            BolideType::Decimal => {
+                // decimal -> int: 调用 decimal_to_i64
+                let func_ref = *self.func_refs.get("decimal_to_i64")
+                    .ok_or("decimal_to_i64 not found")?;
+                let call = self.builder.ins().call(func_ref, &[val]);
+                Ok(self.builder.inst_results(call)[0])
+            }
+            _ => Err(format!("Cannot convert {:?} to int", arg_type))
+        }
     }
 
-    /// 类型转换: float(x)
+    /// 类型转换: float(x) - 支持 int, float, str, decimal
     fn compile_type_conversion_to_float(&mut self, args: &[Expr]) -> Result<Value, String> {
         if args.len() != 1 {
             return Err("float() expects 1 argument".to_string());
         }
+        let arg_type = self.infer_expr_type(&args[0]);
         let val = self.compile_expr(&args[0])?;
-        // 假设输入是 int，转换为 float
-        Ok(self.builder.ins().fcvt_from_sint(types::F64, val))
+
+        match arg_type {
+            BolideType::Float => Ok(val),  // 恒等转换
+            BolideType::Int => {
+                // int -> float
+                Ok(self.builder.ins().fcvt_from_sint(types::F64, val))
+            }
+            BolideType::Str => {
+                // str -> float: 调用 string_to_float
+                let func_ref = *self.func_refs.get("string_to_float")
+                    .ok_or("string_to_float not found")?;
+                let call = self.builder.ins().call(func_ref, &[val]);
+                Ok(self.builder.inst_results(call)[0])
+            }
+            BolideType::Decimal => {
+                // decimal -> float: 调用 decimal_to_f64
+                let func_ref = *self.func_refs.get("decimal_to_f64")
+                    .ok_or("decimal_to_f64 not found")?;
+                let call = self.builder.ins().call(func_ref, &[val]);
+                Ok(self.builder.inst_results(call)[0])
+            }
+            _ => Err(format!("Cannot convert {:?} to float", arg_type))
+        }
     }
 
-    /// 类型转换: bigint(x)
+    /// 类型转换: str(x) - 支持 int, float, bool, str, bigint, decimal
+    fn compile_type_conversion_to_str(&mut self, args: &[Expr]) -> Result<Value, String> {
+        if args.len() != 1 {
+            return Err("str() expects 1 argument".to_string());
+        }
+        let arg_type = self.infer_expr_type(&args[0]);
+        let val = self.compile_expr(&args[0])?;
+
+        let result = match arg_type {
+            BolideType::Str => return Ok(val),  // 恒等转换
+            BolideType::Int => {
+                let func_ref = *self.func_refs.get("string_from_int")
+                    .ok_or("string_from_int not found")?;
+                let call = self.builder.ins().call(func_ref, &[val]);
+                self.builder.inst_results(call)[0]
+            }
+            BolideType::Float => {
+                let func_ref = *self.func_refs.get("string_from_float")
+                    .ok_or("string_from_float not found")?;
+                let call = self.builder.ins().call(func_ref, &[val]);
+                self.builder.inst_results(call)[0]
+            }
+            BolideType::Bool => {
+                let func_ref = *self.func_refs.get("string_from_bool")
+                    .ok_or("string_from_bool not found")?;
+                let call = self.builder.ins().call(func_ref, &[val]);
+                self.builder.inst_results(call)[0]
+            }
+            BolideType::BigInt => {
+                let func_ref = *self.func_refs.get("string_from_bigint")
+                    .ok_or("string_from_bigint not found")?;
+                let call = self.builder.ins().call(func_ref, &[val]);
+                self.builder.inst_results(call)[0]
+            }
+            BolideType::Decimal => {
+                let func_ref = *self.func_refs.get("string_from_decimal")
+                    .ok_or("string_from_decimal not found")?;
+                let call = self.builder.ins().call(func_ref, &[val]);
+                self.builder.inst_results(call)[0]
+            }
+            _ => return Err(format!("Cannot convert {:?} to str", arg_type))
+        };
+
+        // 返回的字符串需要 RC 跟踪
+        self.track_temp_rc_value(result, &BolideType::Str);
+        Ok(result)
+    }
+
+    /// 类型转换: bigint(x) - 支持 int
     fn compile_type_conversion_to_bigint(&mut self, args: &[Expr]) -> Result<Value, String> {
         if args.len() != 1 {
             return Err("bigint() expects 1 argument".to_string());
         }
+        let arg_type = self.infer_expr_type(&args[0]);
         let val = self.compile_expr(&args[0])?;
-        let func_ref = *self.func_refs.get("bigint_from_i64")
-            .ok_or("bigint_from_i64 not found")?;
-        let call = self.builder.ins().call(func_ref, &[val]);
-        let results = self.builder.inst_results(call);
-        Ok(results[0])
+
+        match arg_type {
+            BolideType::BigInt => Ok(val),  // 恒等转换
+            BolideType::Int => {
+                let func_ref = *self.func_refs.get("bigint_from_i64")
+                    .ok_or("bigint_from_i64 not found")?;
+                let call = self.builder.ins().call(func_ref, &[val]);
+                let result = self.builder.inst_results(call)[0];
+                self.track_temp_rc_value(result, &BolideType::BigInt);
+                Ok(result)
+            }
+            _ => Err(format!("Cannot convert {:?} to bigint", arg_type))
+        }
     }
 
-    /// 类型转换: decimal(x)
+    /// 类型转换: decimal(x) - 支持 int, float
     fn compile_type_conversion_to_decimal(&mut self, args: &[Expr]) -> Result<Value, String> {
         if args.len() != 1 {
             return Err("decimal() expects 1 argument".to_string());
         }
+        let arg_type = self.infer_expr_type(&args[0]);
         let val = self.compile_expr(&args[0])?;
-        let func_ref = *self.func_refs.get("decimal_from_i64")
-            .ok_or("decimal_from_i64 not found")?;
-        let call = self.builder.ins().call(func_ref, &[val]);
-        let results = self.builder.inst_results(call);
-        Ok(results[0])
+
+        match arg_type {
+            BolideType::Decimal => Ok(val),  // 恒等转换
+            BolideType::Int => {
+                let func_ref = *self.func_refs.get("decimal_from_i64")
+                    .ok_or("decimal_from_i64 not found")?;
+                let call = self.builder.ins().call(func_ref, &[val]);
+                let result = self.builder.inst_results(call)[0];
+                self.track_temp_rc_value(result, &BolideType::Decimal);
+                Ok(result)
+            }
+            BolideType::Float => {
+                let func_ref = *self.func_refs.get("decimal_from_f64")
+                    .ok_or("decimal_from_f64 not found")?;
+                let call = self.builder.ins().call(func_ref, &[val]);
+                let result = self.builder.inst_results(call)[0];
+                self.track_temp_rc_value(result, &BolideType::Decimal);
+                Ok(result)
+            }
+            _ => Err(format!("Cannot convert {:?} to decimal", arg_type))
+        }
     }
 
     /// 编译通用 print 函数 - 根据表达式类型自动选择打印函数
@@ -4413,6 +4666,30 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         Ok(self.builder.ins().iconst(types::I64, 0))
     }
 
+    /// 编译 input 函数 - 读取用户输入
+    fn compile_input(&mut self, args: &[Expr]) -> Result<Value, String> {
+        let result = if args.is_empty() {
+            // 无参数版本: input()
+            let func_ref = *self.func_refs.get("input")
+                .ok_or("input not found")?;
+            let call = self.builder.ins().call(func_ref, &[]);
+            self.builder.inst_results(call)[0]
+        } else if args.len() == 1 {
+            // 带提示版本: input("prompt")
+            let prompt = self.compile_expr(&args[0])?;
+            let func_ref = *self.func_refs.get("input_prompt")
+                .ok_or("input_prompt not found")?;
+            let call = self.builder.ins().call(func_ref, &[prompt]);
+            self.builder.inst_results(call)[0]
+        } else {
+            return Err("input expects 0 or 1 argument".to_string());
+        };
+
+        // 返回的字符串需要 RC 跟踪
+        self.track_temp_rc_value(result, &BolideType::Str);
+        Ok(result)
+    }
+
     /// 推断表达式类型
     fn infer_expr_type(&self, expr: &Expr) -> BolideType {
         match expr {
@@ -4433,7 +4710,14 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                 let left_ty = self.infer_expr_type(left);
                 let right_ty = self.infer_expr_type(right);
                 // 类型提升规则
-                match (left_ty, right_ty) {
+                match (&left_ty, &right_ty) {
+                    (BolideType::Str, BolideType::Str) => {
+                        match op {
+                            BinOp::Add => BolideType::Str,
+                            BinOp::Eq | BinOp::Ne => BolideType::Bool,
+                            _ => BolideType::Int,
+                        }
+                    }
                     (BolideType::Float, _) | (_, BolideType::Float) => BolideType::Float,
                     (BolideType::BigInt, _) | (_, BolideType::BigInt) => BolideType::BigInt,
                     (BolideType::Decimal, _) | (_, BolideType::Decimal) => BolideType::Decimal,
@@ -4458,7 +4742,9 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                         "decimal" => BolideType::Decimal,
                         "int" => BolideType::Int,
                         "float" => BolideType::Float,
+                        "str" => BolideType::Str,  // str 函数返回字符串
                         "channel" => BolideType::Channel(Box::new(BolideType::Int)),  // 默认 int，实际类型从声明获取
+                        "input" => BolideType::Str,  // input 函数返回字符串
                         "join" => {
                             // 从 spawn_func_map 获取原函数的返回类型
                             if args.len() == 1 {

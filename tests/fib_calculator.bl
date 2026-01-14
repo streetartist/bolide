@@ -1,0 +1,69 @@
+// 斐波那契数列计算器
+// 使用快速幂矩阵算法，O(log n) 时间复杂度
+// 用户输入 q 退出
+
+// 快速倍增法计算斐波那契数
+// 利用公式:
+//   F(2n) = F(n) * (2*F(n+1) - F(n))
+//   F(2n+1) = F(n)^2 + F(n+1)^2
+fn fib_pair(n: int, a: bigint, b: bigint) -> (bigint, bigint) {
+    // 返回 (F(n), F(n+1))
+    if n == 0 {
+        return (0B, 1B);
+    }
+    
+    // 递归计算 F(n/2) 和 F(n/2+1)
+    let half: int = n / 2;
+    let pair = fib_pair(half, 0B, 1B);
+    let f_k: bigint = pair[0];      // F(k)
+    let f_k1: bigint = pair[1];     // F(k+1)
+    
+    // F(2k) = F(k) * (2*F(k+1) - F(k))
+    let two: bigint = 2B;
+    let f_2k: bigint = f_k * (two * f_k1 - f_k);
+    
+    // F(2k+1) = F(k)^2 + F(k+1)^2
+    let f_2k1: bigint = f_k * f_k + f_k1 * f_k1;
+    
+    // 根据 n 是奇数还是偶数返回
+    if n % 2 == 0 {
+        return (f_2k, f_2k1);
+    } else {
+        return (f_2k1, f_2k + f_2k1);
+    }
+}
+
+fn fib(n: int) -> bigint {
+    if n < 0 {
+        return 0B;
+    }
+    let result = fib_pair(n, 0B, 1B);
+    return result[0];
+}
+
+// 主循环
+print("=== 斐波那契数列计算器 ===");
+print("使用快速倍增算法，支持大数计算");
+print("输入 q 退出");
+print("");
+
+while true {
+    let input_str: str = input("请输入 n (或 q 退出): ");
+    
+    // 检查是否退出
+    if input_str == "q" or input_str == "Q" {
+        print("再见！");
+        return 0;
+    }
+    
+    // 转换为整数
+    let n: int = int(input_str);
+    
+    if n < 0 {
+        print("请输入非负整数");
+    } else {
+        print("计算中...");
+        let result: bigint = fib(n);
+        print("F(" + str(n) + ") = " + str(result));
+    }
+}
