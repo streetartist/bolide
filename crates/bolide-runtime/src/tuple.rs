@@ -33,6 +33,12 @@ impl BolideTuple {
     }
 }
 
+use std::sync::atomic::{AtomicI64, Ordering};
+
+// Debug: 跟踪 Tuple 分配和释放
+static TUPLE_ALLOC_COUNT: AtomicI64 = AtomicI64::new(0);
+static TUPLE_FREE_COUNT: AtomicI64 = AtomicI64::new(0);
+
 // ==================== 创建和销毁 ====================
 
 /// 创建指定长度的元组
@@ -53,6 +59,8 @@ pub extern "C" fn bolide_tuple_new(len: usize) -> *mut BolideTuple {
             return std::ptr::null_mut();
         }
 
+        TUPLE_ALLOC_COUNT.fetch_add(1, Ordering::SeqCst);
+
         (*ptr).len = len;
         // 初始化为 0
         let data = (*ptr).data_ptr_mut();
@@ -72,6 +80,8 @@ pub extern "C" fn bolide_tuple_free(ptr: *mut BolideTuple) {
     }
 
     unsafe {
+        TUPLE_FREE_COUNT.fetch_add(1, Ordering::SeqCst);
+
         let len = (*ptr).len;
         let header_size = std::mem::size_of::<BolideTuple>();
         let data_size = len * 8;
@@ -80,6 +90,16 @@ pub extern "C" fn bolide_tuple_free(ptr: *mut BolideTuple) {
         let layout = Layout::from_size_align(total_size, 8).unwrap();
         dealloc(ptr as *mut u8, layout);
     }
+}
+
+// ==================== Debug Stats ====================
+
+/// 打印 Tuple 内存统计
+#[no_mangle]
+pub extern "C" fn bolide_tuple_debug_stats() {
+    let alloc = TUPLE_ALLOC_COUNT.load(Ordering::SeqCst);
+    let free = TUPLE_FREE_COUNT.load(Ordering::SeqCst);
+    println!("[Tuple Stats] alloc: {}, free: {}, leak: {}", alloc, free, alloc - free);
 }
 
 // ==================== 元素访问 ====================

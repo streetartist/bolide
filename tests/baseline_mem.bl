@@ -1,0 +1,2 @@
+print("Baseline Memory Test");
+input(); // Pause to measure memory

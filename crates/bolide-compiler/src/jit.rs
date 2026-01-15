@@ -227,6 +227,7 @@ impl JitCompiler {
         builder.symbol("tuple_set", bolide_runtime::bolide_tuple_set as *const u8);
         builder.symbol("tuple_get", bolide_runtime::bolide_tuple_get as *const u8);
         builder.symbol("tuple_len", bolide_runtime::bolide_tuple_len as *const u8);
+        builder.symbol("tuple_debug_stats", bolide_runtime::bolide_tuple_debug_stats as *const u8);
         builder.symbol("print_tuple", bolide_runtime::bolide_print_tuple as *const u8);
 
         // FFI 运行时函数
@@ -1561,6 +1562,11 @@ impl JitCompiler {
         sig.params.push(AbiParam::new(ptr));
         let id = self.module.declare_function("print_tuple", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
         self.functions.insert("print_tuple".to_string(), id);
+
+        // tuple_debug_stats()
+        let mut sig = self.module.make_signature();
+        let id = self.module.declare_function("tuple_debug_stats", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        self.functions.insert("tuple_debug_stats".to_string(), id);
 
         // ===== FFI 函数 =====
         // ffi_load_library(path_ptr) -> i64
@@ -4388,6 +4394,13 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             "bigint_debug_stats" => {
                 let func_ref = *self.func_refs.get("bigint_debug_stats")
                     .ok_or("bigint_debug_stats not found")?;
+                self.builder.ins().call(func_ref, &[]);
+                return Ok(self.builder.ins().iconst(types::I64, 0));
+            }
+            // tuple_debug_stats - 调试用
+            "tuple_debug_stats" => {
+                let func_ref = *self.func_refs.get("tuple_debug_stats")
+                    .ok_or("tuple_debug_stats not found")?;
                 self.builder.ins().call(func_ref, &[]);
                 return Ok(self.builder.ins().iconst(types::I64, 0));
             }
