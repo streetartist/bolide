@@ -1,0 +1,61 @@
+
+// Repro script for AOT memory leak
+// Based on fib_calculator logic but non-interactive and looped
+
+fn fib_pair(n: int, a: bigint, b: bigint) -> (bigint, bigint) {
+    if n == 0 {
+        return (0B, 1B);
+    }
+    
+    let half: int = n / 2;
+    let pair = fib_pair(half, 0B, 1B);
+    let f_k: bigint = pair[0];
+    let f_k1: bigint = pair[1];
+    
+    let two: bigint = 2B;
+    let f_2k: bigint = f_k * (two * f_k1 - f_k);
+    
+    let f_2k1: bigint = f_k * f_k + f_k1 * f_k1;
+    
+    if n % 2 == 0 {
+        return (f_2k, f_2k1);
+    } else {
+        return (f_2k1, f_2k + f_2k1);
+    }
+}
+
+fn fib(n: int) -> bigint {
+    if n < 0 {
+        return 0B;
+    }
+    let result = fib_pair(n, 0B, 1B);
+    return result[0];
+}
+
+fn run_test() {
+    print("Starting leak test...");
+    
+    // Initial stats
+    bigint_debug_stats();
+    tuple_debug_stats();
+    
+    let i: int = 0;
+    while i < 100 {
+        print("Iteration: " + str(i));
+        // Calculate a medium sized fib to generate garbage
+        let res = fib(100); 
+        // We don't print res to avoid noise, just let it drop
+        
+        if i % 10 == 0 {
+            bigint_debug_stats();
+            tuple_debug_stats();
+        }
+        i = i + 1;
+    }
+    
+    print("Final stats:");
+    bigint_debug_stats();
+    tuple_debug_stats();
+}
+
+run_test();
