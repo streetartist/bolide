@@ -1468,6 +1468,7 @@ impl AotCompiler {
                 let var = ctx.declare_variable(&param.name, ty);
                 ctx.builder.def_var(var, params[i + 1]); // +1 因为 self 是第一个参数
                 ctx.var_types.insert(param.name.clone(), param.ty.clone());
+                ctx.track_rc_variable(&param.name, &param.ty);
             }
 
             // 编译方法体
@@ -1561,6 +1562,7 @@ impl AotCompiler {
                 let var = ctx.declare_variable(&param.name, ty);
                 ctx.builder.def_var(var, params[i]);
                 ctx.var_types.insert(param.name.clone(), param.ty.clone());
+                ctx.track_rc_variable(&param.name, &param.ty);
             }
 
             // 编译函数体
@@ -3539,10 +3541,7 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         } else if let Some(ref value) = decl.value {
             // Infer type from value expression
             if let Some(inferred_ty) = self.infer_expr_type(value) {
-                println!("VarDecl: {} inferred type: {:?}", decl.name, inferred_ty);
                 self.var_types.insert(decl.name.clone(), inferred_ty);
-            } else {
-                println!("VarDecl: {} inferred type: None", decl.name);
             }
         }
 
