@@ -12,7 +12,7 @@
     <img src="https://img.shields.io/badge/License-MIT-brightgreen.svg" alt="License: MIT">
   </a>
   <a href="#">
-    <img src="https://img.shields.io/badge/version-0.7.1-blue.svg" alt="Version">
+    <img src="https://img.shields.io/badge/version-0.8.1-blue.svg" alt="Version">
   </a>
   <a href="#">
     <img src="https://img.shields.io/badge/platform-windows%20%7C%20linux-lightgrey.svg" alt="Platform">
@@ -508,11 +508,6 @@ let u: unowned Node = obj;  // unowned 引用
 print(u.value);  // 直接访问，无 nil 检查
 ```
 
-### 已知限制
-
-> **注意**: v0.6.2 版本中 weak/unowned 引用存在以下限制：
-> - weak 引用通过成员访问时可能返回不正确的值
-> - 建议在生产环境中谨慎使用，后续版本将修复
 
 ## 项目结构
 

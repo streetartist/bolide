@@ -1,0 +1,12 @@
+// 无 weak 的最小化测试
+
+class Node {
+    value: int;
+}
+
+print("Step 1: Creating n1\n");
+let n1: Node = Node(1);
+print("Step 2: Accessing n1.value\n");
+print(n1.value);
+print("\n");
+print("Step 3: Done!\n");

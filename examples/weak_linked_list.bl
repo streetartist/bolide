@@ -1,0 +1,46 @@
+// 双向链表示例 - 使用 weak 引用避免循环引用
+// prev 使用 weak 引用指向前一个节点，避免循环引用导致的内存泄漏
+
+class Node {
+    value: int;
+    next: Node;       // 强引用指向下一个节点
+    prev: weak Node;  // 弱引用指向前一个节点，避免循环
+}
+
+// 创建链表节点
+let n1: Node = Node(1, none, none);
+let n2: Node = Node(2, none, none);
+let n3: Node = Node(3, none, none);
+
+// 链接节点
+n1.next = n2;
+n2.prev = n1;  // weak 引用
+
+n2.next = n3;
+n3.prev = n2;  // weak 引用
+
+// 正向遍历
+print("Forward traversal:\n");
+print("n1.value = ");
+print(n1.value);
+print("\n");
+print("n1.next.value = ");
+print(n1.next.value);
+print("\n");
+print("n1.next.next.value = ");
+print(n1.next.next.value);
+print("\n");
+
+// 反向遍历（通过 weak 引用）
+print("\nBackward traversal via weak:\n");
+print("n3.value = ");
+print(n3.value);
+print("\n");
+print("n3.prev.value = ");
+print(n3.prev.value);
+print("\n");
+print("n3.prev.prev.value = ");
+print(n3.prev.prev.value);
+print("\n");
+
+print("\nLinked list with weak references works!\n");

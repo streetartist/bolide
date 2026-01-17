@@ -4875,7 +4875,26 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             Expr::Member(base, member) => {
                 // 获取基础表达式的类型，然后查找字段类型
                 let base_ty = self.infer_expr_type(base);
-                if let BolideType::Custom(class_name) = base_ty {
+                // 处理 Weak/Unowned 类型，提取内部的 Custom 类型
+                let class_name = match &base_ty {
+                    BolideType::Custom(name) => Some(name.clone()),
+                    BolideType::Weak(inner) => {
+                        if let BolideType::Custom(name) = inner.as_ref() {
+                            Some(name.clone())
+                        } else {
+                            None
+                        }
+                    }
+                    BolideType::Unowned(inner) => {
+                        if let BolideType::Custom(name) = inner.as_ref() {
+                            Some(name.clone())
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                };
+                if let Some(class_name) = class_name {
                     if let Some(class_info) = self.classes.get(&class_name) {
                         if let Some(field) = class_info.fields.iter().find(|f| f.name == *member) {
                             return field.ty.clone();
@@ -6054,17 +6073,32 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                 }
             }
             Expr::Member(base, member) => {
-                let class_name = self.get_expr_type(base)?;
-                if let BolideType::Custom(name) = class_name {
-                    let class_info = self.classes.get(&name)
-                        .ok_or_else(|| format!("Class not found: {}", name))?;
-                    let field = class_info.fields.iter()
-                        .find(|f| f.name == *member)
-                        .ok_or_else(|| format!("Field not found: {}", member))?;
-                    Ok(field.ty.clone())
-                } else {
-                    Err("Member access on non-class type".to_string())
-                }
+                let base_type = self.get_expr_type(base)?;
+                // 处理 Weak/Unowned 类型，提取内部的 Custom 类型
+                let class_name = match &base_type {
+                    BolideType::Custom(name) => name.clone(),
+                    BolideType::Weak(inner) => {
+                        if let BolideType::Custom(name) = inner.as_ref() {
+                            name.clone()
+                        } else {
+                            return Err(format!("Member access on non-class weak type: {:?}", inner));
+                        }
+                    }
+                    BolideType::Unowned(inner) => {
+                        if let BolideType::Custom(name) = inner.as_ref() {
+                            name.clone()
+                        } else {
+                            return Err(format!("Member access on non-class unowned type: {:?}", inner));
+                        }
+                    }
+                    _ => return Err(format!("Member access on non-class type: {:?}", base_type)),
+                };
+                let class_info = self.classes.get(&class_name)
+                    .ok_or_else(|| format!("Class not found: {}", class_name))?;
+                let field = class_info.fields.iter()
+                    .find(|f| f.name == *member)
+                    .ok_or_else(|| format!("Field not found: {}", member))?;
+                Ok(field.ty.clone())
             }
             _ => Err("Cannot determine expression type".to_string()),
         }

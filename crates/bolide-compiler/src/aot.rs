@@ -1770,10 +1770,30 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
                 self.builder.ins().call(free_func, &[val]);
             }
         } else if let BolideType::Custom(ref class_name) = ty {
+            // 对于 Custom 类型，需要先检查是否为 null
+            // 因为 emit_object_fields_cleanup 会访问对象字段，如果对象是 null 会导致问题
+            let null_val = self.builder.ins().iconst(self.ptr_type, 0);
+            let is_null = self.builder.ins().icmp(IntCC::Equal, val, null_val);
+            
+            let release_block = self.builder.create_block();
+            let continue_block = self.builder.create_block();
+            
+            self.builder.ins().brif(is_null, continue_block, &[], release_block, &[]);
+            
+            // release_block: 对象不为 null，进行释放
+            self.builder.switch_to_block(release_block);
+            self.builder.seal_block(release_block);
+            
             self.emit_object_fields_cleanup(val, class_name);
             if let Some(&release_func) = self.func_refs.get("object_release") {
                 self.builder.ins().call(release_func, &[val]);
             }
+            
+            self.builder.ins().jump(continue_block, &[]);
+            
+            // continue_block: 继续执行
+            self.builder.switch_to_block(continue_block);
+            self.builder.seal_block(continue_block);
         } else {
             if let Some(func_name) = Self::get_release_func_name(ty) {
                 if let Some(&func_ref) = self.func_refs.get(func_name) {
@@ -2812,7 +2832,27 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         // 尝试获取基础表达式的类型
         let base_type = self.infer_expr_type(base);
 
-        if let Some(BolideType::Custom(class_name)) = base_type {
+        // 处理 Weak/Unowned 类型，提取内部的 Custom 类型
+        let class_name = match &base_type {
+            Some(BolideType::Custom(name)) => Some(name.clone()),
+            Some(BolideType::Weak(inner)) => {
+                if let BolideType::Custom(name) = inner.as_ref() {
+                    Some(name.clone())
+                } else {
+                    None
+                }
+            }
+            Some(BolideType::Unowned(inner)) => {
+                if let BolideType::Custom(name) = inner.as_ref() {
+                    Some(name.clone())
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
+        
+        if let Some(class_name) = class_name {
             // 类成员访问
             if let Some(class_info) = self.classes.get(&class_name).cloned() {
                 for field in &class_info.fields {
@@ -2932,6 +2972,37 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
                 }
             }
             Expr::None => None,
+            Expr::Member(base, member) => {
+                // 获取基础表达式的类型，然后查找字段类型
+                let base_ty = self.infer_expr_type(base)?;
+                // 处理 Weak/Unowned 类型，提取内部的 Custom 类型
+                let class_name = match &base_ty {
+                    BolideType::Custom(name) => Some(name.clone()),
+                    BolideType::Weak(inner) => {
+                        if let BolideType::Custom(name) = inner.as_ref() {
+                            Some(name.clone())
+                        } else {
+                            None
+                        }
+                    }
+                    BolideType::Unowned(inner) => {
+                        if let BolideType::Custom(name) = inner.as_ref() {
+                            Some(name.clone())
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                };
+                if let Some(class_name) = class_name {
+                    if let Some(class_info) = self.classes.get(&class_name) {
+                        if let Some(field) = class_info.fields.iter().find(|f| f.name == *member) {
+                            return Some(field.ty.clone());
+                        }
+                    }
+                }
+                None
+            }
             _ => None,
         }
     }
@@ -3603,7 +3674,28 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         let val = self.compile_expr(value)?;
 
         let base_type = self.infer_expr_type(base);
-        if let Some(BolideType::Custom(class_name)) = base_type {
+        
+        // 处理 Weak/Unowned 类型，提取内部的 Custom 类型
+        let class_name = match &base_type {
+            Some(BolideType::Custom(name)) => Some(name.clone()),
+            Some(BolideType::Weak(inner)) => {
+                if let BolideType::Custom(name) = inner.as_ref() {
+                    Some(name.clone())
+                } else {
+                    None
+                }
+            }
+            Some(BolideType::Unowned(inner)) => {
+                if let BolideType::Custom(name) = inner.as_ref() {
+                    Some(name.clone())
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
+        
+        if let Some(class_name) = class_name {
             if let Some(class_info) = self.classes.get(&class_name).cloned() {
                 for field in &class_info.fields {
                     if field.name == member {

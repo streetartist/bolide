@@ -1,0 +1,35 @@
+// 内存泄漏对比测试
+// 对比 weak 引用和强引用在循环中的内存表现
+
+class WeakNode {
+    value: int;
+    next: WeakNode;
+    prev: weak WeakNode;  // weak 引用
+}
+
+fn create_weak_list() {
+    let n1: WeakNode = WeakNode(1, none, none);
+    let n2: WeakNode = WeakNode(2, none, none);
+    let n3: WeakNode = WeakNode(3, none, none);
+    
+    n1.next = n2;
+    n2.prev = n1;
+    n2.next = n3;
+    n3.prev = n2;
+}
+
+// 大量循环测试 weak 引用
+print("Testing weak reference (100000 iterations)...\n");
+let i: int = 0;
+while i < 1000000 {
+    create_weak_list();
+    if i % 20000 == 0 {
+        print("Progress: ");
+        print(i);
+        print("/100000\n");
+    }
+    i = i + 1;
+}
+
+print("\nTest completed!\n");
+print("If memory stayed stable, weak references are working correctly.\n");

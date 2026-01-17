@@ -1,0 +1,27 @@
+// 1000次循环 AOT 测试
+
+class WeakNode {
+    value: int;
+    next: WeakNode;
+    prev: weak WeakNode;
+}
+
+fn create_weak_list() {
+    let n1: WeakNode = WeakNode(1, none, none);
+    let n2: WeakNode = WeakNode(2, none, none);
+    n1.next = n2;
+    n2.prev = n1;
+}
+
+print("Start test...\n");
+let i: int = 0;
+while i < 1000 {
+    create_weak_list();
+    if i % 100 == 0 {
+        print("Iteration: ");
+        print(i);
+        print("\n");
+    }
+    i = i + 1;
+}
+print("Done!\n");
