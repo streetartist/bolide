@@ -219,8 +219,15 @@ fn parse_type(pair: Pair<Rule>) -> Result<Type, String> {
             Type::FuncSig(param_types, return_type)
         }
         Rule::basic_type => {
-            let s = type_pair.as_str();
-            match s {
+            let s = type_pair.as_str().trim();
+            // 如果是 qualified_type，去除内部可能的空格
+            let clean_s = if s.contains('.') {
+                s.split('.').map(|p| p.trim()).collect::<Vec<&str>>().join(".")
+            } else {
+                s.to_string()
+            };
+            
+            match clean_s.as_str() {
                 "int" => Type::Int,
                 "float" => Type::Float,
                 "bool" => Type::Bool,
@@ -231,7 +238,7 @@ fn parse_type(pair: Pair<Rule>) -> Result<Type, String> {
                 "ptr" => Type::Ptr,
                 "future" => Type::Future,
                 "func" => Type::Func,
-                _ => Type::Custom(s.to_string()),
+                _ => Type::Custom(clean_s),
             }
         }
         _ => return Err(format!("Unknown type: {:?}", type_pair.as_rule())),
@@ -608,11 +615,39 @@ fn parse_postfix_expr(pair: Pair<Rule>) -> Result<Expr, String> {
     Ok(expr)
 }
 
+fn unescape_string(s: &str) -> String {
+    let mut res = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            match chars.next() {
+                Some('n') => res.push('\n'),
+                Some('r') => res.push('\r'),
+                Some('t') => res.push('\t'),
+                Some('\\') => res.push('\\'),
+                Some('"') => res.push('"'),
+                Some('\'') => res.push('\''),
+                Some('0') => res.push('\0'),
+                Some(c) => { res.push('\\'); res.push(c); }
+                None => res.push('\\'),
+            }
+        } else {
+            res.push(c);
+        }
+    }
+    res
+}
+
 fn parse_primary(pair: Pair<Rule>) -> Result<Expr, String> {
     let inner = pair.into_inner().next().unwrap();
     match inner.as_rule() {
         Rule::int_lit => {
-            let n: i64 = inner.as_str().parse().unwrap();
+            let s = inner.as_str();
+            let n: i64 = if s.starts_with("0x") || s.starts_with("0X") {
+                i64::from_str_radix(&s[2..], 16).unwrap()
+            } else {
+                s.parse().unwrap()
+            };
             Ok(Expr::Int(n))
         }
         Rule::float_lit => {
@@ -633,7 +668,7 @@ fn parse_primary(pair: Pair<Rule>) -> Result<Expr, String> {
         }
         Rule::string_lit => {
             let s = inner.as_str();
-            Ok(Expr::String(s[1..s.len()-1].to_string()))
+            Ok(Expr::String(unescape_string(&s[1..s.len()-1])))
         }
         Rule::bool_lit => {
             Ok(Expr::Bool(inner.as_str() == "true"))

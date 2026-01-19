@@ -1,60 +1,737 @@
-// Bolide GUI 标准库
+// ============================================================
+// Bolide GUI 标准库 / Bolide GUI Standard Library
 // 使用: import "std/gui/gui.bl";
+// 支持 HiDPI 高分辨率屏幕
+// ============================================================
+
+// ============================================================
+// C FFI 声明 / C FFI Declarations
+// ============================================================
 
 extern "std/gui/gui.dll" {
+    // 初始化和运行
     fn gui_init() -> c_int;
+    fn gui_run();
+    fn gui_quit();
+    fn gui_get_dpi(hwnd: *void) -> c_int;
+    fn gui_scale(value: c_int, hwnd: *void) -> c_int;
+
+    // 窗口
     fn gui_window(title: *char, width: c_int, height: c_int) -> *void;
+    fn gui_close(window: *void);
+    fn gui_center(window: *void);
+    fn gui_set_title(window: *void, title: *char);
+    fn gui_get_title(window: *void) -> *char;
+    fn gui_set_position(window: *void, x: c_int, y: c_int);
+    fn gui_set_size(window: *void, width: c_int, height: c_int);
+    fn gui_show(window: *void, show: c_int);
+
+    // 基础控件
     fn gui_button(parent: *void, text: *char, x: c_int, y: c_int, w: c_int, h: c_int) -> *void;
     fn gui_label(parent: *void, text: *char, x: c_int, y: c_int, w: c_int, h: c_int) -> *void;
     fn gui_textbox(parent: *void, x: c_int, y: c_int, w: c_int, h: c_int) -> *void;
+    fn gui_password(parent: *void, x: c_int, y: c_int, w: c_int, h: c_int) -> *void;
+    fn gui_textarea(parent: *void, x: c_int, y: c_int, w: c_int, h: c_int) -> *void;
+
+    // 复选框和单选按钮
+    fn gui_checkbox(parent: *void, text: *char, x: c_int, y: c_int, w: c_int, h: c_int) -> *void;
+    fn gui_checkbox_get(handle: *void) -> c_int;
+    fn gui_checkbox_set(handle: *void, checked: c_int);
+    fn gui_radio(parent: *void, text: *char, x: c_int, y: c_int, w: c_int, h: c_int, group_start: c_int) -> *void;
+    fn gui_radio_get(handle: *void) -> c_int;
+    fn gui_radio_set(handle: *void, checked: c_int);
+
+    // 滑块和进度条
+    fn gui_slider(parent: *void, min_val: c_int, max_val: c_int, x: c_int, y: c_int, w: c_int, h: c_int) -> *void;
+    fn gui_slider_get(handle: *void) -> c_int;
+    fn gui_slider_set(handle: *void, value: c_int);
+    fn gui_progress(parent: *void, x: c_int, y: c_int, w: c_int, h: c_int) -> *void;
+    fn gui_progress_set(handle: *void, value: c_int);
+    fn gui_progress_set_range(handle: *void, min_val: c_int, max_val: c_int);
+
+    // 列表框
+    fn gui_listbox(parent: *void, x: c_int, y: c_int, w: c_int, h: c_int) -> *void;
+    fn gui_listbox_add(listbox: *void, text: *char);
+    fn gui_listbox_insert(listbox: *void, index: c_int, text: *char);
+    fn gui_listbox_remove(listbox: *void, index: c_int);
+    fn gui_listbox_clear(listbox: *void);
+    fn gui_listbox_get_selected(listbox: *void) -> c_int;
+    fn gui_listbox_set_selected(listbox: *void, index: c_int);
+    fn gui_listbox_get_text(listbox: *void, index: c_int) -> *char;
+    fn gui_listbox_count(listbox: *void) -> c_int;
+
+    // 下拉框
+    fn gui_combobox(parent: *void, x: c_int, y: c_int, w: c_int, h: c_int) -> *void;
+    fn gui_combobox_add(combobox: *void, text: *char);
+    fn gui_combobox_clear(combobox: *void);
+    fn gui_combobox_get_selected(combobox: *void) -> c_int;
+    fn gui_combobox_set_selected(combobox: *void, index: c_int);
+    fn gui_combobox_count(combobox: *void) -> c_int;
+
+    // 画布
+    fn gui_canvas(parent: *void, x: c_int, y: c_int, w: c_int, h: c_int) -> *void;
+    fn gui_canvas_clear(canvas: *void, color: c_int);
+    fn gui_canvas_line(canvas: *void, x1: c_int, y1: c_int, x2: c_int, y2: c_int, color: c_int);
+    fn gui_canvas_rect(canvas: *void, x: c_int, y: c_int, w: c_int, h: c_int, color: c_int);
+    fn gui_canvas_fill_rect(canvas: *void, x: c_int, y: c_int, w: c_int, h: c_int, color: c_int);
+    fn gui_canvas_circle(canvas: *void, x: c_int, y: c_int, r: c_int, color: c_int);
+    fn gui_canvas_fill_circle(canvas: *void, x: c_int, y: c_int, r: c_int, color: c_int);
+    fn gui_canvas_text(canvas: *void, text: *char, x: c_int, y: c_int, color: c_int);
+    fn gui_canvas_refresh(canvas: *void);
+
+    // 菜单
+    fn gui_menubar(window: *void) -> *void;
+    fn gui_menu(menubar: *void, title: *char) -> *void;
+    fn gui_menu_item(menu: *void, text: *char, callback: fn()) -> *void;
+    fn gui_menu_separator(menu: *void);
+
+    // 通用控件操作
     fn gui_get_text(handle: *void) -> *char;
     fn gui_set_text(handle: *void, text: *char);
-    fn gui_on_click(button: *void, callback: fn());
-    fn gui_run();
-    fn gui_close(window: *void);
+    fn gui_enable(handle: *void, enabled: c_int);
+    fn gui_visible(handle: *void, visible: c_int);
+    fn gui_focus(handle: *void);
+
+    // 事件回调
+    fn gui_on_click(handle: *void, callback: fn());
+    fn gui_on_change(handle: *void, callback: fn());
+    fn gui_on_select(handle: *void, callback: fn());
+    fn gui_on_close(handle: *void, callback: fn() -> c_int);
+    fn gui_on_resize(handle: *void, callback: fn(c_int, c_int));
+    fn gui_on_mouse_move(handle: *void, callback: fn(c_int, c_int));
+    fn gui_on_mouse_down(handle: *void, callback: fn(c_int, c_int, c_int));
+    fn gui_on_mouse_up(handle: *void, callback: fn(c_int, c_int, c_int));
+    fn gui_on_key_down(handle: *void, callback: fn(c_int));
+    fn gui_on_key_up(handle: *void, callback: fn(c_int));
+
+    // 定时器
     fn gui_set_timer(interval_ms: c_int, callback: fn()) -> c_int;
     fn gui_kill_timer(timer_id: c_int);
+
+    // 对话框
+    fn gui_msgbox(parent: *void, title: *char, message: *char, flags: c_int) -> c_int;
+    fn gui_open_file(parent: *void, filter: *char, title: *char) -> *char;
+    fn gui_save_file(parent: *void, filter: *char, title: *char) -> *char;
+    fn gui_select_folder(parent: *void, title: *char) -> *char;
+    fn gui_color_picker(parent: *void, initial_color: c_int) -> c_int;
 }
 
-// 包装函数
+// ============================================================
+// 颜色常量 / Color Constants
+// ============================================================
+
+let COLOR_BLACK: int = 0x000000;
+let COLOR_WHITE: int = 0xFFFFFF;
+let COLOR_RED: int = 0xFF0000;
+let COLOR_GREEN: int = 0x00FF00;
+let COLOR_BLUE: int = 0x0000FF;
+let COLOR_YELLOW: int = 0xFFFF00;
+let COLOR_CYAN: int = 0x00FFFF;
+let COLOR_MAGENTA: int = 0xFF00FF;
+let COLOR_GRAY: int = 0x808080;
+let COLOR_PURPLE: int = 0x800080;
+let COLOR_ORANGE: int = 0xFFA500;
+
+// ============================================================
+// 消息框常量 / MessageBox Constants
+// ============================================================
+
+let MB_OK: int = 0x00000000;
+let MB_OKCANCEL: int = 0x00000001;
+let MB_YESNO: int = 0x00000004;
+let MB_YESNOCANCEL: int = 0x00000003;
+
+let MB_ICONINFO: int = 0x00000040;
+let MB_ICONWARNING: int = 0x00000030;
+let MB_ICONERROR: int = 0x00000010;
+let MB_ICONQUESTION: int = 0x00000020;
+
+let IDOK: int = 1;
+let IDCANCEL: int = 2;
+let IDYES: int = 6;
+let IDNO: int = 7;
+
+// ============================================================
+// 窗口类 / Window Class
+// ============================================================
+
+class Window {
+    handle: ptr;
+
+    fn center() {
+        gui_center(self.handle);
+    }
+
+    fn close() {
+        gui_close(self.handle);
+    }
+
+    fn on_close(callback: func() -> int) {
+        gui_on_close(self.handle, callback);
+    }
+
+    fn on_resize(callback: func(int, int)) {
+        gui_on_resize(self.handle, callback);
+    }
+
+    fn get_dpi() -> int {
+        return gui_get_dpi(self.handle);
+    }
+
+    fn show() {
+        gui_show(self.handle, 1);
+    }
+
+    fn hide() {
+        gui_show(self.handle, 0);
+    }
+
+    fn set_title(title: str) {
+        gui_set_title(self.handle, title);
+    }
+
+    fn get_title() -> str {
+        return gui_get_title(self.handle);
+    }
+
+    fn set_position(x: int, y: int) {
+        gui_set_position(self.handle, x, y);
+    }
+
+    fn set_size(width: int, height: int) {
+        gui_set_size(self.handle, width, height);
+    }
+}
+
+// ============================================================
+// 按钮类 / Button Class
+// ============================================================
+
+class Button {
+    handle: ptr;
+
+    fn on_click(callback: func()) {
+        gui_on_click(self.handle, callback);
+    }
+
+    fn set_text(text: str) {
+        gui_set_text(self.handle, text);
+    }
+
+    fn get_text() -> str {
+        return gui_get_text(self.handle);
+    }
+
+    fn enable() {
+        gui_enable(self.handle, 1);
+    }
+
+    fn disable() {
+        gui_enable(self.handle, 0);
+    }
+
+    fn show() {
+        gui_visible(self.handle, 1);
+    }
+
+    fn hide() {
+        gui_visible(self.handle, 0);
+    }
+
+    fn focus() {
+        gui_focus(self.handle);
+    }
+}
+
+// ============================================================
+// 标签类 / Label Class
+// ============================================================
+
+class Label {
+    handle: ptr;
+
+    fn set_text(text: str) {
+        gui_set_text(self.handle, text);
+    }
+
+    fn get_text() -> str {
+        return gui_get_text(self.handle);
+    }
+
+    fn show() {
+        gui_visible(self.handle, 1);
+    }
+
+    fn hide() {
+        gui_visible(self.handle, 0);
+    }
+}
+
+// ============================================================
+// 文本框类 / TextBox Class
+// ============================================================
+
+class TextBox {
+    handle: ptr;
+
+    fn set_text(text: str) {
+        gui_set_text(self.handle, text);
+    }
+
+    fn get_text() -> str {
+        return gui_get_text(self.handle);
+    }
+
+    fn enable() {
+        gui_enable(self.handle, 1);
+    }
+
+    fn disable() {
+        gui_enable(self.handle, 0);
+    }
+
+    fn show() {
+        gui_visible(self.handle, 1);
+    }
+
+    fn hide() {
+        gui_visible(self.handle, 0);
+    }
+
+    fn focus() {
+        gui_focus(self.handle);
+    }
+
+    fn on_change(callback: func()) {
+        gui_on_change(self.handle, callback);
+    }
+}
+
+// ============================================================
+// 复选框类 / CheckBox Class
+// ============================================================
+
+class CheckBox {
+    handle: ptr;
+
+    fn is_checked() -> bool {
+        return gui_checkbox_get(self.handle) != 0;
+    }
+
+    fn set_checked(checked: bool) {
+        if checked {
+            gui_checkbox_set(self.handle, 1);
+        } else {
+            gui_checkbox_set(self.handle, 0);
+        }
+    }
+
+    fn on_change(callback: func()) {
+        gui_on_click(self.handle, callback);
+    }
+
+    fn enable() {
+        gui_enable(self.handle, 1);
+    }
+
+    fn disable() {
+        gui_enable(self.handle, 0);
+    }
+
+    fn show() {
+        gui_visible(self.handle, 1);
+    }
+
+    fn hide() {
+        gui_visible(self.handle, 0);
+    }
+}
+
+// ============================================================
+// 单选按钮类 / RadioButton Class
+// ============================================================
+
+class RadioButton {
+    handle: ptr;
+
+    fn is_selected() -> bool {
+        return gui_radio_get(self.handle) != 0;
+    }
+
+    fn set_selected(selected: bool) {
+        if selected {
+            gui_radio_set(self.handle, 1);
+        } else {
+            gui_radio_set(self.handle, 0);
+        }
+    }
+
+    fn on_change(callback: func()) {
+        gui_on_click(self.handle, callback);
+    }
+
+    fn enable() {
+        gui_enable(self.handle, 1);
+    }
+
+    fn disable() {
+        gui_enable(self.handle, 0);
+    }
+
+    fn show() {
+        gui_visible(self.handle, 1);
+    }
+
+    fn hide() {
+        gui_visible(self.handle, 0);
+    }
+}
+
+// ============================================================
+// 滑块类 / Slider Class
+// ============================================================
+
+class Slider {
+    handle: ptr;
+
+    fn get_value() -> int {
+        return gui_slider_get(self.handle);
+    }
+
+    fn set_value(value: int) {
+        gui_slider_set(self.handle, value);
+    }
+
+    fn on_change(callback: func()) {
+        gui_on_change(self.handle, callback);
+    }
+
+    fn enable() {
+        gui_enable(self.handle, 1);
+    }
+
+    fn disable() {
+        gui_enable(self.handle, 0);
+    }
+
+    fn show() {
+        gui_visible(self.handle, 1);
+    }
+
+    fn hide() {
+        gui_visible(self.handle, 0);
+    }
+}
+
+// ============================================================
+// 进度条类 / ProgressBar Class
+// ============================================================
+
+class ProgressBar {
+    handle: ptr;
+
+    fn set_value(value: int) {
+        gui_progress_set(self.handle, value);
+    }
+
+    fn set_range(min_val: int, max_val: int) {
+        gui_progress_set_range(self.handle, min_val, max_val);
+    }
+
+    fn show() {
+        gui_visible(self.handle, 1);
+    }
+
+    fn hide() {
+        gui_visible(self.handle, 0);
+    }
+}
+
+// ============================================================
+// 列表框类 / ListBox Class
+// ============================================================
+
+class ListBox {
+    handle: ptr;
+
+    fn add(text: str) {
+        gui_listbox_add(self.handle, text);
+    }
+
+    fn insert(index: int, text: str) {
+        gui_listbox_insert(self.handle, index, text);
+    }
+
+    fn remove(index: int) {
+        gui_listbox_remove(self.handle, index);
+    }
+
+    fn clear() {
+        gui_listbox_clear(self.handle);
+    }
+
+    fn get_selected() -> int {
+        return gui_listbox_get_selected(self.handle);
+    }
+
+    fn set_selected(index: int) {
+        gui_listbox_set_selected(self.handle, index);
+    }
+
+    fn get_text(index: int) -> str {
+        return gui_listbox_get_text(self.handle, index);
+    }
+
+    fn count() -> int {
+        return gui_listbox_count(self.handle);
+    }
+
+    fn on_select(callback: func()) {
+        gui_on_select(self.handle, callback);
+    }
+
+    fn enable() {
+        gui_enable(self.handle, 1);
+    }
+
+    fn disable() {
+        gui_enable(self.handle, 0);
+    }
+
+    fn show() {
+        gui_visible(self.handle, 1);
+    }
+
+    fn hide() {
+        gui_visible(self.handle, 0);
+    }
+}
+
+// ============================================================
+// 下拉框类 / ComboBox Class
+// ============================================================
+
+class ComboBox {
+    handle: ptr;
+
+    fn add(text: str) {
+        gui_combobox_add(self.handle, text);
+    }
+
+    fn clear() {
+        gui_combobox_clear(self.handle);
+    }
+
+    fn get_selected() -> int {
+        return gui_combobox_get_selected(self.handle);
+    }
+
+    fn set_selected(index: int) {
+        gui_combobox_set_selected(self.handle, index);
+    }
+
+    fn count() -> int {
+        return gui_combobox_count(self.handle);
+    }
+
+    fn on_change(callback: func()) {
+        gui_on_change(self.handle, callback);
+    }
+
+    fn enable() {
+        gui_enable(self.handle, 1);
+    }
+
+    fn disable() {
+        gui_enable(self.handle, 0);
+    }
+
+    fn show() {
+        gui_visible(self.handle, 1);
+    }
+
+    fn hide() {
+        gui_visible(self.handle, 0);
+    }
+}
+
+// ============================================================
+// 画布类 / Canvas Class
+// ============================================================
+
+class Canvas {
+    handle: ptr;
+
+    fn clear(color: int) {
+        gui_canvas_clear(self.handle, color);
+    }
+
+    fn line(x1: int, y1: int, x2: int, y2: int, color: int) {
+        gui_canvas_line(self.handle, x1, y1, x2, y2, color);
+    }
+
+    fn rect(x: int, y: int, w: int, h: int, color: int) {
+        gui_canvas_rect(self.handle, x, y, w, h, color);
+    }
+
+    fn fill_rect(x: int, y: int, w: int, h: int, color: int) {
+        gui_canvas_fill_rect(self.handle, x, y, w, h, color);
+    }
+
+    fn circle(x: int, y: int, r: int, color: int) {
+        gui_canvas_circle(self.handle, x, y, r, color);
+    }
+
+    fn fill_circle(x: int, y: int, r: int, color: int) {
+        gui_canvas_fill_circle(self.handle, x, y, r, color);
+    }
+
+    fn text(text: str, x: int, y: int, color: int) {
+        gui_canvas_text(self.handle, text, x, y, color);
+    }
+
+    fn refresh() {
+        gui_canvas_refresh(self.handle);
+    }
+
+    fn on_mouse_down(callback: func(int, int, int)) {
+        gui_on_mouse_down(self.handle, callback);
+    }
+
+    fn on_mouse_up(callback: func(int, int, int)) {
+        gui_on_mouse_up(self.handle, callback);
+    }
+
+    fn on_mouse_move(callback: func(int, int)) {
+        gui_on_mouse_move(self.handle, callback);
+    }
+
+    fn show() {
+        gui_visible(self.handle, 1);
+    }
+
+    fn hide() {
+        gui_visible(self.handle, 0);
+    }
+}
+
+// ============================================================
+// 菜单栏类 / MenuBar Class
+// ============================================================
+
+class MenuBar {
+    handle: ptr;
+}
+
+// ============================================================
+// 菜单类 / Menu Class
+// ============================================================
+
+class Menu {
+    handle: ptr;
+
+    fn add_item(text: str, callback: func()) {
+        gui_menu_item(self.handle, text, callback);
+    }
+
+    fn add_separator() {
+        gui_menu_separator(self.handle);
+    }
+}
+
+// ============================================================
+// 工厂函数 / Factory Functions
+// ============================================================
+
 fn init() -> int {
     return gui_init();
-}
-
-fn window(title: str, width: int, height: int) -> ptr {
-    return gui_window(title, width, height);
-}
-
-fn button(parent: ptr, text: str, x: int, y: int, w: int, h: int) -> ptr {
-    return gui_button(parent, text, x, y, w, h);
-}
-
-fn label(parent: ptr, text: str, x: int, y: int, w: int, h: int) -> ptr {
-    return gui_label(parent, text, x, y, w, h);
-}
-
-fn textbox(parent: ptr, x: int, y: int, w: int, h: int) -> ptr {
-    return gui_textbox(parent, x, y, w, h);
-}
-
-fn get_text(handle: ptr) -> str {
-    return gui_get_text(handle);
-}
-
-fn set_text(handle: ptr, text: str) {
-    gui_set_text(handle, text);
-}
-
-fn on_click(btn: ptr, callback: func()) {
-    gui_on_click(btn, callback);
 }
 
 fn run() {
     gui_run();
 }
 
-fn close(window: ptr) {
-    gui_close(window);
+fn quit() {
+    gui_quit();
+}
+
+fn window(title: str, width: int, height: int) -> Window {
+    let h: ptr = gui_window(title, width, height);
+    return Window(h);
+}
+
+fn button(parent: Window, text: str, x: int, y: int, w: int, h: int) -> Button {
+    let handle: ptr = gui_button(parent.handle, text, x, y, w, h);
+    return Button(handle);
+}
+
+fn label(parent: Window, text: str, x: int, y: int, w: int, h: int) -> Label {
+    let handle: ptr = gui_label(parent.handle, text, x, y, w, h);
+    return Label(handle);
+}
+
+fn textbox(parent: Window, x: int, y: int, w: int, h: int) -> TextBox {
+    let handle: ptr = gui_textbox(parent.handle, x, y, w, h);
+    return TextBox(handle);
+}
+
+fn password(parent: Window, x: int, y: int, w: int, h: int) -> TextBox {
+    let handle: ptr = gui_password(parent.handle, x, y, w, h);
+    return TextBox(handle);
+}
+
+fn textarea(parent: Window, x: int, y: int, w: int, h: int) -> TextBox {
+    let handle: ptr = gui_textarea(parent.handle, x, y, w, h);
+    return TextBox(handle);
+}
+
+fn checkbox(parent: Window, text: str, x: int, y: int, w: int, h: int) -> CheckBox {
+    let handle: ptr = gui_checkbox(parent.handle, text, x, y, w, h);
+    return CheckBox(handle);
+}
+
+fn radio(parent: Window, text: str, x: int, y: int, w: int, h: int, group_start: bool) -> RadioButton {
+    let gs: int = 0;
+    if group_start {
+        gs = 1;
+    }
+    let handle: ptr = gui_radio(parent.handle, text, x, y, w, h, gs);
+    return RadioButton(handle);
+}
+
+fn slider(parent: Window, min_val: int, max_val: int, x: int, y: int, w: int, h: int) -> Slider {
+    let handle: ptr = gui_slider(parent.handle, min_val, max_val, x, y, w, h);
+    return Slider(handle);
+}
+
+fn progress(parent: Window, x: int, y: int, w: int, h: int) -> ProgressBar {
+    let handle: ptr = gui_progress(parent.handle, x, y, w, h);
+    return ProgressBar(handle);
+}
+
+fn listbox(parent: Window, x: int, y: int, w: int, h: int) -> ListBox {
+    let handle: ptr = gui_listbox(parent.handle, x, y, w, h);
+    return ListBox(handle);
+}
+
+fn combobox(parent: Window, x: int, y: int, w: int, h: int) -> ComboBox {
+    let handle: ptr = gui_combobox(parent.handle, x, y, w, h);
+    return ComboBox(handle);
+}
+
+fn canvas(parent: Window, x: int, y: int, w: int, h: int) -> Canvas {
+    let handle: ptr = gui_canvas(parent.handle, x, y, w, h);
+    return Canvas(handle);
+}
+
+fn menubar(parent: Window) -> MenuBar {
+    let handle: ptr = gui_menubar(parent.handle);
+    return MenuBar(handle);
+}
+
+fn menu(parent: MenuBar, title: str) -> Menu {
+    let handle: ptr = gui_menu(parent.handle, title);
+    return Menu(handle);
 }
 
 fn set_timer(interval_ms: int, callback: func()) -> int {
@@ -63,4 +740,24 @@ fn set_timer(interval_ms: int, callback: func()) -> int {
 
 fn kill_timer(timer_id: int) {
     gui_kill_timer(timer_id);
+}
+
+fn msgbox(parent: Window, title: str, message: str, flags: int) -> int {
+    return gui_msgbox(parent.handle, title, message, flags);
+}
+
+fn open_file(parent: Window, filter: str, title: str) -> str {
+    return gui_open_file(parent.handle, filter, title);
+}
+
+fn save_file(parent: Window, filter: str, title: str) -> str {
+    return gui_save_file(parent.handle, filter, title);
+}
+
+fn select_folder(parent: Window, title: str) -> str {
+    return gui_select_folder(parent.handle, title);
+}
+
+fn color_picker(parent: Window, initial_color: int) -> int {
+    return gui_color_picker(parent.handle, initial_color);
 }

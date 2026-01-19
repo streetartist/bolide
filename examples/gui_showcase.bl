@@ -1,0 +1,407 @@
+// ============================================================
+// Bolide GUI 全功能演示程序
+// 展示所有 GUI 控件和功能
+// 支持 HiDPI 高分辨率屏幕
+// ============================================================
+
+import "std/gui/gui.bl";
+
+// ============================================================
+// 全局状态变量
+// ============================================================
+
+let click_count: int = 0;
+let progress_value: int = 0;
+let timer_running: bool = false;
+let timer_id: int = 0;
+let draw_mode: int = 0;  // 0=矩形, 1=圆形, 2=线条
+let draw_color: int = gui.COLOR_BLUE;
+
+// ============================================================
+// 全局控件引用 (在顶层声明)
+// ============================================================
+
+// 这些将在 main 中初始化
+let main_win: gui.Window = gui.Window(0);
+let count_label: gui.Label = gui.Label(0);
+let input_box: gui.TextBox = gui.TextBox(0);
+let slider_val: gui.Slider = gui.Slider(0);
+let progress_bar: gui.ProgressBar = gui.ProgressBar(0);
+let list: gui.ListBox = gui.ListBox(0);
+let combo: gui.ComboBox = gui.ComboBox(0);
+let check_timer: gui.CheckBox = gui.CheckBox(0);
+let drawing_canvas: gui.Canvas = gui.Canvas(0);
+
+// ============================================================
+// 事件回调函数
+// ============================================================
+
+fn on_click_button() {
+    click_count = click_count + 1;
+    count_label.set_text("点击次数: " + str(click_count));
+}
+
+fn on_reset_button() {
+    click_count = 0;
+    count_label.set_text("点击次数: 0");
+    progress_value = 0;
+    progress_bar.set_value(0);
+    slider_val.set_value(50);
+    input_box.set_text("");
+    list.clear();
+    list.add("选项 1");
+    list.add("选项 2");
+    list.add("选项 3");
+}
+
+fn on_add_item() {
+    let text: str = input_box.get_text();
+    print("Trying to add: '" + text + "'");
+    if text != "" {
+        list.add(text);
+        input_box.set_text("");
+    }
+}
+
+fn on_remove_item() {
+    let idx: int = list.get_selected();
+    if idx >= 0 {
+        list.remove(idx);
+    }
+}
+
+fn on_slider_change() {
+    let val: int = slider_val.get_value();
+    progress_bar.set_value(val);
+}
+
+fn on_combo_change() {
+    let idx: int = combo.get_selected();
+    if idx == 0 {
+        draw_color = gui.COLOR_RED;
+    } elif idx == 1 {
+        draw_color = gui.COLOR_GREEN;
+    } elif idx == 2 {
+        draw_color = gui.COLOR_BLUE;
+    } elif idx == 3 {
+        draw_color = gui.COLOR_YELLOW;
+    } elif idx == 4 {
+        draw_color = gui.COLOR_PURPLE;
+    }
+    redraw_canvas();
+}
+
+fn on_list_select() {
+    let idx: int = list.get_selected();
+    if idx >= 0 {
+        let text: str = list.get_text(idx);
+        print("选中: " + text);
+    }
+}
+
+fn on_timer_check() {
+    if check_timer.is_checked() {
+        if timer_running == false {
+            timer_id = gui.set_timer(50, on_timer_tick);
+            timer_running = true;
+        }
+    } else {
+        if timer_running {
+            gui.kill_timer(timer_id);
+            timer_running = false;
+        }
+    }
+}
+
+fn on_timer_tick() {
+    progress_value = progress_value + 1;
+    if progress_value > 100 {
+        progress_value = 0;
+    }
+    progress_bar.set_value(progress_value);
+}
+
+fn on_draw_rect() {
+    draw_mode = 0;
+    redraw_canvas();
+}
+
+fn on_draw_circle() {
+    draw_mode = 1;
+    redraw_canvas();
+}
+
+fn on_draw_lines() {
+    draw_mode = 2;
+    redraw_canvas();
+}
+
+fn redraw_canvas() {
+    drawing_canvas.clear(gui.COLOR_WHITE);
+    
+    // 绘制边框
+    drawing_canvas.rect(0, 0, 379, 199, gui.COLOR_GRAY);
+    
+    if draw_mode == 0 {
+        // 绘制多个矩形
+        drawing_canvas.fill_rect(20, 20, 80, 60, draw_color);
+        drawing_canvas.fill_rect(120, 30, 60, 80, draw_color);
+        drawing_canvas.fill_rect(200, 50, 100, 40, draw_color);
+        drawing_canvas.rect(280, 20, 80, 80, draw_color);
+        drawing_canvas.text("矩形模式", 150, 170, gui.COLOR_BLACK);
+    } elif draw_mode == 1 {
+        // 绘制多个圆形
+        drawing_canvas.fill_circle(60, 80, 40, draw_color);
+        drawing_canvas.fill_circle(160, 100, 30, draw_color);
+        drawing_canvas.fill_circle(260, 80, 50, draw_color);
+        drawing_canvas.circle(340, 100, 35, draw_color);
+        drawing_canvas.text("圆形模式", 150, 170, gui.COLOR_BLACK);
+    } else {
+        // 绘制线条
+        for i in range(10) {
+            let x1: int = 20 + i * 35;
+            let y1: int = 20;
+            let x2: int = 380 - i * 35;
+            let y2: int = 180;
+            drawing_canvas.line(x1, y1, x2, y2, draw_color);
+        }
+        drawing_canvas.text("线条模式", 150, 90, gui.COLOR_BLACK);
+    }
+    
+    drawing_canvas.refresh();
+}
+
+fn on_canvas_click(x: int, y: int, button_idx: int) {
+    // 在点击位置绘制一个小圆
+    drawing_canvas.fill_circle(x, y, 10, draw_color);
+    drawing_canvas.refresh();
+}
+
+fn on_canvas_move(x: int, y: int) {
+    // 鼠标移动时可以添加绘制效果（可选）
+}
+
+fn on_msgbox_info() {
+    gui.msgbox(main_win, "信息", "这是一个信息提示框！\n\n支持多行文本。", gui.MB_OK + gui.MB_ICONINFO);
+}
+
+fn on_msgbox_confirm() {
+    let result: int = gui.msgbox(main_win, "确认", "你确定要执行此操作吗？", gui.MB_YESNO + gui.MB_ICONQUESTION);
+    if result == gui.IDYES {
+        print("用户点击了: 是");
+    } else {
+        print("用户点击了: 否");
+    }
+}
+
+fn on_open_file() {
+    let path: str = gui.open_file(main_win, "All Files\x00*.*\x00Text Files\x00*.txt\x00", "打开文件");
+    if path != "" {
+        print("打开文件: " + path);
+        input_box.set_text(path);
+    }
+}
+
+fn on_save_file() {
+    let path: str = gui.save_file(main_win, "Text Files\x00*.txt\x00All Files\x00*.*\x00", "保存文件");
+    if path != "" {
+        print("保存文件: " + path);
+    }
+}
+
+fn on_pick_color() {
+    let color: int = gui.color_picker(main_win, draw_color);
+    draw_color = color;
+    redraw_canvas();
+}
+
+fn on_menu_about() {
+    gui.msgbox(main_win, "关于", "Bolide GUI 演示程序\n\n版本: 1.0\n作者: Bolide Team\n\n支持 HiDPI 高分屏显示", gui.MB_OK + gui.MB_ICONINFO);
+}
+
+fn on_menu_exit() {
+    gui.quit();
+}
+
+fn on_window_close() -> int {
+    let result: int = gui.msgbox(main_win, "退出确认", "确定要退出程序吗？", gui.MB_YESNO + gui.MB_ICONQUESTION);
+    if result == gui.IDYES {
+        if timer_running {
+            gui.kill_timer(timer_id);
+        }
+        return 1;  // 允许关闭
+    }
+    return 0;  // 阻止关闭
+}
+
+// ============================================================
+// 主程序
+// ============================================================
+
+// 初始化 GUI
+gui.init();
+
+// 创建主窗口
+main_win = gui.window("Bolide GUI 全功能演示", 850, 650);
+main_win.center();
+main_win.on_close(on_window_close);
+
+// ============================================================
+// 创建菜单栏
+// ============================================================
+
+let menu_bar: gui.MenuBar = gui.menubar(main_win);
+
+let file_menu: gui.Menu = gui.menu(menu_bar, "文件(&F)");
+file_menu.add_item("打开(&O)...", on_open_file);
+file_menu.add_item("保存(&S)...", on_save_file);
+file_menu.add_separator();
+file_menu.add_item("退出(&X)", on_menu_exit);
+
+let help_menu: gui.Menu = gui.menu(menu_bar, "帮助(&H)");
+help_menu.add_item("关于(&A)", on_menu_about);
+
+// ============================================================
+// 左侧面板 - 基础控件
+// ============================================================
+
+let label_title: gui.Label = gui.label(main_win, "基础控件", 20, 10, 200, 25);
+count_label = gui.label(main_win, "点击次数: 0", 20, 45, 150, 25);
+
+let btn_click: gui.Button = gui.button(main_win, "点击我", 20, 80, 100, 30);
+btn_click.on_click(on_click_button);
+
+let btn_reset: gui.Button = gui.button(main_win, "重置", 130, 80, 80, 30);
+btn_reset.on_click(on_reset_button);
+
+// 文本输入
+let label_input: gui.Label = gui.label(main_win, "文本输入:", 20, 125, 80, 25);
+input_box = gui.textbox(main_win, 100, 125, 180, 25);
+input_box.set_text("输入文本...");
+
+// 复选框
+check_timer = gui.checkbox(main_win, "启用定时器", 20, 160, 200, 25);
+check_timer.on_change(on_timer_check);
+
+let check_disabled: gui.CheckBox = gui.checkbox(main_win, "禁用选项 (演示)", 20, 190, 200, 25);
+check_disabled.disable();
+
+// 单选按钮组
+let label_radio: gui.Label = gui.label(main_win, "绘图类型:", 20, 225, 80, 25);
+let radio1: gui.RadioButton = gui.radio(main_win, "矩形", 100, 225, 60, 25, true);
+radio1.set_selected(true);
+radio1.on_change(on_draw_rect);
+
+let radio2: gui.RadioButton = gui.radio(main_win, "圆形", 180, 225, 60, 25, false);
+radio2.on_change(on_draw_circle);
+
+let radio3: gui.RadioButton = gui.radio(main_win, "线条", 260, 225, 60, 25, false);
+radio3.on_change(on_draw_lines);
+
+// 滑块
+let label_slider: gui.Label = gui.label(main_win, "滑块:", 20, 265, 50, 25);
+slider_val = gui.slider(main_win, 0, 100, 70, 265, 200, 30);
+slider_val.set_value(50);
+slider_val.on_change(on_slider_change);
+
+// 进度条
+let label_progress: gui.Label = gui.label(main_win, "进度:", 20, 305, 50, 25);
+progress_bar = gui.progress(main_win, 70, 305, 200, 22);
+progress_bar.set_value(50);
+
+// ============================================================
+// 中间面板 - 列表控件
+// ============================================================
+
+let label_list: gui.Label = gui.label(main_win, "列表控件", 300, 10, 200, 25);
+
+list = gui.listbox(main_win, 300, 45, 200, 120);
+list.add("选项 1");
+list.add("选项 2");
+list.add("选项 3");
+list.add("选项 4 - 较长的文本");
+list.add("选项 5");
+list.on_select(on_list_select);
+
+let btn_add: gui.Button = gui.button(main_win, "添加项", 300, 175, 95, 28);
+btn_add.on_click(on_add_item);
+
+let btn_remove: gui.Button = gui.button(main_win, "删除项", 405, 175, 95, 28);
+btn_remove.on_click(on_remove_item);
+
+// 下拉框
+let label_combo: gui.Label = gui.label(main_win, "绘图颜色:", 300, 215, 80, 25);
+combo = gui.combobox(main_win, 385, 215, 115, 25);
+combo.add("红色");
+combo.add("绿色");
+combo.add("蓝色");
+combo.add("黄色");
+combo.add("紫色");
+combo.set_selected(2);  // 默认蓝色
+combo.on_change(on_combo_change);
+
+// ============================================================
+// 右侧面板 - 对话框
+// ============================================================
+
+let label_dialog: gui.Label = gui.label(main_win, "对话框", 550, 10, 200, 25);
+
+let btn_msgbox: gui.Button = gui.button(main_win, "信息框", 550, 45, 120, 30);
+btn_msgbox.on_click(on_msgbox_info);
+
+let btn_confirm: gui.Button = gui.button(main_win, "确认框", 680, 45, 120, 30);
+btn_confirm.on_click(on_msgbox_confirm);
+
+let btn_open: gui.Button = gui.button(main_win, "打开文件...", 550, 85, 120, 30);
+btn_open.on_click(on_open_file);
+
+let btn_save: gui.Button = gui.button(main_win, "保存文件...", 680, 85, 120, 30);
+btn_save.on_click(on_save_file);
+
+let btn_color: gui.Button = gui.button(main_win, "选择颜色...", 550, 125, 250, 30);
+btn_color.on_click(on_pick_color);
+
+// 密码框演示
+let label_pwd: gui.Label = gui.label(main_win, "密码框:", 550, 175, 70, 25);
+let pwd_box: gui.TextBox = gui.password(main_win, 620, 175, 180, 25);
+
+// 多行文本框
+let label_area: gui.Label = gui.label(main_win, "多行文本:", 550, 210, 80, 25);
+let text_area: gui.TextBox = gui.textarea(main_win, 550, 240, 250, 90);
+text_area.set_text("这是一个多行文本框\n支持换行输入\n可以输入较长的文本内容");
+
+// ============================================================
+// 底部面板 - 画布
+// ============================================================
+
+let label_canvas: gui.Label = gui.label(main_win, "画布绘图 (点击可绘制)", 20, 350, 250, 25);
+
+drawing_canvas = gui.canvas(main_win, 20, 380, 380, 200);
+drawing_canvas.on_mouse_down(on_canvas_click);
+drawing_canvas.on_mouse_move(on_canvas_move);
+
+// 初始绘制
+redraw_canvas();
+
+// 状态信息
+let label_status: gui.Label = gui.label(main_win, "提示: 所有控件支持 HiDPI 高分屏自动缩放", 430, 550, 400, 25);
+
+// ============================================================
+// 右下角 - 功能说明
+// ============================================================
+
+let label_features: gui.Label = gui.label(main_win, "功能说明:", 430, 380, 100, 25);
+let features_area: gui.TextBox = gui.textarea(main_win, 430, 410, 380, 130);
+features_area.set_text("本程序演示了 Bolide GUI 库的全部功能:\n\n• 窗口和菜单栏\n• 按钮、标签、文本框、密码框\n• 复选框、单选按钮组\n• 滑块、进度条\n• 列表框、下拉框\n• 画布绘图 (矩形/圆形/线条)\n• 对话框 (消息框/文件/颜色)\n• 定时器\n• HiDPI 高分屏支持");
+features_area.disable();
+
+// ============================================================
+// 运行消息循环
+// ============================================================
+
+print("GUI 程序启动...");
+print("DPI: " + str(main_win.get_dpi()));
+
+gui.run();
+
+print("GUI 程序结束");

@@ -64,6 +64,10 @@ pub struct JitCompiler {
     modules: HashMap<String, String>,
     /// 使用生命周期模式的函数集合（返回借用而非拥有的值）
     lifetime_funcs: HashSet<String>,
+    /// 全局变量名 -> 数据ID 映射
+    global_data_ids: HashMap<String, cranelift_module::DataId>,
+    /// 全局变量类型映射
+    global_var_types: HashMap<String, BolideType>,
 }
 
 impl JitCompiler {
@@ -135,6 +139,7 @@ impl JitCompiler {
         builder.symbol("dynamic_clone", bolide_runtime::bolide_dynamic_clone as *const u8);
 
         // 注册字符串函数
+        builder.symbol("bolide_string_new", bolide_runtime::bolide_string_new as *const u8);
         builder.symbol("string_from_slice", bolide_runtime::bolide_string_from_slice as *const u8);
         builder.symbol("string_literal", bolide_runtime::bolide_string_literal as *const u8);
         builder.symbol("string_as_cstr", bolide_runtime::bolide_string_as_cstr as *const u8);
@@ -310,6 +315,8 @@ impl JitCompiler {
             loaded_libs: HashMap::new(),
             modules: HashMap::new(),
             lifetime_funcs: HashSet::new(),
+            global_data_ids: HashMap::new(),
+            global_var_types: HashMap::new(),
         }
     }
 
@@ -353,6 +360,9 @@ impl JitCompiler {
         // 扫描并生成 trampolines（用于带参数的 spawn）
         let spawn_targets = self.collect_spawn_targets(&program);
         self.generate_trampolines(&spawn_targets)?;
+
+        // 收集并声明全局变量（顶层 VarDecl）
+        self.collect_global_variables(&program)?;
 
         // 编译类构造函数
         for class_name in self.classes.keys().cloned().collect::<Vec<_>>() {
@@ -453,24 +463,46 @@ impl JitCompiler {
                     // 加载并解析文件
                     let imported = self.load_module(file_path)?;
 
+                    // 先收集模块中定义的类名
+                    let mut class_names: HashSet<String> = HashSet::new();
+                    for imp_stmt in &imported.statements {
+                        if let Statement::ClassDef(class) = imp_stmt {
+                            class_names.insert(class.name.clone());
+                        }
+                    }
+
                     // 合并导入的定义，添加模块前缀
                     for imp_stmt in imported.statements {
                         match imp_stmt {
                             Statement::FuncDef(mut func) => {
                                 // 重命名函数: func -> @module_func
                                 func.name = format!("@{}_{}", module_name, func.name);
+                                // 重写函数内部的类型引用
+                                Self::rewrite_func_class_refs(&mut func, &module_name, &class_names);
                                 merged_statements.push(Statement::FuncDef(func));
                             }
                             Statement::ClassDef(mut class) => {
                                 // 重命名类: Class -> @module_Class
-                                class.name = format!("@{}_{}", module_name, class.name);
+                                let old_name = class.name.clone();
+                                class.name = format!("@{}_{}", module_name, old_name);
+                                // 重写方法内部的类型引用
+                                for method in &mut class.methods {
+                                    Self::rewrite_func_class_refs(method, &module_name, &class_names);
+                                }
                                 merged_statements.push(Statement::ClassDef(class));
                             }
                             Statement::ExternBlock(ext) => {
                                 // 保留 extern 声明（不添加前缀，C函数名必须保持不变）
                                 merged_statements.push(Statement::ExternBlock(ext));
                             }
-                            _ => {} // 忽略顶层代码
+                            Statement::VarDecl(mut decl) => {
+                                // 重命名模块级变量
+                                decl.name = format!("@{}_{}", module_name, decl.name);
+                                // 处理模块级变量声明
+                                Self::rewrite_var_decl_class_refs(&mut decl, &module_name, &class_names);
+                                merged_statements.push(Statement::VarDecl(decl));
+                            }
+                            _ => {} // 忽略其他顶层代码
                         }
                     }
                 }
@@ -483,6 +515,262 @@ impl JitCompiler {
         }
 
         Ok(Program { statements: merged_statements })
+    }
+
+    /// 重写函数内部的类型引用，将模块内部类名转换为 @module_ClassName
+    fn rewrite_func_class_refs(func: &mut FuncDef, module_name: &str, class_names: &HashSet<String>) {
+        // 重写返回类型
+        if let Some(ref mut ret_ty) = func.return_type {
+            Self::rewrite_type_class_refs(ret_ty, module_name, class_names);
+        }
+        // 重写参数类型
+        for param in &mut func.params {
+            Self::rewrite_type_class_refs(&mut param.ty, module_name, class_names);
+        }
+        // 重写函数体内的语句
+        for stmt in &mut func.body {
+            Self::rewrite_stmt_class_refs(stmt, module_name, class_names);
+        }
+    }
+
+    /// 重写类型中的类引用
+    fn rewrite_type_class_refs(ty: &mut BolideType, module_name: &str, class_names: &HashSet<String>) {
+        match ty {
+            BolideType::Custom(name) => {
+                if class_names.contains(name) {
+                    *name = format!("@{}_{}", module_name, name);
+                }
+            }
+            BolideType::List(inner) => Self::rewrite_type_class_refs(inner, module_name, class_names),
+            BolideType::Dict(k, v) => {
+                Self::rewrite_type_class_refs(k, module_name, class_names);
+                Self::rewrite_type_class_refs(v, module_name, class_names);
+            }
+            BolideType::Channel(inner) => Self::rewrite_type_class_refs(inner, module_name, class_names),
+            BolideType::Tuple(types) => {
+                for t in types {
+                    Self::rewrite_type_class_refs(t, module_name, class_names);
+                }
+            }
+            BolideType::Weak(inner) | BolideType::Unowned(inner) => {
+                Self::rewrite_type_class_refs(inner, module_name, class_names);
+            }
+            BolideType::FuncSig(params, ret) => {
+                for p in params {
+                    Self::rewrite_type_class_refs(p, module_name, class_names);
+                }
+                if let Some(r) = ret {
+                    Self::rewrite_type_class_refs(r, module_name, class_names);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// 重写变量声明中的类引用
+    fn rewrite_var_decl_class_refs(decl: &mut VarDecl, module_name: &str, class_names: &HashSet<String>) {
+        if let Some(ref mut ty) = decl.ty {
+            Self::rewrite_type_class_refs(ty, module_name, class_names);
+        }
+        if let Some(ref mut val) = decl.value {
+            Self::rewrite_expr_class_refs(val, module_name, class_names);
+        }
+    }
+
+    /// 重写语句中的类引用
+    fn rewrite_stmt_class_refs(stmt: &mut Statement, module_name: &str, class_names: &HashSet<String>) {
+        match stmt {
+            Statement::VarDecl(decl) => {
+                Self::rewrite_var_decl_class_refs(decl, module_name, class_names);
+            }
+            Statement::Assign(assign) => {
+                Self::rewrite_expr_class_refs(&mut assign.value, module_name, class_names);
+            }
+            Statement::Expr(expr) => {
+                Self::rewrite_expr_class_refs(expr, module_name, class_names);
+            }
+            Statement::Return(Some(expr)) => {
+                Self::rewrite_expr_class_refs(expr, module_name, class_names);
+            }
+            Statement::If(if_stmt) => {
+                Self::rewrite_expr_class_refs(&mut if_stmt.condition, module_name, class_names);
+                for s in &mut if_stmt.then_body {
+                    Self::rewrite_stmt_class_refs(s, module_name, class_names);
+                }
+                for (cond, body) in &mut if_stmt.elif_branches {
+                    Self::rewrite_expr_class_refs(cond, module_name, class_names);
+                    for s in body {
+                        Self::rewrite_stmt_class_refs(s, module_name, class_names);
+                    }
+                }
+                if let Some(else_body) = &mut if_stmt.else_body {
+                    for s in else_body {
+                        Self::rewrite_stmt_class_refs(s, module_name, class_names);
+                    }
+                }
+            }
+            Statement::While(while_stmt) => {
+                Self::rewrite_expr_class_refs(&mut while_stmt.condition, module_name, class_names);
+                for s in &mut while_stmt.body {
+                    Self::rewrite_stmt_class_refs(s, module_name, class_names);
+                }
+            }
+            Statement::For(for_stmt) => {
+                Self::rewrite_expr_class_refs(&mut for_stmt.iter, module_name, class_names);
+                for s in &mut for_stmt.body {
+                    Self::rewrite_stmt_class_refs(s, module_name, class_names);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// 重写表达式中的类引用（主要是构造函数调用）
+    fn rewrite_expr_class_refs(expr: &mut Expr, module_name: &str, class_names: &HashSet<String>) {
+        match expr {
+            Expr::Call(callee, args) => {
+                // 检查是否是类构造函数调用: ClassName(args)
+                if let Expr::Ident(name) = callee.as_mut() {
+                    if class_names.contains(name.as_str()) {
+                        *name = format!("@{}_{}", module_name, name);
+                    }
+                }
+                Self::rewrite_expr_class_refs(callee, module_name, class_names);
+                for arg in args {
+                    Self::rewrite_expr_class_refs(arg, module_name, class_names);
+                }
+            }
+            Expr::BinOp(left, _, right) => {
+                Self::rewrite_expr_class_refs(left, module_name, class_names);
+                Self::rewrite_expr_class_refs(right, module_name, class_names);
+            }
+            Expr::UnaryOp(_, operand) => {
+                Self::rewrite_expr_class_refs(operand, module_name, class_names);
+            }
+            Expr::Index(base, idx) => {
+                Self::rewrite_expr_class_refs(base, module_name, class_names);
+                Self::rewrite_expr_class_refs(idx, module_name, class_names);
+            }
+            Expr::Member(base, _) => {
+                Self::rewrite_expr_class_refs(base, module_name, class_names);
+            }
+            Expr::List(items) => {
+                for item in items {
+                    Self::rewrite_expr_class_refs(item, module_name, class_names);
+                }
+            }
+            Expr::Dict(entries) => {
+                for (k, v) in entries {
+                    Self::rewrite_expr_class_refs(k, module_name, class_names);
+                    Self::rewrite_expr_class_refs(v, module_name, class_names);
+                }
+            }
+            Expr::Tuple(items) => {
+                for item in items {
+                    Self::rewrite_expr_class_refs(item, module_name, class_names);
+                }
+            }
+            Expr::Await(inner) => {
+                Self::rewrite_expr_class_refs(inner, module_name, class_names);
+            }
+            Expr::AwaitAll(exprs) => {
+                for e in exprs {
+                    Self::rewrite_expr_class_refs(e, module_name, class_names);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// 收集并声明全局变量
+    fn collect_global_variables(&mut self, program: &Program) -> Result<(), String> {
+        for stmt in &program.statements {
+            if let Statement::VarDecl(decl) = stmt {
+                // 推断类型
+                let var_type = if let Some(ref ty) = decl.ty {
+                    self.normalize_bolide_type(ty)
+                } else if let Some(ref val) = decl.value {
+                    self.normalize_bolide_type(&self.infer_expr_type_static(val))
+                } else {
+                    BolideType::Int
+                };
+
+                // 为全局变量创建数据段（8 字节用于存储值）
+                let data_id = self.module
+                    .declare_data(&decl.name, Linkage::Local, true, false)
+                    .map_err(|e| format!("Failed to declare global '{}': {}", decl.name, e))?;
+
+                // 初始化数据段为 0
+                self.data_desc.define_zeroinit(8);
+                self.module.define_data(data_id, &self.data_desc)
+                    .map_err(|e| format!("Failed to define global '{}': {}", decl.name, e))?;
+                self.data_desc.clear();
+
+                // 记录全局变量
+                self.global_data_ids.insert(decl.name.clone(), data_id);
+                self.global_var_types.insert(decl.name.clone(), var_type);
+            }
+        }
+        Ok(())
+    }
+
+    /// 静态推断表达式类型（用于全局变量收集阶段）
+    fn infer_expr_type_static(&self, expr: &Expr) -> BolideType {
+        match expr {
+            Expr::Int(_) => BolideType::Int,
+            Expr::Float(_) => BolideType::Float,
+            Expr::Bool(_) => BolideType::Bool,
+            Expr::String(_) => BolideType::Str,
+            Expr::BigInt(_) => BolideType::BigInt,
+            Expr::Decimal(_) => BolideType::Decimal,
+            Expr::None => BolideType::Int,
+            Expr::List(_) => BolideType::List(Box::new(BolideType::Dynamic)),
+            Expr::Dict(_) => BolideType::Dict(Box::new(BolideType::Dynamic), Box::new(BolideType::Dynamic)),
+            Expr::Tuple(exprs) => {
+                let types: Vec<BolideType> = exprs.iter()
+                    .map(|e| self.infer_expr_type_static(e))
+                    .collect();
+                BolideType::Tuple(types)
+            }
+            Expr::Member(base, member) => {
+                // 处理模块成员访问，如 gui.COLOR_BLUE
+                if let Expr::Ident(module_name) = base.as_ref() {
+                    if self.modules.contains_key(module_name) {
+                        // 模块常量访问，检查全局变量类型
+                        let global_name = format!("@{}_{}", module_name, member);
+                        if let Some(ty) = self.global_var_types.get(&global_name) {
+                            return ty.clone();
+                        }
+                    }
+                }
+                BolideType::Int
+            }
+            Expr::Call(callee, _) => {
+                // 检查是否是类构造函数或模块函数
+                if let Expr::Ident(name) = callee.as_ref() {
+                    if self.classes.contains_key(name) {
+                        return BolideType::Custom(name.clone());
+                    }
+                }
+                if let Expr::Member(base, member) = callee.as_ref() {
+                    if let Expr::Ident(module_name) = base.as_ref() {
+                        if self.modules.contains_key(module_name) {
+                            let func_name = format!("@{}_{}", module_name, member);
+                            // 检查是否是类构造函数
+                            if self.classes.contains_key(&func_name) {
+                                return BolideType::Custom(func_name);
+                            }
+                            // 检查函数返回类型
+                            if let Some(Some(ret_ty)) = self.func_return_types.get(&func_name) {
+                                return ret_ty.clone();
+                            }
+                        }
+                    }
+                }
+                BolideType::Int
+            }
+            _ => BolideType::Int,
+        }
     }
 
     /// 从文件路径提取模块名
@@ -503,6 +791,65 @@ impl JitCompiler {
             .map_err(|e| format!("Failed to parse module '{}': {}", file_path, e))
     }
 
+    /// 规范化类型名称
+    /// 将 "module.ClassName" 格式转换为 "@module_ClassName" 格式用于模块类查找
+    fn normalize_type_name(&self, name: &str) -> String {
+        if name.contains('.') {
+            // 分割模块名和类型名: "gui.Window" -> ("gui", "Window")
+            let parts: Vec<&str> = name.split('.').collect();
+            if parts.len() == 2 {
+                let module = parts[0];
+                let type_name = parts[1];
+                // 检查是否是已知模块
+                if self.modules.contains_key(module) {
+                    return format!("@{}_{}", module, type_name);
+                }
+            }
+        }
+        name.to_string()
+    }
+
+    /// 规范化 BolideType 中的类型名称
+    fn normalize_bolide_type(&self, ty: &BolideType) -> BolideType {
+        match ty {
+            BolideType::Custom(name) => BolideType::Custom(self.normalize_type_name(name)),
+            BolideType::List(inner) => BolideType::List(Box::new(self.normalize_bolide_type(inner))),
+            BolideType::Dict(k, v) => BolideType::Dict(
+                Box::new(self.normalize_bolide_type(k)),
+                Box::new(self.normalize_bolide_type(v)),
+            ),
+            BolideType::Tuple(types) => BolideType::Tuple(
+                types.iter().map(|t| self.normalize_bolide_type(t)).collect()
+            ),
+            BolideType::FuncSig(params, ret) => BolideType::FuncSig(
+                params.iter().map(|t| self.normalize_bolide_type(t)).collect(),
+                ret.as_ref().map(|t| Box::new(self.normalize_bolide_type(t))),
+            ),
+            BolideType::Weak(inner) => BolideType::Weak(Box::new(self.normalize_bolide_type(inner))),
+            BolideType::Unowned(inner) => BolideType::Unowned(Box::new(self.normalize_bolide_type(inner))),
+            BolideType::Channel(inner) => BolideType::Channel(Box::new(self.normalize_bolide_type(inner))),
+            _ => ty.clone(),
+        }
+    }
+
+    /// 获取类信息，自动处理模块限定名
+    fn get_class(&self, name: &str) -> Option<&ClassInfo> {
+        // 首先尝试直接查找
+        if let Some(info) = self.classes.get(name) {
+            return Some(info);
+        }
+        // 尝试规范化后查找
+        let normalized = self.normalize_type_name(name);
+        if normalized != name {
+            return self.classes.get(&normalized);
+        }
+        None
+    }
+
+    /// 获取类信息的可克隆版本
+    fn get_class_cloned(&self, name: &str) -> Option<ClassInfo> {
+        self.get_class(name).cloned()
+    }
     /// 注册内置函数
     fn register_builtins(&mut self) -> Result<(), String> {
         let ptr = self.ptr_type;
@@ -1187,6 +1534,13 @@ impl JitCompiler {
         let id = self.module.declare_function("string_literal", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
         self.functions.insert("string_literal".to_string(), id);
 
+        // bolide_string_new(ptr) -> ptr  (char* -> BolideString*)
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(ptr));
+        sig.returns.push(AbiParam::new(ptr));
+        let id = self.module.declare_function("bolide_string_new", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        self.functions.insert("bolide_string_new".to_string(), id);
+
         // string_as_cstr(ptr) -> ptr  (BolideString* -> char*)
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
@@ -1694,6 +2048,9 @@ impl JitCompiler {
         // 创建编译上下文
         let mut compile_ctx = CompileContext::new(
             &mut builder,
+            &mut self.module,
+            &self.global_data_ids,
+            &self.global_var_types,
             func_refs,
             func_return_types,
             func_params,
@@ -1715,7 +2072,7 @@ impl JitCompiler {
 
         for (i, param) in func.params.iter().enumerate() {
             // 记录参数的 Bolide 类型
-            compile_ctx.var_types.insert(param.name.clone(), param.ty.clone());
+            compile_ctx.var_types.insert(param.name.clone(), compile_ctx.normalize_bolide_type(&param.ty));
 
             match param.mode {
                 ParamMode::Borrow => {
@@ -2347,6 +2704,9 @@ impl Default for JitCompiler {
 /// 编译上下文，用于在编译过程中跟踪变量等状态
 struct CompileContext<'a, 'b> {
     builder: &'a mut FunctionBuilder<'b>,
+    module: &'a mut JITModule,
+    global_data_ids: &'a HashMap<String, cranelift_module::DataId>,
+    global_var_types: &'a HashMap<String, BolideType>,
     func_refs: HashMap<String, FuncRef>,
     variables: HashMap<String, Variable>,
     /// 变量的 Bolide 类型（用于类型推断）
@@ -2405,6 +2765,9 @@ struct CompileContext<'a, 'b> {
 impl<'a, 'b> CompileContext<'a, 'b> {
     fn new(
         builder: &'a mut FunctionBuilder<'b>,
+        module: &'a mut JITModule,
+        global_data_ids: &'a HashMap<String, cranelift_module::DataId>,
+        global_var_types: &'a HashMap<String, BolideType>,
         func_refs: HashMap<String, FuncRef>,
         func_return_types: HashMap<String, Option<BolideType>>,
         func_params: HashMap<String, Vec<Param>>,
@@ -2422,6 +2785,9 @@ impl<'a, 'b> CompileContext<'a, 'b> {
     ) -> Self {
         Self {
             builder,
+            module,
+            global_data_ids,
+            global_var_types,
             func_refs,
             variables: HashMap::new(),
             var_types: HashMap::new(),
@@ -2450,6 +2816,44 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             var_scope_depth: HashMap::new(),
             borrowed_vars: HashMap::new(),
             weak_variables: HashSet::new(),
+        }
+    }
+
+    /// 规范化类型名称
+    fn normalize_type_name(&self, name: &str) -> String {
+        if name.contains('.') {
+            let parts: Vec<&str> = name.split('.').collect();
+            if parts.len() == 2 {
+                let module = parts[0];
+                let type_name = parts[1];
+                if self.modules.contains_key(module) {
+                    return format!("@{}_{}", module, type_name);
+                }
+            }
+        }
+        name.to_string()
+    }
+
+    /// 规范化 BolideType 中的类型名称
+    fn normalize_bolide_type(&self, ty: &BolideType) -> BolideType {
+        match ty {
+            BolideType::Custom(name) => BolideType::Custom(self.normalize_type_name(name)),
+            BolideType::List(inner) => BolideType::List(Box::new(self.normalize_bolide_type(inner))),
+            BolideType::Dict(k, v) => BolideType::Dict(
+                Box::new(self.normalize_bolide_type(k)),
+                Box::new(self.normalize_bolide_type(v)),
+            ),
+            BolideType::Tuple(types) => BolideType::Tuple(
+                types.iter().map(|t| self.normalize_bolide_type(t)).collect()
+            ),
+            BolideType::FuncSig(params, ret) => BolideType::FuncSig(
+                params.iter().map(|t| self.normalize_bolide_type(t)).collect(),
+                ret.as_ref().map(|t| Box::new(self.normalize_bolide_type(t))),
+            ),
+            BolideType::Weak(inner) => BolideType::Weak(Box::new(self.normalize_bolide_type(inner))),
+            BolideType::Unowned(inner) => BolideType::Unowned(Box::new(self.normalize_bolide_type(inner))),
+            BolideType::Channel(inner) => BolideType::Channel(Box::new(self.normalize_bolide_type(inner))),
+            _ => ty.clone(),
         }
     }
 
@@ -2936,68 +3340,85 @@ impl<'a, 'b> CompileContext<'a, 'b> {
 
     /// 编译变量赋值
     fn compile_var_assign(&mut self, var_name: &str, value: &Expr) -> Result<(), String> {
-        let var = *self.variables.get(var_name)
-            .ok_or_else(|| format!("Undefined variable: {}", var_name))?;
+        // 首先检查是否是局部变量
+        if let Some(&var) = self.variables.get(var_name) {
+            // 局部变量赋值（原有逻辑）
+            // 检查是否是 Ref 参数
+            let is_ref_param = self.ref_params.iter().any(|(name, _, _)| name == var_name);
+            // 检查 Ref 参数是否已经被重新赋值过
+            let was_reassigned = self.ref_params_reassigned.contains(var_name);
 
-        // 检查是否是 Ref 参数
-        let is_ref_param = self.ref_params.iter().any(|(name, _, _)| name == var_name);
-        // 检查 Ref 参数是否已经被重新赋值过
-        let was_reassigned = self.ref_params_reassigned.contains(var_name);
+            // 决定是否释放旧值
+            let should_release = !is_ref_param || was_reassigned;
 
-        // 决定是否释放旧值
-        let should_release = !is_ref_param || was_reassigned;
-
-        let var_ty = self.var_types.get(var_name).cloned();
-        if let Some(ref ty) = var_ty {
-            if Self::is_rc_type(ty) && should_release {
-                let old_val = self.builder.use_var(var);
-                self.emit_release(old_val, ty);
+            let var_ty = self.var_types.get(var_name).cloned();
+            if let Some(ref ty) = var_ty {
+                if Self::is_rc_type(ty) && should_release {
+                    let old_val = self.builder.use_var(var);
+                    self.emit_release(old_val, ty);
+                }
             }
-        }
 
-        // 如果是 Ref 参数的首次赋值，标记为已重新赋值
-        if is_ref_param && !was_reassigned {
-            self.ref_params_reassigned.insert(var_name.to_string());
-        }
+            // 如果是 Ref 参数的首次赋值，标记为已重新赋值
+            if is_ref_param && !was_reassigned {
+                self.ref_params_reassigned.insert(var_name.to_string());
+            }
 
-        let val = self.compile_expr(value)?;
+            let val = self.compile_expr(value)?;
 
-        // 如果是 RC 类型，需要处理引用计数
-        if let Some(ref ty) = var_ty {
-            if Self::is_rc_type(ty) {
-                let is_temp = self.temp_rc_values.iter().any(|(v, _)| *v == val);
-                if is_temp {
-                    self.remove_temp_rc_value(val);
-                    self.builder.def_var(var, val);
-                } else {
-                    let clone_func_name = Self::get_clone_func_name(ty);
-                    if let Some(func_name) = clone_func_name {
-                        if let Some(&func_ref) = self.func_refs.get(func_name) {
-                            let call = self.builder.ins().call(func_ref, &[val]);
-                            let cloned_val = self.builder.inst_results(call)[0];
-                            self.builder.def_var(var, cloned_val);
+            // 如果是 RC 类型，需要处理引用计数
+            if let Some(ref ty) = var_ty {
+                if Self::is_rc_type(ty) {
+                    let is_temp = self.temp_rc_values.iter().any(|(v, _)| *v == val);
+                    if is_temp {
+                        self.remove_temp_rc_value(val);
+                        self.builder.def_var(var, val);
+                    } else {
+                        let clone_func_name = Self::get_clone_func_name(ty);
+                        if let Some(func_name) = clone_func_name {
+                            if let Some(&func_ref) = self.func_refs.get(func_name) {
+                                let call = self.builder.ins().call(func_ref, &[val]);
+                                let cloned_val = self.builder.inst_results(call)[0];
+                                self.builder.def_var(var, cloned_val);
+                            } else {
+                                self.builder.def_var(var, val);
+                            }
                         } else {
                             self.builder.def_var(var, val);
                         }
-                    } else {
-                        self.builder.def_var(var, val);
                     }
+                } else {
+                    self.builder.def_var(var, val);
                 }
             } else {
                 self.builder.def_var(var, val);
             }
-        } else {
-            self.builder.def_var(var, val);
-        }
 
-        // 调用者端借用检查：记录借用关系
-        if self.is_lifetime_func_call(value) {
-            if let Some(source_var) = self.get_lifetime_call_source(value) {
-                self.record_borrow(var_name, &source_var);
+            // 调用者端借用检查：记录借用关系
+            if self.is_lifetime_func_call(value) {
+                if let Some(source_var) = self.get_lifetime_call_source(value) {
+                    self.record_borrow(var_name, &source_var);
+                }
             }
+
+            return Ok(());
         }
 
-        Ok(())
+        // 检查是否是全局变量
+        if let Some(&data_id) = self.global_data_ids.get(var_name) {
+            let val = self.compile_expr(value)?;
+            
+            // 获取全局变量的地址
+            let gv = self.module.declare_data_in_func(data_id, self.builder.func);
+            let addr = self.builder.ins().global_value(self.ptr_type, gv);
+            
+            // 存储值到全局变量
+            self.builder.ins().store(MemFlags::new(), val, addr, 0);
+            
+            return Ok(());
+        }
+
+        Err(format!("Undefined variable: {}", var_name))
     }
     fn compile_member_assign(&mut self, base: &Expr, member: &str, value: &Expr) -> Result<(), String> {
         // 获取基础表达式的类型
@@ -3069,8 +3490,17 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             BolideType::Int
         };
 
-        // 记录变量的 Bolide 类型
-        self.var_types.insert(decl.name.clone(), bolide_ty.clone());
+        // 检查是否是全局变量
+        if self.global_data_ids.contains_key(&decl.name) {
+            // 全局变量不需要创建局部变量，直接编译初始化赋值
+            if let Some(ref val) = decl.value {
+                self.compile_var_assign(&decl.name, val)?;
+            }
+            return Ok(());
+        }
+
+        // 记录局部变量的 Bolide 类型（需要规范化类型名称）
+        self.var_types.insert(decl.name.clone(), self.normalize_bolide_type(&bolide_ty));
 
         // 记录变量的作用域深度
         self.record_var_scope(&decl.name);
@@ -3985,6 +4415,16 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             return Ok(val);
         }
 
+        // 检查是否是全局变量
+        if let Some(&data_id) = self.global_data_ids.get(name) {
+            // 获取全局变量的地址
+            let gv = self.module.declare_data_in_func(data_id, self.builder.func);
+            let addr = self.builder.ins().global_value(self.ptr_type, gv);
+            // 从地址加载值
+            let val = self.builder.ins().load(self.ptr_type, MemFlags::new(), addr, 0);
+            return Ok(val);
+        }
+
         // 如果不是变量，检查是否是函数名（支持函数作为值）
         if let Some(&func_ref) = self.func_refs.get(name) {
             // 返回函数指针
@@ -4781,8 +5221,15 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             Expr::Spawn(_, _) => BolideType::Future,
             Expr::Recv(_) => BolideType::Int,
             Expr::Ident(name) => {
-                // 查找变量类型
-                self.var_types.get(name).cloned().unwrap_or(BolideType::Int)
+                // 查找局部变量类型
+                if let Some(ty) = self.var_types.get(name) {
+                    return ty.clone();
+                }
+                // 查找全局变量类型
+                if let Some(ty) = self.global_var_types.get(name) {
+                    return ty.clone();
+                }
+                BolideType::Int
             }
             Expr::BinOp(left, op, right) => {
                 let left_ty = self.infer_expr_type(left);
@@ -6014,6 +6461,24 @@ impl<'a, 'b> CompileContext<'a, 'b> {
 
     /// 编译成员访问 (obj.field)
     fn compile_member_access(&mut self, base: &Expr, member: &str) -> Result<Value, String> {
+        // 特殊处理模块成员访问
+        if let Expr::Ident(name) = base {
+            // 检查是否是模块名
+            if self.modules.contains_key(name) {
+                let global_name = format!("@{}_{}", name, member);
+                if let Some(&data_id) = self.global_data_ids.get(&global_name) {
+                    // 获取全局变量的地址
+                    let gv = self.module.declare_data_in_func(data_id, self.builder.func);
+                    let addr = self.builder.ins().global_value(self.ptr_type, gv);
+                    // 从地址加载值
+                    let val = self.builder.ins().load(self.ptr_type, MemFlags::new(), addr, 0);
+                    return Ok(val);
+                } else {
+                     return Err(format!("DEBUG: Global not found: {}, in module: {}, keys: {:?}, modules: {:?}", global_name, name, self.global_data_ids.keys().take(10).collect::<Vec<_>>(), self.modules.keys().collect::<Vec<_>>()));
+                }
+            }
+        }
+
         let base_type = self.get_expr_type(base)?;
         // 处理 Weak/Unowned 类型，提取内部的 Custom 类型
         let class_name = match &base_type {
@@ -6055,9 +6520,13 @@ impl<'a, 'b> CompileContext<'a, 'b> {
     fn get_expr_type(&self, expr: &Expr) -> Result<BolideType, String> {
         match expr {
             Expr::Ident(name) => {
-                self.var_types.get(name)
-                    .cloned()
-                    .ok_or_else(|| format!("Unknown variable type: {}", name))
+                if let Some(ty) = self.var_types.get(name) {
+                    return Ok(ty.clone());
+                }
+                if let Some(ty) = self.global_var_types.get(name) {
+                    return Ok(ty.clone());
+                }
+                Err(format!("Unknown variable type: {}", name))
             }
             Expr::Call(callee, _) => {
                 if let Expr::Ident(func_name) = callee.as_ref() {
@@ -6073,6 +6542,17 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                 }
             }
             Expr::Member(base, member) => {
+                // 特殊处理模块成员访问
+                if let Expr::Ident(name) = base.as_ref() {
+                    // 检查是否是模块名
+                    if self.modules.contains_key(name) {
+                        let global_name = format!("@{}_{}", name, member);
+                        if let Some(ty) = self.global_var_types.get(&global_name) {
+                            return Ok(ty.clone());
+                        }
+                    }
+                }
+
                 let base_type = self.get_expr_type(base)?;
                 // 处理 Weak/Unowned 类型，提取内部的 Custom 类型
                 let class_name = match &base_type {
@@ -6097,7 +6577,7 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                     .ok_or_else(|| format!("Class not found: {}", class_name))?;
                 let field = class_info.fields.iter()
                     .find(|f| f.name == *member)
-                    .ok_or_else(|| format!("Field not found: {}", member))?;
+                    .ok_or_else(|| format!("Field '{}' not found in class '{}'", member, class_name))?;
                 Ok(field.ty.clone())
             }
             _ => Err("Cannot determine expression type".to_string()),
@@ -6429,7 +6909,7 @@ impl<'a, 'b> CompileContext<'a, 'b> {
     /// 在继承链中查找方法
 
     fn find_method(&self, class_name: &str, method_name: &str) -> Result<String, String> {
-        let mut current = class_name.to_string();
+        let mut current = self.normalize_type_name(class_name);
         loop {
             let full_name = format!("{}_{}", current, method_name);
             if self.func_refs.contains_key(&full_name) {
@@ -6624,6 +7104,20 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             // 转换返回值类型到 Bolide 类型
             let result = results[0];
             let result_ty = self.builder.func.dfg.value_type(result);
+
+            // 检查返回类型是否是 *char，需要转换为 BolideString*
+            if let Some(ref ret_ty) = extern_func.return_type {
+                if let bolide_parser::CType::Ptr(inner) = ret_ty {
+                    if matches!(inner.as_ref(), bolide_parser::CType::Char) {
+                        // 返回类型是 *char，需要转换为 BolideString*
+                        let string_new_ref = *self.func_refs.get("bolide_string_new")
+                            .ok_or("bolide_string_new not found")?;
+                        let call = self.builder.ins().call(string_new_ref, &[result]);
+                        let bolide_string = self.builder.inst_results(call)[0];
+                        return Ok(bolide_string);
+                    }
+                }
+            }
 
             // 如果是 I32，扩展到 I64
             if result_ty == types::I32 {

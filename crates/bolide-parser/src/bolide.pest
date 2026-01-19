@@ -177,7 +177,8 @@ bigint_lit = @{ ASCII_DIGIT+ ~ ("B" | "b") }
 decimal_lit = @{ ASCII_DIGIT+ ~ ("." ~ ASCII_DIGIT+)? ~ ("D" | "d") }
 
 // 普通字面量
-int_lit = @{ ASCII_DIGIT+ }
+hex_lit = @{ "0x" ~ ASCII_HEX_DIGIT+ }
+int_lit = @{ hex_lit | ASCII_DIGIT+ }
 float_lit = @{ ASCII_DIGIT+ ~ "." ~ ASCII_DIGIT+ }
 string_lit = @{ "\"" ~ (!"\"" ~ ANY)* ~ "\"" }
 bool_lit = { "true" | "false" }
@@ -192,7 +193,9 @@ dict_type = { "dict" ~ "<" ~ type_expr ~ "," ~ type_expr ~ ">" }
 channel_type = { "channel" ~ "<" ~ type_expr ~ ">" }
 func_type = { "func" ~ "(" ~ func_type_params? ~ ")" ~ ("->" ~ type_expr)? }
 func_type_params = { type_expr ~ ("," ~ type_expr)* }
-basic_type = { "int" | "float" | "bool" | "str" | "bigint" | "decimal" | "dynamic" | "ptr" | "future" | ident }
+// 支持模块限定类型: module.ClassName
+qualified_type = { ident ~ ("." ~ ident)+ }
+basic_type = { "int" | "float" | "bool" | "str" | "bigint" | "decimal" | "dynamic" | "ptr" | "future" | qualified_type | ident }
 
 // 标识符
 ident = @{ !keyword ~ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
