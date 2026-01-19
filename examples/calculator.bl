@@ -15,7 +15,7 @@ let expr_str: str = "0"; // 全局算式字符串
 let win: gui.Window = gui.Window(0);
 let display: gui.Label = gui.Label(0);
 
-// 更新显示 - 直接使用全局字符串变量
+// 更新显示
 fn update_display() {
     display.set_text(expr_str);
 }
@@ -213,7 +213,7 @@ fn on_clear() {
 
 fn on_neg() {
     current = 0 - current;
-    // 重建显示字符串有点麻烦，这里简化为只显示当前值
+    // 显示当前值
     expr_str = str(current); 
     update_display();
 }
@@ -223,13 +223,13 @@ fn on_neg() {
 // ============================================================
 
 gui.init();
-win = gui.window("Bolide 计算器 (Fixed)", 300, 400);
+win = gui.window("Bolide 计算器", 300, 400);
 win.center();
 
 // 显示区域
 display = gui.label(win, "0", 15, 15, 270, 60);
 
-// 按钮布局 (保持固定布局，因为更适合计算器界面)
+// 按钮布局 (固定布局，Grid有点问题)
 let bw: int = 65;
 let bh: int = 50;
 let margin: int = 15;
@@ -268,5 +268,5 @@ let y5: int = start_y + 4 * (bh + spacing);
 let b0: gui.Button = gui.button(win, "0", margin, y5, bw * 2 + spacing, bh); b0.on_click(on_0);
 let b00: gui.Button = gui.button(win, "00", margin + 2 * (bw + spacing), y5, bw * 2 + spacing, bh); b00.on_click(on_0);
 
-print("Bolide 计算器已启动 (Fixed)！");
+print("Bolide 计算器已启动！");
 gui.run();
