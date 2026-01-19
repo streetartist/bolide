@@ -19,6 +19,10 @@
   </a>
 </p>
 
+<p align="center">
+  <img src="./calculator.png" alt="Bolide GUI Calculator" width="300">
+</p>
+
 ---
 
 **Bolide** 是一门现代化编程语言，基于 **Cranelift** 实现 JIT/AOT 编译，兼具简洁语法与原生性能。
