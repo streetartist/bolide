@@ -86,6 +86,39 @@ typedef struct {
 static CanvasData g_canvas[MAX_CANVAS];
 static int g_canvas_count = 0;
 
+// 菜单回调
+#define MAX_MENU_CALLBACKS 128
+typedef struct {
+    int id;
+    void (*callback)(void);
+} MenuCallback;
+
+static MenuCallback g_menu_callbacks[MAX_MENU_CALLBACKS];
+static int g_menu_callback_count = 0;
+static int g_menu_id = 10000;
+
+// 布局管理器
+typedef enum {
+    LAYOUT_VBOX,    // 垂直布局
+    LAYOUT_HBOX,    // 水平布局
+    LAYOUT_GRID     // 网格布局
+} LayoutType;
+
+#define MAX_LAYOUT_CHILDREN 64
+typedef struct {
+    HWND parent;
+    LayoutType type;
+    int margin;      // 外边距
+    int spacing;     // 子控件间距
+    int grid_cols;   // 网格列数（仅用于 GRID）
+    HWND children[MAX_LAYOUT_CHILDREN];
+    int child_count;
+} Layout;
+
+#define MAX_LAYOUTS 32
+static Layout g_layouts[MAX_LAYOUTS];
+static int g_layout_count = 0;
+
 // ============================================================
 // 工具函数
 // ============================================================
@@ -219,9 +252,20 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         case WM_COMMAND: {
             HWND ctrl = (HWND)lParam;
             int code = HIWORD(wParam);
-            
+            int id = LOWORD(wParam);
+
+            // 菜单项点击 (lParam == 0 表示来自菜单)
+            if (lParam == 0) {
+                // 查找菜单回调
+                for (int i = 0; i < g_menu_callback_count; i++) {
+                    if (g_menu_callbacks[i].id == id && g_menu_callbacks[i].callback) {
+                        g_menu_callbacks[i].callback();
+                        break;
+                    }
+                }
+            }
             // 按钮点击
-            if (code == BN_CLICKED) {
+            else if (code == BN_CLICKED) {
                 void (*cb)(void) = (void (*)(void))find_callback(ctrl, CB_CLICK);
                 if (cb) cb();
             }
@@ -265,6 +309,13 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 cb(LOWORD(lParam), HIWORD(lParam));
             }
             break;
+        }
+        case WM_CTLCOLORSTATIC: {
+            // 设置标签控件背景色为窗口背景色
+            HDC hdcStatic = (HDC)wParam;
+            SetBkMode(hdcStatic, OPAQUE);
+            SetBkColor(hdcStatic, GetSysColor(COLOR_WINDOW));
+            return (LRESULT)GetSysColorBrush(COLOR_WINDOW);
         }
         case WM_CLOSE: {
             int (*cb)(void) = (int (*)(void))find_callback(hwnd, CB_CLOSE);
@@ -405,37 +456,42 @@ GUI_API void gui_quit(void) {
 
 GUI_API void* gui_window(const char* title, int width, int height) {
     wchar_t* wtitle = utf8_to_utf16(title);
-    
+
     // 获取系统 DPI 进行缩放
     HDC hdc = GetDC(NULL);
     int dpi = GetDeviceCaps(hdc, LOGPIXELSX);
     ReleaseDC(NULL, hdc);
-    
+
     int scaledWidth = MulDiv(width, dpi, 96);
     int scaledHeight = MulDiv(height, dpi, 96);
-    
+
+    // 计算窗口大小（包括边框和标题栏）
+    RECT rect = {0, 0, scaledWidth, scaledHeight};
+    AdjustWindowRect(&rect, WS_OVERLAPPEDWINDOW, FALSE);
+
     HWND hwnd = CreateWindowExW(
         0,
         L"BolideWindow", wtitle,
         WS_OVERLAPPEDWINDOW,
         CW_USEDEFAULT, CW_USEDEFAULT,
-        scaledWidth, scaledHeight,
+        rect.right - rect.left,
+        rect.bottom - rect.top,
         NULL, NULL, g_hInstance, NULL
     );
-    
+
     free(wtitle);
-    
+
     if (g_main_window == NULL) {
         g_main_window = hwnd;
     }
-    
+
     // 更新字体为当前 DPI
     if (g_hFont) DeleteObject(g_hFont);
     g_hFont = create_scaled_font(dpi);
-    
+
     ShowWindow(hwnd, SW_SHOW);
     UpdateWindow(hwnd);
-    
+
     return hwnd;
 }
 
@@ -749,6 +805,26 @@ GUI_API void gui_set_text(void* handle, const char* text) {
     wchar_t* wtext = utf8_to_utf16(text);
     SetWindowTextW((HWND)handle, wtext);
     free(wtext);
+
+    // 获取父窗口并重绘该控件区域
+    HWND parent = GetParent((HWND)handle);
+    if (parent) {
+        RECT rect;
+        GetWindowRect((HWND)handle, &rect);
+        POINT pt = {rect.left, rect.top};
+        ScreenToClient(parent, &pt);
+        rect.right = rect.right - rect.left;
+        rect.bottom = rect.bottom - rect.top;
+        rect.left = pt.x;
+        rect.top = pt.y;
+        rect.right += pt.x;
+        rect.bottom += pt.y;
+        InvalidateRect(parent, &rect, TRUE);
+    }
+
+    // 同时重绘控件本身
+    InvalidateRect((HWND)handle, NULL, TRUE);
+    UpdateWindow((HWND)handle);
 }
 
 GUI_API void gui_enable(void* handle, int enabled) {
@@ -1036,20 +1112,28 @@ GUI_API int gui_color_picker(void* parent, int initial_color) {
 // 菜单
 // ============================================================
 
-static int g_menu_id = 10000;
-
-typedef struct {
-    int id;
-    void (*callback)(void);
-} MenuCallback;
-
-#define MAX_MENU_CALLBACKS 128
-static MenuCallback g_menu_callbacks[MAX_MENU_CALLBACKS];
-static int g_menu_callback_count = 0;
-
 GUI_API void* gui_menubar(void* window) {
     HMENU menubar = CreateMenu();
     SetMenu((HWND)window, menubar);
+
+    // 设置菜单后需要重新计算窗口大小以容纳菜单栏
+    RECT rect;
+    GetClientRect((HWND)window, &rect);
+    int clientWidth = rect.right - rect.left;
+    int clientHeight = rect.bottom - rect.top;
+
+    // 重新调整窗口大小以保持客户区大小不变
+    rect.left = 0;
+    rect.top = 0;
+    rect.right = clientWidth;
+    rect.bottom = clientHeight;
+    AdjustWindowRect(&rect, GetWindowLong((HWND)window, GWL_STYLE), TRUE);
+
+    SetWindowPos((HWND)window, NULL, 0, 0,
+                 rect.right - rect.left,
+                 rect.bottom - rect.top,
+                 SWP_NOMOVE | SWP_NOZORDER);
+
     return menubar;
 }
 
@@ -1057,7 +1141,13 @@ GUI_API void* gui_menu(void* menubar, const char* text) {
     wchar_t* wtext = utf8_to_utf16(text);
     HMENU menu = CreatePopupMenu();
     AppendMenuW((HMENU)menubar, MF_POPUP, (UINT_PTR)menu, wtext);
-    DrawMenuBar(GetParent((HWND)menubar));
+
+    // 获取窗口句柄并刷新菜单栏
+    HWND hwnd = g_main_window;
+    if (hwnd) {
+        DrawMenuBar(hwnd);
+    }
+
     free(wtext);
     return menu;
 }
@@ -1157,6 +1247,145 @@ GUI_API void gui_on_close(void* handle, int (*callback)(void)) {
 
 GUI_API void gui_on_resize(void* handle, void (*callback)(int, int)) {
     register_callback((HWND)handle, CB_RESIZE, (void*)callback);
+}
+
+// ============================================================
+// 布局管理器 - 辅助函数
+// ============================================================
+
+static Layout* find_layout(HWND parent) {
+    for (int i = 0; i < g_layout_count; i++) {
+        if (g_layouts[i].parent == parent) {
+            return &g_layouts[i];
+        }
+    }
+    return NULL;
+}
+
+static void apply_layout(Layout* layout) {
+    if (!layout || layout->child_count == 0) return;
+
+    RECT rect;
+    GetClientRect(layout->parent, &rect);
+    int width = rect.right - rect.left;
+    int height = rect.bottom - rect.top;
+
+    int content_width = width - 2 * layout->margin;
+    int content_height = height - 2 * layout->margin;
+
+    if (layout->type == LAYOUT_VBOX) {
+        // 垂直布局
+        int total_spacing = (layout->child_count - 1) * layout->spacing;
+        int child_height = (content_height - total_spacing) / layout->child_count;
+        int y = layout->margin;
+
+        for (int i = 0; i < layout->child_count; i++) {
+            SetWindowPos(layout->children[i], NULL,
+                        layout->margin, y,
+                        content_width, child_height,
+                        SWP_NOZORDER);
+            y += child_height + layout->spacing;
+        }
+    }
+    else if (layout->type == LAYOUT_HBOX) {
+        // 水平布局
+        int total_spacing = (layout->child_count - 1) * layout->spacing;
+        int child_width = (content_width - total_spacing) / layout->child_count;
+        int x = layout->margin;
+
+        for (int i = 0; i < layout->child_count; i++) {
+            SetWindowPos(layout->children[i], NULL,
+                        x, layout->margin,
+                        child_width, content_height,
+                        SWP_NOZORDER);
+            x += child_width + layout->spacing;
+        }
+    }
+    else if (layout->type == LAYOUT_GRID) {
+        // 网格布局
+        int cols = layout->grid_cols;
+        if (cols <= 0) cols = 1;
+        int rows = (layout->child_count + cols - 1) / cols;
+
+        int total_h_spacing = (cols - 1) * layout->spacing;
+        int total_v_spacing = (rows - 1) * layout->spacing;
+        int cell_width = (content_width - total_h_spacing) / cols;
+        int cell_height = (content_height - total_v_spacing) / rows;
+
+        for (int i = 0; i < layout->child_count; i++) {
+            int row = i / cols;
+            int col = i % cols;
+            int x = layout->margin + col * (cell_width + layout->spacing);
+            int y = layout->margin + row * (cell_height + layout->spacing);
+
+            SetWindowPos(layout->children[i], NULL,
+                        x, y, cell_width, cell_height,
+                        SWP_NOZORDER);
+        }
+    }
+}
+
+// ============================================================
+// 布局管理器 - API 函数
+// ============================================================
+
+// 创建垂直布局
+GUI_API void* gui_vbox(void* parent, int margin, int spacing) {
+    if (g_layout_count >= MAX_LAYOUTS) return NULL;
+
+    Layout* layout = &g_layouts[g_layout_count++];
+    layout->parent = (HWND)parent;
+    layout->type = LAYOUT_VBOX;
+    layout->margin = margin;
+    layout->spacing = spacing;
+    layout->grid_cols = 0;
+    layout->child_count = 0;
+
+    return layout;
+}
+
+// 创建水平布局
+GUI_API void* gui_hbox(void* parent, int margin, int spacing) {
+    if (g_layout_count >= MAX_LAYOUTS) return NULL;
+
+    Layout* layout = &g_layouts[g_layout_count++];
+    layout->parent = (HWND)parent;
+    layout->type = LAYOUT_HBOX;
+    layout->margin = margin;
+    layout->spacing = spacing;
+    layout->grid_cols = 0;
+    layout->child_count = 0;
+
+    return layout;
+}
+
+// 创建网格布局
+GUI_API void* gui_grid(void* parent, int cols, int margin, int spacing) {
+    if (g_layout_count >= MAX_LAYOUTS) return NULL;
+
+    Layout* layout = &g_layouts[g_layout_count++];
+    layout->parent = (HWND)parent;
+    layout->type = LAYOUT_GRID;
+    layout->margin = margin;
+    layout->spacing = spacing;
+    layout->grid_cols = cols;
+    layout->child_count = 0;
+
+    return layout;
+}
+
+// 添加子控件到布局
+GUI_API void gui_layout_add(void* layout_ptr, void* child) {
+    Layout* layout = (Layout*)layout_ptr;
+    if (!layout || layout->child_count >= MAX_LAYOUT_CHILDREN) return;
+
+    layout->children[layout->child_count++] = (HWND)child;
+    apply_layout(layout);
+}
+
+// 应用布局（手动触发）
+GUI_API void gui_layout_apply(void* layout_ptr) {
+    apply_layout((Layout*)layout_ptr);
 }
 
 #endif // _WIN32

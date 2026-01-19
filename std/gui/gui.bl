@@ -114,6 +114,13 @@ extern "std/gui/gui.dll" {
     fn gui_save_file(parent: *void, filter: *char, title: *char) -> *char;
     fn gui_select_folder(parent: *void, title: *char) -> *char;
     fn gui_color_picker(parent: *void, initial_color: c_int) -> c_int;
+
+    // 布局管理器
+    fn gui_vbox(parent: *void, margin: c_int, spacing: c_int) -> *void;
+    fn gui_hbox(parent: *void, margin: c_int, spacing: c_int) -> *void;
+    fn gui_grid(parent: *void, cols: c_int, margin: c_int, spacing: c_int) -> *void;
+    fn gui_layout_add(layout: *void, child: *void);
+    fn gui_layout_apply(layout: *void);
 }
 
 // ============================================================
@@ -761,3 +768,63 @@ fn select_folder(parent: Window, title: str) -> str {
 fn color_picker(parent: Window, initial_color: int) -> int {
     return gui_color_picker(parent.handle, initial_color);
 }
+
+// ============================================================
+// 布局管理器类 / Layout Manager Classes
+// ============================================================
+
+// 垂直布局类
+class VBox {
+    handle: ptr;
+
+    fn add(child: ptr) {
+        gui_layout_add(self.handle, child);
+    }
+
+    fn apply() {
+        gui_layout_apply(self.handle);
+    }
+}
+
+// 水平布局类
+class HBox {
+    handle: ptr;
+
+    fn add(child: ptr) {
+        gui_layout_add(self.handle, child);
+    }
+
+    fn apply() {
+        gui_layout_apply(self.handle);
+    }
+}
+
+// 网格布局类
+class Grid {
+    handle: ptr;
+
+    fn add(child: ptr) {
+        gui_layout_add(self.handle, child);
+    }
+
+    fn apply() {
+        gui_layout_apply(self.handle);
+    }
+}
+
+// 布局构造函数
+fn vbox(parent: Window, margin: int, spacing: int) -> VBox {
+    let handle: ptr = gui_vbox(parent.handle, margin, spacing);
+    return VBox(handle);
+}
+
+fn hbox(parent: Window, margin: int, spacing: int) -> HBox {
+    let handle: ptr = gui_hbox(parent.handle, margin, spacing);
+    return HBox(handle);
+}
+
+fn grid(parent: Window, cols: int, margin: int, spacing: int) -> Grid {
+    let handle: ptr = gui_grid(parent.handle, cols, margin, spacing);
+    return Grid(handle);
+}
+
