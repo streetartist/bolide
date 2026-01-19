@@ -1,0 +1,272 @@
+import "std/gui/gui.bl";
+
+// ============================================================
+// Bolide 简易计算器
+// ============================================================
+
+// 全局状态
+let result: int = 0;
+let current: int = 0;
+let op: str = "";
+let new_input: bool = true;
+let expr_str: str = "0"; // 全局算式字符串
+
+// GUI 控件
+let win: gui.Window = gui.Window(0);
+let display: gui.Label = gui.Label(0);
+
+// 更新显示 - 直接使用全局字符串变量
+fn update_display() {
+    display.set_text(expr_str);
+}
+
+// 执行计算
+fn do_calc() {
+    if op == "+" {
+        result = result + current;
+    } elif op == "-" {
+        result = result - current;
+    } elif op == "*" {
+        result = result * current;
+    } elif op == "/" {
+        if current != 0 {
+            result = result / current;
+        }
+    } else {
+        result = current;
+    }
+    current = result;
+}
+
+// 数字按钮回调
+fn on_0() {
+    if new_input {
+        current = 0;
+        if op == "" { expr_str = "0"; } else { expr_str = expr_str + "0"; }
+        new_input = false;
+    } else {
+        current = current * 10 + 0;
+        expr_str = expr_str + "0";
+    }
+    update_display();
+}
+
+fn on_1() {
+    if new_input {
+        current = 1;
+        if op == "" { expr_str = "1"; } else { expr_str = expr_str + "1"; }
+        new_input = false;
+    } else {
+        current = current * 10 + 1;
+        expr_str = expr_str + "1";
+    }
+    update_display();
+}
+
+fn on_2() {
+    if new_input {
+        current = 2;
+        if op == "" { expr_str = "2"; } else { expr_str = expr_str + "2"; }
+        new_input = false;
+    } else {
+        current = current * 10 + 2;
+        expr_str = expr_str + "2";
+    }
+    update_display();
+}
+
+fn on_3() {
+    if new_input {
+        current = 3;
+        if op == "" { expr_str = "3"; } else { expr_str = expr_str + "3"; }
+        new_input = false;
+    } else {
+        current = current * 10 + 3;
+        expr_str = expr_str + "3";
+    }
+    update_display();
+}
+
+fn on_4() {
+    if new_input {
+        current = 4;
+        if op == "" { expr_str = "4"; } else { expr_str = expr_str + "4"; }
+        new_input = false;
+    } else {
+        current = current * 10 + 4;
+        expr_str = expr_str + "4";
+    }
+    update_display();
+}
+
+fn on_5() {
+    if new_input {
+        current = 5;
+        if op == "" { expr_str = "5"; } else { expr_str = expr_str + "5"; }
+        new_input = false;
+    } else {
+        current = current * 10 + 5;
+        expr_str = expr_str + "5";
+    }
+    update_display();
+}
+
+fn on_6() {
+    if new_input {
+        current = 6;
+        if op == "" { expr_str = "6"; } else { expr_str = expr_str + "6"; }
+        new_input = false;
+    } else {
+        current = current * 10 + 6;
+        expr_str = expr_str + "6";
+    }
+    update_display();
+}
+
+fn on_7() {
+    if new_input {
+        current = 7;
+        if op == "" { expr_str = "7"; } else { expr_str = expr_str + "7"; }
+        new_input = false;
+    } else {
+        current = current * 10 + 7;
+        expr_str = expr_str + "7";
+    }
+    update_display();
+}
+
+fn on_8() {
+    if new_input {
+        current = 8;
+        if op == "" { expr_str = "8"; } else { expr_str = expr_str + "8"; }
+        new_input = false;
+    } else {
+        current = current * 10 + 8;
+        expr_str = expr_str + "8";
+    }
+    update_display();
+}
+
+fn on_9() {
+    if new_input {
+        current = 9;
+        if op == "" { expr_str = "9"; } else { expr_str = expr_str + "9"; }
+        new_input = false;
+    } else {
+        current = current * 10 + 9;
+        expr_str = expr_str + "9";
+    }
+    update_display();
+}
+
+// 运算符回调
+fn on_add() {
+    if op != "" { do_calc(); } else { result = current; }
+    op = "+";
+    new_input = true;
+    expr_str = expr_str + " + ";
+    update_display();
+}
+
+fn on_sub() {
+    if op != "" { do_calc(); } else { result = current; }
+    op = "-";
+    new_input = true;
+    expr_str = expr_str + " - ";
+    update_display();
+}
+
+fn on_mul() {
+    if op != "" { do_calc(); } else { result = current; }
+    op = "*";
+    new_input = true;
+    expr_str = expr_str + " * ";
+    update_display();
+}
+
+fn on_div() {
+    if op != "" { do_calc(); } else { result = current; }
+    op = "/";
+    new_input = true;
+    expr_str = expr_str + " / ";
+    update_display();
+}
+
+fn on_eq() {
+    if op != "" {
+        do_calc();
+        op = "";
+        expr_str = expr_str + " = " + str(current);
+    }
+    new_input = true;
+    update_display();
+}
+
+fn on_clear() {
+    result = 0;
+    current = 0;
+    op = "";
+    new_input = true;
+    expr_str = "0";
+    update_display();
+}
+
+fn on_neg() {
+    current = 0 - current;
+    // 重建显示字符串有点麻烦，这里简化为只显示当前值
+    expr_str = str(current); 
+    update_display();
+}
+
+// ============================================================
+// 主程序
+// ============================================================
+
+gui.init();
+win = gui.window("Bolide 计算器 (Fixed)", 300, 400);
+win.center();
+
+// 显示区域
+display = gui.label(win, "0", 15, 15, 270, 60);
+
+// 按钮布局 (保持固定布局，因为更适合计算器界面)
+let bw: int = 65;
+let bh: int = 50;
+let margin: int = 15;
+let spacing: int = 5;
+let start_y: int = 85;
+
+// 第一行: C, +/-, /, *
+let bc: gui.Button = gui.button(win, "C", margin, start_y, bw, bh); bc.on_click(on_clear);
+let bn: gui.Button = gui.button(win, "+/-", margin + bw + spacing, start_y, bw, bh); bn.on_click(on_neg);
+let bd: gui.Button = gui.button(win, "/", margin + 2 * (bw + spacing), start_y, bw, bh); bd.on_click(on_div);
+let bm: gui.Button = gui.button(win, "*", margin + 3 * (bw + spacing), start_y, bw, bh); bm.on_click(on_mul);
+
+// 第二行: 7, 8, 9, -
+let y2: int = start_y + bh + spacing;
+let b7: gui.Button = gui.button(win, "7", margin, y2, bw, bh); b7.on_click(on_7);
+let b8: gui.Button = gui.button(win, "8", margin + bw + spacing, y2, bw, bh); b8.on_click(on_8);
+let b9: gui.Button = gui.button(win, "9", margin + 2 * (bw + spacing), y2, bw, bh); b9.on_click(on_9);
+let bs: gui.Button = gui.button(win, "-", margin + 3 * (bw + spacing), y2, bw, bh); bs.on_click(on_sub);
+
+// 第三行: 4, 5, 6, +
+let y3: int = start_y + 2 * (bh + spacing);
+let b4: gui.Button = gui.button(win, "4", margin, y3, bw, bh); b4.on_click(on_4);
+let b5: gui.Button = gui.button(win, "5", margin + bw + spacing, y3, bw, bh); b5.on_click(on_5);
+let b6: gui.Button = gui.button(win, "6", margin + 2 * (bw + spacing), y3, bw, bh); b6.on_click(on_6);
+let ba: gui.Button = gui.button(win, "+", margin + 3 * (bw + spacing), y3, bw, bh); ba.on_click(on_add);
+
+// 第四行: 1, 2, 3, =
+let y4: int = start_y + 3 * (bh + spacing);
+let b1: gui.Button = gui.button(win, "1", margin, y4, bw, bh); b1.on_click(on_1);
+let b2: gui.Button = gui.button(win, "2", margin + bw + spacing, y4, bw, bh); b2.on_click(on_2);
+let b3: gui.Button = gui.button(win, "3", margin + 2 * (bw + spacing), y4, bw, bh); b3.on_click(on_3);
+let be: gui.Button = gui.button(win, "=", margin + 3 * (bw + spacing), y4, bw, bh); be.on_click(on_eq);
+
+// 第五行: 0
+let y5: int = start_y + 4 * (bh + spacing);
+let b0: gui.Button = gui.button(win, "0", margin, y5, bw * 2 + spacing, bh); b0.on_click(on_0);
+let b00: gui.Button = gui.button(win, "00", margin + 2 * (bw + spacing), y5, bw * 2 + spacing, bh); b00.on_click(on_0);
+
+print("Bolide 计算器已启动 (Fixed)！");
+gui.run();

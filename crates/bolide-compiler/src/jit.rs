@@ -3406,14 +3406,53 @@ impl<'a, 'b> CompileContext<'a, 'b> {
 
         // 检查是否是全局变量
         if let Some(&data_id) = self.global_data_ids.get(var_name) {
-            let val = self.compile_expr(value)?;
+            // 获取全局变量的类型
+            let global_ty = self.global_var_types.get(var_name).cloned();
             
             // 获取全局变量的地址
             let gv = self.module.declare_data_in_func(data_id, self.builder.func);
             let addr = self.builder.ins().global_value(self.ptr_type, gv);
             
-            // 存储值到全局变量
-            self.builder.ins().store(MemFlags::new(), val, addr, 0);
+            // 先编译新值表达式(这样可以正确读取旧值, 例如 expr = expr + "1")
+            let val = self.compile_expr(value)?;
+            
+            // 如果是 RC 类型，需要处理引用计数
+            if let Some(ref ty) = global_ty {
+                if Self::is_rc_type(ty) {
+                    let is_temp = self.temp_rc_values.iter().any(|(v, _)| *v == val);
+                    if is_temp {
+                        // 值是临时的，移除临时标记，全局变量接管所有权
+                        self.remove_temp_rc_value(val);
+                        // 释放旧值（新值已经计算完成）
+                        let old_val = self.builder.ins().load(self.ptr_type, MemFlags::new(), addr, 0);
+                        self.emit_release(old_val, ty);
+                        // 存储新值
+                        self.builder.ins().store(MemFlags::new(), val, addr, 0);
+                    } else {
+                        // 值来自另一个变量，需要 clone
+                        let clone_func_name = Self::get_clone_func_name(ty);
+                        if let Some(func_name) = clone_func_name {
+                            if let Some(&func_ref) = self.func_refs.get(func_name) {
+                                let call = self.builder.ins().call(func_ref, &[val]);
+                                let cloned_val = self.builder.inst_results(call)[0];
+                                // 释放旧值
+                                let old_val = self.builder.ins().load(self.ptr_type, MemFlags::new(), addr, 0);
+                                self.emit_release(old_val, ty);
+                                // 存储新值
+                                self.builder.ins().store(MemFlags::new(), cloned_val, addr, 0);
+                            } else {
+                                self.builder.ins().store(MemFlags::new(), val, addr, 0);
+                            }
+                        } else {
+                            self.builder.ins().store(MemFlags::new(), val, addr, 0);
+                        }
+                    }
+                } else {
+                    self.builder.ins().store(MemFlags::new(), val, addr, 0);
+                }
+            } else {
+                self.builder.ins().store(MemFlags::new(), val, addr, 0);
+            }
             
             return Ok(());
         }
