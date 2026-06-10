@@ -1210,6 +1210,14 @@ impl JitCompiler {
             .map_err(|e| format!("Declare print_float error: {}", e))?;
         self.functions.insert("@_print_float".to_string(), print_float_id);
 
+        // print_bool(int) -> void
+        let mut print_bool_sig = self.module.make_signature();
+        print_bool_sig.params.push(AbiParam::new(types::I64));
+        let print_bool_id = self.module
+            .declare_function("@_print_bool", Linkage::Import, &print_bool_sig)
+            .map_err(|e| format!("Declare print_bool error: {}", e))?;
+        self.functions.insert("@_print_bool".to_string(), print_bool_id);
+
         // print_bigint(ptr) -> void
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
@@ -2495,6 +2503,10 @@ impl JitCompiler {
             if !compile_ctx.uses_lifetime_mode() {
                 // 在隐式返回之前释放所有 RC 变量
                 compile_ctx.emit_rc_cleanup();
+                // __main__ 返回前释放全局 RC 变量（避免退出泄漏）
+                if func.name == "__main__" {
+                    compile_ctx.emit_global_rc_cleanup();
+                }
             }
 
             // 写回 Ref 参数
@@ -3591,6 +3603,42 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         }
     }
 
+    /// 释放所有全局 RC 变量（在 __main__ 返回前调用，避免退出时泄漏）
+    fn emit_global_rc_cleanup(&mut self) {
+        let ptr_type = self.ptr_type;
+        let mut to_release: Vec<(Value, BolideType, cranelift_codegen::ir::GlobalValue)> = Vec::new();
+
+        for (name, ty) in self.global_var_types.iter() {
+            if Self::is_rc_type(ty) {
+                if let Some(&data_id) = self.global_data_ids.get(name) {
+                    let gv = self.module.declare_data_in_func(data_id, self.builder.func);
+                    let addr = self.builder.ins().global_value(ptr_type, gv);
+                    let val = self.builder.ins().load(ptr_type, MemFlags::new(), addr, 0);
+                    to_release.push((val, ty.clone(), gv));
+                }
+            }
+        }
+
+        for (val, ty, gv) in to_release {
+            // 跳过 null 指针（变量未初始化或已 move）
+            let null_val = self.builder.ins().iconst(ptr_type, 0);
+            let is_null = self.builder.ins().icmp(IntCC::Equal, val, null_val);
+
+            let release_block = self.builder.create_block();
+            let skip_block = self.builder.create_block();
+
+            self.builder.ins().brif(is_null, skip_block, &[], release_block, &[]);
+
+            self.builder.switch_to_block(release_block);
+            self.builder.seal_block(release_block);
+            self.emit_release(val, &ty);
+            self.builder.ins().jump(skip_block, &[]);
+
+            self.builder.switch_to_block(skip_block);
+            self.builder.seal_block(skip_block);
+        }
+    }
+
     /// 统一的 release 辅助函数，处理递归结构（如 Tuple/Class）
     fn emit_release(&mut self, val: Value, ty: &BolideType) {
         if let BolideType::Tuple(inner_types) = ty {
@@ -4037,31 +4085,33 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         // 计算字段地址
         let field_ptr = self.builder.ins().iadd_imm(obj_ptr, field_offset as i64);
 
-        // 如果字段是 RC 类型，需要处理引用计数
+        // 如果字段是 RC 类型，先释放旧值再写入新值
+        if Self::is_rc_type(&field_ty) {
+            let old_val = self.builder.ins().load(self.ptr_type, MemFlags::new(), field_ptr, 0);
+            self.emit_release(old_val, &field_ty);
+        }
+
+        // 处理新值的引用计数
         if Self::is_rc_type(&field_ty) {
             let is_temp = self.temp_rc_values.iter().any(|(v, _)| *v == val);
             // weak/unowned 字段不接管强引用所有权
             if is_temp && !Self::is_weak_ref_type(&field_ty) {
                 // 值是临时的，移除临时标记，字段接管所有权
                 self.remove_temp_rc_value(val);
-                self.builder.ins().store(MemFlags::new(), val, field_ptr, 0);
             } else {
                 // 值来自另一个变量，需要 clone
                 if let Some(func_name) = Self::get_clone_func_name(&field_ty) {
                     if let Some(&func_ref) = self.func_refs.get(func_name) {
                         let call = self.builder.ins().call(func_ref, &[val]);
+                        // val was replaced by cloned; use cloned result for store
                         let cloned = self.builder.inst_results(call)[0];
                         self.builder.ins().store(MemFlags::new(), cloned, field_ptr, 0);
-                    } else {
-                        self.builder.ins().store(MemFlags::new(), val, field_ptr, 0);
+                        return Ok(());
                     }
-                } else {
-                    self.builder.ins().store(MemFlags::new(), val, field_ptr, 0);
                 }
             }
-        } else {
-            self.builder.ins().store(MemFlags::new(), val, field_ptr, 0);
         }
+        self.builder.ins().store(MemFlags::new(), val, field_ptr, 0);
 
         Ok(())
     }
@@ -4081,24 +4131,8 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             BolideType::Int
         };
 
-        // 检查是否是全局变量
-        // 只有顶层代码（__main__）中的 let 才操作全局变量；
-        // 函数内的同名 let 声明新的局部变量（遮蔽全局）
-        if self.current_func_name == "__main__" && self.global_data_ids.contains_key(&decl.name) {
-            // 全局变量不需要创建局部变量，直接编译初始化赋值
-            if let Some(ref val) = decl.value {
-                self.compile_var_assign(&decl.name, val)?;
-            }
-            return Ok(());
-        }
-
-        // 记录局部变量的 Bolide 类型（需要规范化类型名称）
-        self.var_types.insert(decl.name.clone(), self.normalize_bolide_type(&bolide_ty));
-
-        // 记录变量的作用域深度
-        self.record_var_scope(&decl.name);
-
         // 如果是 spawn 或异步函数调用，记录变量名 -> 函数名的映射
+        // （必须在全局变量提前返回之前记录，否则顶层 join/await 无法推断类型）
         if let Some(ref value) = decl.value {
             match value {
                 Expr::Spawn(func_name, _) => {
@@ -4115,6 +4149,23 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                 _ => {}
             }
         }
+
+        // 检查是否是全局变量
+        // 只有顶层代码（__main__）中的 let 才操作全局变量；
+        // 函数内的同名 let 声明新的局部变量（遮蔽全局）
+        if self.current_func_name == "__main__" && self.global_data_ids.contains_key(&decl.name) {
+            // 全局变量不需要创建局部变量，直接编译初始化赋值
+            if let Some(ref val) = decl.value {
+                self.compile_var_assign(&decl.name, val)?;
+            }
+            return Ok(());
+        }
+
+        // 记录局部变量的 Bolide 类型（需要规范化类型名称）
+        self.var_types.insert(decl.name.clone(), self.normalize_bolide_type(&bolide_ty));
+
+        // 记录变量的作用域深度
+        self.record_var_scope(&decl.name);
 
         // 转换为 Cranelift 类型
         let ty = self.bolide_type_to_cranelift(&bolide_ty);
@@ -4288,8 +4339,20 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                          self.remove_temp_rc_value(val);
                      } else {
                          // 如果不是临时值
-                         if return_var_name.is_some() {
-                             // 如果是变量 (Ident)，cleanup_except 会跳过它，所以不需要 retain (count 不变)
+                         if let Some(ref name) = return_var_name {
+                             // 借用（borrow/ref）参数归调用方所有，返回时必须 clone 一份
+                             // 交给调用方独立持有（否则与调用方释放路径产生悬空指针）
+                             let is_caller_owned_param = self.func_params
+                                 .get(&self.current_func_name)
+                                 .map(|ps| ps.iter().any(|p| p.name == *name
+                                     && matches!(p.mode, ParamMode::Borrow | ParamMode::Ref)))
+                                 .unwrap_or(false);
+                             if is_caller_owned_param {
+                                 if let Some(new_val) = self.emit_retain(val, &val_ty) {
+                                     final_val = new_val;
+                                 }
+                             }
+                             // 本地变量 (Ident)：cleanup_except 会跳过它，不需要 retain
                          } else {
                              // 如果是其他表达式 (如 Index, Member)，是从某个容器借用的
                              // cleanup 会释放容器，导致该值也被释放
@@ -4306,6 +4369,10 @@ impl<'a, 'b> CompileContext<'a, 'b> {
 
                 // 释放所有 RC 变量，除了返回的那个
                 self.emit_rc_cleanup_except(return_var_name.as_deref());
+                // __main__ 返回前释放全局 RC 变量
+                if self.current_func_name == "__main__" {
+                    self.emit_global_rc_cleanup();
+                }
             }
 
             // 写回 Ref 参数
@@ -4320,6 +4387,10 @@ impl<'a, 'b> CompileContext<'a, 'b> {
 
                 // 无返回值，释放所有 RC 变量
                 self.emit_rc_cleanup();
+                // __main__ 返回前释放全局 RC 变量
+                if self.current_func_name == "__main__" {
+                    self.emit_global_rc_cleanup();
+                }
             }
 
             // 写回 Ref 参数
@@ -4507,6 +4578,27 @@ impl<'a, 'b> CompileContext<'a, 'b> {
 
         self.builder.switch_to_block(exit_block);
         self.builder.seal_block(exit_block);
+
+        // 释放循环体内预声明的 RC 变量（最后一次迭代的值）
+        for (var_name, var_ty) in &loop_rc_vars {
+            if let Some(&var) = self.variables.get(var_name) {
+                let val = self.builder.use_var(var);
+                // 跳过 null（变量未初始化的情况）
+                let null_val = self.builder.ins().iconst(self.ptr_type, 0);
+                let is_null = self.builder.ins().icmp(IntCC::Equal, val, null_val);
+                let release_block = self.builder.create_block();
+                let skip_block = self.builder.create_block();
+                self.builder.ins().brif(is_null, skip_block, &[], release_block, &[]);
+                self.builder.switch_to_block(release_block);
+                self.builder.seal_block(release_block);
+                self.emit_release(val, var_ty);
+                self.builder.ins().jump(skip_block, &[]);
+                self.builder.switch_to_block(skip_block);
+                self.builder.seal_block(skip_block);
+            }
+            // 从 rc_variables 中移除（已在此处处理）
+            self.rc_variables.retain(|(n, _)| n != var_name);
+        }
 
         Ok(())
     }
@@ -5821,7 +5913,7 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         let func_name = match expr_type {
             BolideType::Int => "@_print_int",
             BolideType::Float => "@_print_float",
-            BolideType::Bool => "@_print_int",  // bool 用 int 打印
+            BolideType::Bool => "@_print_bool",
             BolideType::BigInt => "@_print_bigint",
             BolideType::Decimal => "@_print_decimal",
             BolideType::Str => "@_print_string",
@@ -5943,6 +6035,9 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                             // 查找用户定义函数的返回类型
                             if let Some(Some(ret_ty)) = self.func_return_types.get(name.as_str()) {
                                 ret_ty.clone()
+                            } else if let Some(BolideType::FuncSig(_, Some(ret))) = self.var_types.get(name.as_str()) {
+                                // 函数指针变量（间接调用）：取签名中的返回类型
+                                (**ret).clone()
                             } else {
                                 BolideType::Int
                             }
