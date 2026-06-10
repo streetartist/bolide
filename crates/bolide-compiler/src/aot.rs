@@ -74,6 +74,8 @@ pub struct AotCompiler {
     lifetime_funcs: HashSet<String>,
     /// 字符串常量数据
     string_data: HashMap<String, DataId>,
+    /// 源文件所在目录（import 相对路径的解析基准）
+    base_dir: Option<String>,
 }
 
 /// 运行时符号列表
@@ -106,6 +108,8 @@ pub const RUNTIME_SYMBOLS: &[&str] = &[
     "bolide_alloc", "bolide_free",
     // Object
     "object_alloc", "object_retain", "object_release", "object_clone",
+    "object_weak_retain", "object_weak_release", "object_weak_clone",
+    "object_assert_alive", "object_is_alive", "object_ref_count",
     // Thread
     "thread_spawn_int", "thread_spawn_float", "thread_spawn_ptr",
     "thread_spawn_int_with_env", "thread_spawn_float_with_env", "thread_spawn_ptr_with_env",
@@ -187,7 +191,13 @@ impl AotCompiler {
             modules: HashMap::new(),
             lifetime_funcs: HashSet::new(),
             string_data: HashMap::new(),
+            base_dir: None,
         })
+    }
+
+    /// 设置源文件所在目录（import 相对路径的解析基准）
+    pub fn set_base_dir(&mut self, dir: &str) {
+        self.base_dir = Some(dir.to_string());
     }
 
     /// Get or create a data object for a string literal
@@ -457,10 +467,44 @@ impl AotCompiler {
     }
 
     fn load_module(&self, file_path: &str) -> Result<Program, String> {
-        let content = std::fs::read_to_string(file_path)
-            .map_err(|e| format!("Failed to load module '{}': {}", file_path, e))?;
+        let resolved = self.resolve_import_path(file_path);
+        let content = std::fs::read_to_string(&resolved)
+            .map_err(|e| format!("Failed to load module '{}': {}", resolved, e))?;
         bolide_parser::parse_source(&content)
-            .map_err(|e| format!("Failed to parse module '{}': {}", file_path, e))
+            .map_err(|e| format!("Failed to parse module '{}': {}", resolved, e))
+    }
+
+    /// 解析 import 路径（确定性顺序，不依赖进程工作目录）：
+    /// 1. 绝对路径按原样使用
+    /// 2. 相对路径基于导入方源文件所在目录
+    /// 3. BOLIDE_HOME 环境变量（开发期指向仓库根）
+    /// 4. 可执行文件所在目录（发行版布局：std/ 与 bolide 可执行文件同级）
+    fn resolve_import_path(&self, file_path: &str) -> String {
+        let p = Path::new(file_path);
+        if p.is_absolute() {
+            return file_path.to_string();
+        }
+        if let Some(ref base) = self.base_dir {
+            let joined = Path::new(base).join(p);
+            if joined.exists() {
+                return joined.to_string_lossy().to_string();
+            }
+        }
+        if let Ok(home) = std::env::var("BOLIDE_HOME") {
+            let joined = Path::new(&home).join(p);
+            if joined.exists() {
+                return joined.to_string_lossy().to_string();
+            }
+        }
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(exe_dir) = exe.parent() {
+                let joined = exe_dir.join(p);
+                if joined.exists() {
+                    return joined.to_string_lossy().to_string();
+                }
+            }
+        }
+        file_path.to_string()
     }
 
     /// 注册内置函数
@@ -794,6 +838,58 @@ impl AotCompiler {
         let id = self.module.declare_function("object_release", Linkage::Import, &sig)
             .map_err(|e| format!("{}", e))?;
         self.functions.insert("object_release".to_string(), id);
+
+        // object_retain(ptr) -> void
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(ptr));
+        let id = self.module.declare_function("object_retain", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
+        self.functions.insert("object_retain".to_string(), id);
+
+        // object_clone(ptr) -> ptr
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(ptr));
+        sig.returns.push(AbiParam::new(ptr));
+        let id = self.module.declare_function("object_clone", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
+        self.functions.insert("object_clone".to_string(), id);
+
+        // object_weak_retain(ptr) -> void
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(ptr));
+        let id = self.module.declare_function("object_weak_retain", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
+        self.functions.insert("object_weak_retain".to_string(), id);
+
+        // object_weak_release(ptr) -> void
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(ptr));
+        let id = self.module.declare_function("object_weak_release", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
+        self.functions.insert("object_weak_release".to_string(), id);
+
+        // object_weak_clone(ptr) -> ptr
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(ptr));
+        sig.returns.push(AbiParam::new(ptr));
+        let id = self.module.declare_function("object_weak_clone", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
+        self.functions.insert("object_weak_clone".to_string(), id);
+
+        // object_assert_alive(ptr) -> void
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(ptr));
+        let id = self.module.declare_function("object_assert_alive", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
+        self.functions.insert("object_assert_alive".to_string(), id);
+
+        // object_ref_count(ptr) -> i64
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(ptr));
+        sig.returns.push(AbiParam::new(types::I64));
+        let id = self.module.declare_function("object_ref_count", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
+        self.functions.insert("object_ref_count".to_string(), id);
 
         self.register_tuple_builtins()
     }
@@ -1618,6 +1714,10 @@ struct AotCompileContext<'a, 'b> {
     rc_variables: Vec<(Variable, BolideType)>,
     /// Temporary RC values from expressions (to be released at statement end)
     temp_rc_values: Vec<(Value, BolideType)>,
+    /// 循环块栈：(continue 目标块, break 目标块, 循环作用域基索引)
+    loop_stack: Vec<(Block, Block, usize)>,
+    /// weak/unowned 引用变量集合（访问时需要检查对象是否存活）
+    weak_variables: HashSet<String>,
 }
 
 impl<'a, 'b> AotCompileContext<'a, 'b> {
@@ -1645,6 +1745,8 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             modules,
             rc_variables: Vec::new(),
             temp_rc_values: Vec::new(),
+            loop_stack: Vec::new(),
+            weak_variables: HashSet::new(),
         }
     }
 
@@ -1661,6 +1763,16 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         }
         // Truncate
         self.rc_variables.truncate(start_index);
+    }
+
+    /// 在不截断 rc_variables 的情况下释放从 start_index 起的作用域变量。
+    /// 用于 break/continue 的提前跳出路径；正常路径仍由 leave_scope 处理。
+    fn emit_scope_releases_from(&mut self, start_index: usize) {
+        for i in (start_index..self.rc_variables.len()).rev() {
+            let (var, ty) = self.rc_variables[i].clone();
+            let val = self.builder.use_var(var);
+            self.emit_release(val, &ty);
+        }
     }
 
     fn declare_variable(&mut self, name: &str, ty: types::Type) -> Variable {
@@ -1698,7 +1810,9 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
     /// 检查类型是否需要 RC 管理
     fn is_rc_type(ty: &BolideType) -> bool {
         match ty {
-            BolideType::Weak(_) | BolideType::Unowned(_) => false,
+            // weak/unowned 类引用需要弱引用计数管理（保住对象头以便存活检查）
+            BolideType::Weak(inner) | BolideType::Unowned(inner) =>
+                matches!(inner.as_ref(), BolideType::Custom(_)),
             _ => matches!(ty,
                 BolideType::Str |
                 BolideType::BigInt |
@@ -1712,6 +1826,13 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         }
     }
 
+    /// 检查类型是否是指向类实例的 weak/unowned 引用
+    fn is_weak_ref_type(ty: &BolideType) -> bool {
+        matches!(ty,
+            BolideType::Weak(inner) | BolideType::Unowned(inner)
+                if matches!(inner.as_ref(), BolideType::Custom(_)))
+    }
+
     /// 获取类型对应的 release 函数名
     fn get_release_func_name(ty: &BolideType) -> Option<&'static str> {
         match ty {
@@ -1723,6 +1844,10 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             BolideType::Dynamic => Some("dynamic_release"),
             BolideType::Custom(_) => Some("object_release"),
             BolideType::Tuple(_) => Some("tuple_free"),
+            // weak/unowned 释放的是弱引用计数
+            BolideType::Weak(inner) | BolideType::Unowned(inner)
+                if matches!(inner.as_ref(), BolideType::Custom(_)) =>
+                Some("object_weak_release"),
             _ => None,
         }
     }
@@ -1771,26 +1896,45 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             }
         } else if let BolideType::Custom(ref class_name) = ty {
             // 对于 Custom 类型，需要先检查是否为 null
-            // 因为 emit_object_fields_cleanup 会访问对象字段，如果对象是 null 会导致问题
+            // 字段清理仅在最后一个强引用（refcount == 1）时执行，
+            // 否则共享对象的字段会被重复释放
             let null_val = self.builder.ins().iconst(self.ptr_type, 0);
             let is_null = self.builder.ins().icmp(IntCC::Equal, val, null_val);
-            
+
+            let check_block = self.builder.create_block();
+            let fields_block = self.builder.create_block();
             let release_block = self.builder.create_block();
             let continue_block = self.builder.create_block();
-            
-            self.builder.ins().brif(is_null, continue_block, &[], release_block, &[]);
-            
-            // release_block: 对象不为 null，进行释放
+
+            self.builder.ins().brif(is_null, continue_block, &[], check_block, &[]);
+
+            // check_block: 仅当 strong_count == 1 时清理字段
+            self.builder.switch_to_block(check_block);
+            self.builder.seal_block(check_block);
+            if let Some(&rc_func) = self.func_refs.get("object_ref_count") {
+                let call = self.builder.ins().call(rc_func, &[val]);
+                let count = self.builder.inst_results(call)[0];
+                let one = self.builder.ins().iconst(types::I64, 1);
+                let is_last = self.builder.ins().icmp(IntCC::Equal, count, one);
+                self.builder.ins().brif(is_last, fields_block, &[], release_block, &[]);
+            } else {
+                self.builder.ins().jump(release_block, &[]);
+            }
+
+            // fields_block: 释放对象内部 RC 字段
+            self.builder.switch_to_block(fields_block);
+            self.builder.seal_block(fields_block);
+            self.emit_object_fields_cleanup(val, class_name);
+            self.builder.ins().jump(release_block, &[]);
+
+            // release_block: 释放对象本身
             self.builder.switch_to_block(release_block);
             self.builder.seal_block(release_block);
-            
-            self.emit_object_fields_cleanup(val, class_name);
             if let Some(&release_func) = self.func_refs.get("object_release") {
                 self.builder.ins().call(release_func, &[val]);
             }
-            
             self.builder.ins().jump(continue_block, &[]);
-            
+
             // continue_block: 继续执行
             self.builder.switch_to_block(continue_block);
             self.builder.seal_block(continue_block);
@@ -1947,6 +2091,10 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             BolideType::Dict(_, _) => Some("dict_clone"),
             BolideType::Dynamic => Some("dynamic_clone"),
             BolideType::Custom(_) => Some("object_clone"),
+            // weak/unowned 克隆只增加弱引用计数
+            BolideType::Weak(inner) | BolideType::Unowned(inner)
+                if matches!(inner.as_ref(), BolideType::Custom(_)) =>
+                Some("object_weak_clone"),
              _ => None,
         }
     }
@@ -2000,6 +2148,12 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
     fn compile_ident(&mut self, name: &str) -> Result<Value, String> {
         if let Some(&var) = self.variables.get(name) {
             let val = self.builder.use_var(var);
+            // weak/unowned 变量访问前检查对象是否存活（死对象访问确定性 abort）
+            if self.weak_variables.contains(name) {
+                if let Some(&assert_ref) = self.func_refs.get("object_assert_alive") {
+                    self.builder.ins().call(assert_ref, &[val]);
+                }
+            }
             // Retain if RC type
             if let Some(ty) = self.var_types.get(name).cloned() {
                 if Self::is_rc_type(&ty) {
@@ -3233,6 +3387,23 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
                 self.compile_send(send_stmt)?;
                 false
             }
+            Statement::Break => {
+                let (_, break_block, scope_base) = *self.loop_stack.last()
+                    .ok_or("'break' outside of a loop")?;
+                // 跳出前释放临时值与循环作用域内已声明的 RC 变量
+                self.release_temp_rc_values();
+                self.emit_scope_releases_from(scope_base);
+                self.builder.ins().jump(break_block, &[]);
+                true
+            }
+            Statement::Continue => {
+                let (continue_block, _, scope_base) = *self.loop_stack.last()
+                    .ok_or("'continue' outside of a loop")?;
+                self.release_temp_rc_values();
+                self.emit_scope_releases_from(scope_base);
+                self.builder.ins().jump(continue_block, &[]);
+                true
+            }
             Statement::Import(_) | Statement::ExternBlock(_) | Statement::FuncDef(_) | Statement::ClassDef(_) => {
                 // 这些语句在顶层处理，函数体内忽略
                 false
@@ -3618,14 +3789,31 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
 
         if let Some(ref value) = decl.value {
             let val = self.compile_expr(value)?;
-            
-            // Take ownership if it's a temp RC value
-            self.remove_temp_rc_value(val);
-            
+
+            let declared_ty = self.var_types.get(&decl.name).cloned();
+            let is_weak_decl = declared_ty.as_ref()
+                .map(|t| Self::is_weak_ref_type(t))
+                .unwrap_or(false);
+
+            if is_weak_decl {
+                // weak/unowned: 不接管强引用所有权，只增加弱引用计数保住对象头；
+                // 临时强引用仍在语句末释放
+                if let Some(&weak_retain) = self.func_refs.get("object_weak_retain") {
+                    self.builder.ins().call(weak_retain, &[val]);
+                }
+                self.weak_variables.insert(decl.name.clone());
+            } else {
+                // Take ownership if it's a temp RC value
+                self.remove_temp_rc_value(val);
+            }
+
             self.builder.def_var(var, val);
         } else {
             let zero = self.builder.ins().iconst(types::I64, 0);
             self.builder.def_var(var, zero);
+            if self.var_types.get(&decl.name).map(|t| Self::is_weak_ref_type(t)).unwrap_or(false) {
+                self.weak_variables.insert(decl.name.clone());
+            }
         }
 
         // Register for cleanup
@@ -3643,18 +3831,25 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
                 let var = *self.variables.get(var_name)
                     .ok_or_else(|| format!("Undefined variable: {}", var_name))?;
                 let val = self.compile_expr(&assign.value)?;
-                
+
                 // Release old value if RC type
                 if let Some(ty) = self.var_types.get(var_name).cloned() {
                     if Self::is_rc_type(&ty) {
                         let old_val = self.builder.use_var(var);
                         self.emit_release(old_val, &ty);
-                        
-                        // Take ownership of new value if it's a temp
-                        self.remove_temp_rc_value(val);
+
+                        if Self::is_weak_ref_type(&ty) {
+                            // weak/unowned 赋值：增加弱引用计数，不接管强引用
+                            if let Some(&weak_retain) = self.func_refs.get("object_weak_retain") {
+                                self.builder.ins().call(weak_retain, &[val]);
+                            }
+                        } else {
+                            // Take ownership of new value if it's a temp
+                            self.remove_temp_rc_value(val);
+                        }
                     }
                 }
-                
+
                 self.builder.def_var(var, val);
             }
             Expr::Member(base, member) => {
@@ -3844,6 +4039,8 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         self.builder.seal_block(body_block);
         
         let scope_idx = self.enter_scope();
+        // while: continue → 重新检查条件（header）；break → exit
+        self.loop_stack.push((header_block, exit_block, scope_idx));
         let mut body_returned = false;
         for stmt in &while_stmt.body {
             if self.compile_stmt(stmt)? {
@@ -3851,10 +4048,14 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
                 break;
             }
         }
-        
+        self.loop_stack.pop();
+
         if !body_returned {
              self.leave_scope(scope_idx);
              self.builder.ins().jump(header_block, &[]);
+        } else {
+             // 提前跳出路径已自行释放作用域变量，这里只清理编译期记录
+             self.rc_variables.truncate(scope_idx);
         }
 
         // 现在所有 header_block 的前驱都已添加，可以 seal 了
@@ -3914,6 +4115,7 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
 
         let header_block = self.builder.create_block();
         let body_block = self.builder.create_block();
+        let latch_block = self.builder.create_block();
         let exit_block = self.builder.create_block();
 
         self.builder.ins().jump(header_block, &[]);
@@ -3929,6 +4131,7 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         self.builder.seal_block(body_block);
 
         let scope_idx = self.enter_scope();
+        self.loop_stack.push((latch_block, exit_block, scope_idx));
         let mut body_returned = false;
         for stmt in &for_stmt.body {
             if self.compile_stmt(stmt)? {
@@ -3936,17 +4139,22 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
                 break;
             }
         }
-        
+        self.loop_stack.pop();
+
         if !body_returned {
              self.leave_scope(scope_idx);
-
-             // 递增索引
-             let idx = self.builder.use_var(loop_var);
-             let new_idx = self.builder.ins().iadd(idx, step);
-             self.builder.def_var(loop_var, new_idx);
-
-             self.builder.ins().jump(header_block, &[]);
+             self.builder.ins().jump(latch_block, &[]);
+        } else {
+             self.rc_variables.truncate(scope_idx);
         }
+
+        // latch: 递增索引后回到 header（continue 跳转到此处以保证步进）
+        self.builder.switch_to_block(latch_block);
+        self.builder.seal_block(latch_block);
+        let idx = self.builder.use_var(loop_var);
+        let new_idx = self.builder.ins().iadd(idx, step);
+        self.builder.def_var(loop_var, new_idx);
+        self.builder.ins().jump(header_block, &[]);
 
         self.builder.seal_block(header_block);
 
@@ -3988,6 +4196,7 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
 
         let header_block = self.builder.create_block();
         let body_block = self.builder.create_block();
+        let latch_block = self.builder.create_block();
         let exit_block = self.builder.create_block();
 
         self.builder.ins().jump(header_block, &[]);
@@ -4001,7 +4210,7 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         // 循环体
         self.builder.switch_to_block(body_block);
         self.builder.seal_block(body_block);
-        
+
         let scope_idx = self.enter_scope();
         if Self::is_rc_type(&elem_type) {
             self.track_rc_variable(var_name, &elem_type);
@@ -4012,7 +4221,7 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         let idx = self.builder.use_var(idx_var);
         let call = self.builder.ins().call(get_ref, &[iter_val, idx]);
         let elem = self.builder.inst_results(call)[0];
-        
+
         let elem = if Self::is_rc_type(&elem_type) {
              self.emit_retain(elem, &elem_type)
         } else {
@@ -4020,6 +4229,7 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         };
         self.builder.def_var(loop_var, elem);
 
+        self.loop_stack.push((latch_block, exit_block, scope_idx));
         let mut body_returned = false;
         for stmt in &for_stmt.body {
             if self.compile_stmt(stmt)? {
@@ -4027,18 +4237,23 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
                 break;
             }
         }
-        
+        self.loop_stack.pop();
+
         if !body_returned {
             self.leave_scope(scope_idx);
-
-            // 递增索引
-            let idx = self.builder.use_var(idx_var);
-            let one = self.builder.ins().iconst(types::I64, 1);
-            let new_idx = self.builder.ins().iadd(idx, one);
-            self.builder.def_var(idx_var, new_idx);
-
-            self.builder.ins().jump(header_block, &[]);
+            self.builder.ins().jump(latch_block, &[]);
+        } else {
+            self.rc_variables.truncate(scope_idx);
         }
+
+        // latch: 递增索引后回到 header（continue 跳转到此处）
+        self.builder.switch_to_block(latch_block);
+        self.builder.seal_block(latch_block);
+        let idx = self.builder.use_var(idx_var);
+        let one = self.builder.ins().iconst(types::I64, 1);
+        let new_idx = self.builder.ins().iadd(idx, one);
+        self.builder.def_var(idx_var, new_idx);
+        self.builder.ins().jump(header_block, &[]);
 
         self.builder.seal_block(header_block);
 

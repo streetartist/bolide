@@ -2,20 +2,8 @@
 //!
 //! BolideDynamic 是 Python 风格的动态类型，使用引用计数管理内存
 
-use std::cell::Cell;
-
-use crate::rc::{TypeTag, flags};
+use crate::rc::{RcHeader, TypeTag};
 use crate::{BolideBigInt, BolideDecimal, BolideString, BolideList};
-
-/// RC 对象头
-#[repr(C)]
-struct RcHeader {
-    strong_count: Cell<u32>,
-    weak_count: Cell<u32>,
-    type_tag: TypeTag,
-    flags: Cell<u8>,
-    _padding: [u8; 6],
-}
 
 /// 动态值类型标签
 #[repr(C)]
@@ -56,13 +44,7 @@ impl BolideDynamic {
     /// 创建 None 值
     pub fn none() -> *mut Self {
         Box::into_raw(Box::new(Self {
-            header: RcHeader {
-                strong_count: Cell::new(1),
-                weak_count: Cell::new(1),
-                type_tag: TypeTag::Object,
-                flags: Cell::new(0),
-                _padding: [0; 6],
-            },
+            header: RcHeader::new(TypeTag::Object),
             tag: DynamicType::None,
             data: DynamicData { none: () },
         }))
@@ -70,13 +52,7 @@ impl BolideDynamic {
 
     pub fn from_bool(value: bool) -> *mut Self {
         Box::into_raw(Box::new(Self {
-            header: RcHeader {
-                strong_count: Cell::new(1),
-                weak_count: Cell::new(1),
-                type_tag: TypeTag::Object,
-                flags: Cell::new(0),
-                _padding: [0; 6],
-            },
+            header: RcHeader::new(TypeTag::Object),
             tag: DynamicType::Bool,
             data: DynamicData { bool_val: if value { 1 } else { 0 } },
         }))
@@ -84,13 +60,7 @@ impl BolideDynamic {
 
     pub fn from_int(value: i64) -> *mut Self {
         Box::into_raw(Box::new(Self {
-            header: RcHeader {
-                strong_count: Cell::new(1),
-                weak_count: Cell::new(1),
-                type_tag: TypeTag::Object,
-                flags: Cell::new(0),
-                _padding: [0; 6],
-            },
+            header: RcHeader::new(TypeTag::Object),
             tag: DynamicType::Int,
             data: DynamicData { int_val: value },
         }))
@@ -98,13 +68,7 @@ impl BolideDynamic {
 
     pub fn from_float(value: f64) -> *mut Self {
         Box::into_raw(Box::new(Self {
-            header: RcHeader {
-                strong_count: Cell::new(1),
-                weak_count: Cell::new(1),
-                type_tag: TypeTag::Object,
-                flags: Cell::new(0),
-                _padding: [0; 6],
-            },
+            header: RcHeader::new(TypeTag::Object),
             tag: DynamicType::Float,
             data: DynamicData { float_val: value },
         }))
@@ -112,13 +76,7 @@ impl BolideDynamic {
 
     pub fn from_bigint(ptr: *mut BolideBigInt) -> *mut Self {
         Box::into_raw(Box::new(Self {
-            header: RcHeader {
-                strong_count: Cell::new(1),
-                weak_count: Cell::new(1),
-                type_tag: TypeTag::Object,
-                flags: Cell::new(0),
-                _padding: [0; 6],
-            },
+            header: RcHeader::new(TypeTag::Object),
             tag: DynamicType::BigInt,
             data: DynamicData { bigint_ptr: ptr },
         }))
@@ -126,13 +84,7 @@ impl BolideDynamic {
 
     pub fn from_decimal(ptr: *mut BolideDecimal) -> *mut Self {
         Box::into_raw(Box::new(Self {
-            header: RcHeader {
-                strong_count: Cell::new(1),
-                weak_count: Cell::new(1),
-                type_tag: TypeTag::Object,
-                flags: Cell::new(0),
-                _padding: [0; 6],
-            },
+            header: RcHeader::new(TypeTag::Object),
             tag: DynamicType::Decimal,
             data: DynamicData { decimal_ptr: ptr },
         }))
@@ -140,13 +92,7 @@ impl BolideDynamic {
 
     pub fn from_string(ptr: *mut BolideString) -> *mut Self {
         Box::into_raw(Box::new(Self {
-            header: RcHeader {
-                strong_count: Cell::new(1),
-                weak_count: Cell::new(1),
-                type_tag: TypeTag::Object,
-                flags: Cell::new(0),
-                _padding: [0; 6],
-            },
+            header: RcHeader::new(TypeTag::Object),
             tag: DynamicType::String,
             data: DynamicData { string_ptr: ptr },
         }))
@@ -154,13 +100,7 @@ impl BolideDynamic {
 
     pub fn from_list(ptr: *mut BolideList) -> *mut Self {
         Box::into_raw(Box::new(Self {
-            header: RcHeader {
-                strong_count: Cell::new(1),
-                weak_count: Cell::new(1),
-                type_tag: TypeTag::Object,
-                flags: Cell::new(0),
-                _padding: [0; 6],
-            },
+            header: RcHeader::new(TypeTag::Object),
             tag: DynamicType::List,
             data: DynamicData { list_ptr: ptr },
         }))
@@ -280,30 +220,27 @@ impl BolideDynamic {
 
     #[inline]
     pub fn retain(&self) {
-        let count = self.header.strong_count.get();
-        self.header.strong_count.set(count + 1);
+        self.header.inc_strong();
     }
 
     #[inline]
     pub fn release(&self) -> bool {
-        let count = self.header.strong_count.get();
-        self.header.strong_count.set(count - 1);
-        count == 1
+        self.header.dec_strong()
     }
 
     #[inline]
     pub fn ref_count(&self) -> u32 {
-        self.header.strong_count.get()
+        self.header.strong_count()
     }
 
     #[inline]
     pub fn is_moved(&self) -> bool {
-        self.header.flags.get() & flags::MOVED != 0
+        self.header.is_moved()
     }
 
     #[inline]
     pub fn mark_moved(&self) {
-        self.header.flags.set(self.header.flags.get() | flags::MOVED);
+        self.header.mark_moved();
     }
 
     /// 释放内部数据的引用

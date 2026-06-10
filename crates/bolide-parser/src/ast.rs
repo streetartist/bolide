@@ -21,6 +21,10 @@ pub enum Statement {
     AwaitScope(AwaitScopeStmt),
     AsyncSelect(AsyncSelectStmt),
     Send(SendStmt),
+    /// break; - 跳出最近一层循环
+    Break,
+    /// continue; - 进入最近一层循环的下一次迭代
+    Continue,
     Return(Option<Expr>),
     Expr(Expr),
     Import(Import),

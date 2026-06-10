@@ -1,18 +1,19 @@
-// 测试模块导入
+// 测试模块导入（命名空间隔离 + as 别名）
+// 模块函数通过 module.func 或别名 alias.func 访问
 
-import "math_utils.bl";
+import "math_utils.bl" as mu;
 
-// 使用导入的函数
-let a: int = add(10, 20);
+// 通过别名调用模块函数
+let a: int = mu.add(10, 20);
 print(a);  // 30
 
-let b: int = mul(6, 7);
+let b: int = mu.mul(6, 7);
 print(b);  // 42
 
-let c: int = square(5);
+let c: int = mu.square(5);
 print(c);  // 25
 
-let d: int = cube(3);
+let d: int = mu.cube(3);
 print(d);  // 27
 
 print(999);

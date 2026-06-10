@@ -1,0 +1,15 @@
+// 测试借用逃逸检测（预期编译错误）
+// 借用值不拥有对象，禁止存入容器
+
+fn get_value(ref x: bigint) -> bigint from x {
+    return x;
+}
+
+fn test_escape() {
+    let a: bigint = 100B;
+    let b: bigint = get_value(a);  // b 借用 a
+    let xs: list<bigint> = [];
+    xs.push(b);  // 错误：借用值不能存入列表
+}
+
+test_escape();

@@ -5,6 +5,18 @@
 WHITESPACE = _{ " " | "\t" | "\r" | "\n" }
 COMMENT = _{ "//" ~ (!"\n" ~ ANY)* | "/*" ~ (!"*/" ~ ANY)* ~ "*/" }
 
+// 标识符字符（用于关键字词边界守卫）
+id_char = _{ ASCII_ALPHANUMERIC | "_" }
+
+// 带词边界的关键字（原子规则，避免 "or"/"not" 等误匹配标识符前缀）
+kw_or    = @{ "or" ~ !id_char }
+kw_and   = @{ "and" ~ !id_char }
+kw_in    = @{ "in" ~ !id_char }
+kw_as    = @{ "as" ~ !id_char }
+kw_from  = @{ "from" ~ !id_char }
+kw_await = @{ "await" ~ !id_char }
+kw_spawn = @{ "spawn" ~ !id_char }
+
 // 程序入口
 program = { SOI ~ (statement)* ~ EOI }
 
@@ -16,6 +28,8 @@ statement = {
     if_stmt |
     while_stmt |
     for_stmt |
+    break_stmt |
+    continue_stmt |
     pool_stmt |
     await_scope_stmt |
     async_select_stmt |
@@ -29,14 +43,14 @@ statement = {
 }
 
 // 导入语句
-import_stmt = { "import" ~ (string_lit | module_path) ~ ("as" ~ ident)? ~ ";" }
+import_stmt = { "import" ~ (string_lit | module_path) ~ (kw_as ~ ident)? ~ ";" }
 module_path = { ident ~ ("." ~ ident)* }
 
 // FFI extern 块
 extern_block = { "extern" ~ string_lit ~ "{" ~ extern_decl* ~ "}" }
 extern_decl = { extern_func | extern_struct | extern_typedef }
 extern_func = { "fn" ~ ident ~ "(" ~ extern_param_list? ~ variadic? ~ ")" ~ ("->" ~ c_type)? ~ ";" }
-extern_param_list = { extern_param ~ ("," ~ extern_param)* }
+extern_param_list = { extern_param ~ ("," ~ extern_param)* ~ ","? }
 extern_param = { ident ~ ":" ~ c_type }
 variadic = { "," ~ "..." }
 extern_struct = { "struct" ~ ident ~ "{" ~ extern_field* ~ "}" }
@@ -49,11 +63,11 @@ func_def = {
     async_keyword? ~ "fn" ~ ident ~ "(" ~ param_list? ~ ")" ~ ("->" ~ type_expr)? ~ lifetime_clause? ~ block
 }
 async_keyword = { "async" }
-param_list = { param ~ ("," ~ param)* }
+param_list = { param ~ ("," ~ param)* ~ ","? }
 param = { param_mode? ~ ident ~ ":" ~ type_expr }
 param_mode = { "owned" | "ref" }
 // 生命周期依赖子句: from x 或 from x, y
-lifetime_clause = { "from" ~ ident ~ ("," ~ ident)* }
+lifetime_clause = { kw_from ~ ident ~ ("," ~ ident)* }
 
 // 类定义
 class_def = {
@@ -74,7 +88,10 @@ elif_branch = { "elif" ~ expr ~ block }
 else_branch = { "else" ~ block }
 
 while_stmt = { "while" ~ expr ~ block }
-for_stmt = { "for" ~ ident ~ ("," ~ ident)* ~ "in" ~ expr ~ block }
+for_stmt = { "for" ~ ident ~ ("," ~ ident)* ~ kw_in ~ expr ~ block }
+
+break_stmt = { "break" ~ ";" }
+continue_stmt = { "continue" ~ ";" }
 
 // 线程池块
 pool_stmt = { "pool" ~ "(" ~ expr ~ ")" ~ block }
@@ -100,7 +117,8 @@ send_stmt = { ident ~ "<-" ~ expr ~ ";" }
 
 return_stmt = { "return" ~ expr? ~ ";" }
 var_decl = { "let" ~ ident ~ (":" ~ type_expr)? ~ ("=" ~ expr)? ~ ";" }
-assign_stmt = { assign_target ~ "=" ~ expr ~ ";" }
+assign_stmt = { assign_target ~ assign_op ~ expr ~ ";" }
+assign_op = @{ "+=" | "-=" | "*=" | "/=" | "%=" | ("=" ~ !"=") }
 assign_target = { (ident | self_lit) ~ (member | index)* }
 expr_stmt = { expr ~ ";" }
 
@@ -110,9 +128,10 @@ block = { "{" ~ statement* ~ "}" }
 
 // 表达式
 expr = { or_expr }
-or_expr = { and_expr ~ ("or" ~ and_expr)* }
-and_expr = { cmp_expr ~ ("and" ~ cmp_expr)* }
-cmp_expr = { add_expr ~ (cmp_op ~ add_expr)* }
+or_expr = { and_expr ~ (kw_or ~ and_expr)* }
+and_expr = { cmp_expr ~ (kw_and ~ cmp_expr)* }
+// 比较运算符不可链式（a < b < c 是语法错误，避免歧义语义）
+cmp_expr = { add_expr ~ (cmp_op ~ add_expr)? }
 add_expr = { mul_expr ~ (add_op ~ mul_expr)* }
 mul_expr = { unary_expr ~ (mul_op ~ unary_expr)* }
 unary_expr = { unary_op? ~ postfix_expr }
@@ -121,10 +140,10 @@ postfix_expr = { primary ~ (call_args | index | member)* }
 cmp_op = { "==" | "!=" | "<=" | ">=" | "<" | ">" }
 add_op = { "+" | "-" }
 mul_op = { "*" | "/" | "%" }
-unary_op = { "-" | "not" }
+unary_op = @{ "-" | "not" ~ !id_char }
 
 // 后缀操作
-call_args = { "(" ~ (expr ~ ("," ~ expr)*)? ~ ")" }
+call_args = { "(" ~ (expr ~ ("," ~ expr)* ~ ","?)? ~ ")" }
 index = { "[" ~ expr ~ "]" }
 member = { "." ~ ident }
 
@@ -149,40 +168,44 @@ primary = {
     ident
 }
 
-// await 表达式: await expr
-await_expr = { "await" ~ expr }
+// await 表达式: await expr（绑定到后缀层级，await a + b 解析为 (await a) + b）
+await_expr = { kw_await ~ postfix_expr }
 
 // await all 表达式: await all { expr, expr, ... }
-await_all_expr = { "await" ~ "all" ~ "{" ~ (expr ~ ("," ~ expr)*)? ~ "}" }
+await_all_expr = { kw_await ~ "all" ~ "{" ~ (expr ~ ("," ~ expr)* ~ ","?)? ~ "}" }
 
 // self 字面量
-self_lit = { "self" }
+self_lit = @{ "self" ~ !id_char }
 
 // spawn 表达式: spawn func(args)
-spawn_expr = { "spawn" ~ ident ~ call_args }
+spawn_expr = { kw_spawn ~ ident ~ call_args }
 
 // 接收表达式: <- ch
 recv_expr = { "<-" ~ ident }
 
 // 字面量
-list_literal = { "[" ~ (expr ~ ("," ~ expr)*)? ~ "]" }
-dict_literal = { "{" ~ (dict_entry ~ ("," ~ dict_entry)*)? ~ "}" }
+list_literal = { "[" ~ (expr ~ ("," ~ expr)* ~ ","?)? ~ "]" }
+dict_literal = { "{" ~ (dict_entry ~ ("," ~ dict_entry)* ~ ","?)? ~ "}" }
 dict_entry = { expr ~ ":" ~ expr }
-tuple_literal = { "(" ~ expr ~ "," ~ (expr ~ ("," ~ expr)*)? ~ ")" }
+tuple_literal = { "(" ~ expr ~ "," ~ (expr ~ ("," ~ expr)*)? ~ ","? ~ ")" }
+
+// 数字内部可用下划线分隔: 1_000_000
+digits = _{ ASCII_DIGIT ~ (ASCII_DIGIT | "_")* }
 
 // bigint 字面量: 123B 或 123b
-bigint_lit = @{ ASCII_DIGIT+ ~ ("B" | "b") }
+bigint_lit = @{ digits ~ ("B" | "b") }
 
 // decimal 字面量: 123.45D 或 123.45d
-decimal_lit = @{ ASCII_DIGIT+ ~ ("." ~ ASCII_DIGIT+)? ~ ("D" | "d") }
+decimal_lit = @{ digits ~ ("." ~ digits)? ~ ("D" | "d") }
 
 // 普通字面量
-hex_lit = @{ "0x" ~ ASCII_HEX_DIGIT+ }
-int_lit = @{ hex_lit | ASCII_DIGIT+ }
-float_lit = @{ ASCII_DIGIT+ ~ "." ~ ASCII_DIGIT+ }
-string_lit = @{ "\"" ~ (!"\"" ~ ANY)* ~ "\"" }
-bool_lit = { "true" | "false" }
-none_lit = { "none" }
+hex_lit = @{ "0x" ~ ASCII_HEX_DIGIT ~ (ASCII_HEX_DIGIT | "_")* }
+int_lit = @{ hex_lit | digits }
+float_lit = @{ digits ~ "." ~ digits }
+// 字符串支持转义: \" \\ \n \t \r \0 等
+string_lit = @{ "\"" ~ ("\\" ~ ANY | !("\"" | "\\") ~ ANY)* ~ "\"" }
+bool_lit = @{ ("true" | "false") ~ !id_char }
+none_lit = @{ "none" ~ !id_char }
 
 // 类型
 type_expr = { ref_mode? ~ (tuple_type | list_type | dict_type | channel_type | func_type | basic_type) }
@@ -195,7 +218,9 @@ func_type = { "func" ~ "(" ~ func_type_params? ~ ")" ~ ("->" ~ type_expr)? }
 func_type_params = { type_expr ~ ("," ~ type_expr)* }
 // 支持模块限定类型: module.ClassName
 qualified_type = { ident ~ ("." ~ ident)+ }
-basic_type = { "int" | "float" | "bool" | "str" | "bigint" | "decimal" | "dynamic" | "ptr" | "future" | qualified_type | ident }
+// 内建类型名在 convert 层按字符串识别；这里统一走 ident，
+// 避免 "int" 误匹配 "interval" 等标识符前缀
+basic_type = { qualified_type | ident }
 
 // 标识符
 ident = @{ !keyword ~ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
@@ -203,7 +228,7 @@ ident = @{ !keyword ~ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
 // 关键字
 keyword = {
     ("fn" | "let" | "class" | "if" | "elif" | "else" |
-    "while" | "for" | "in" | "return" | "import" | "as" |
+    "while" | "for" | "in" | "break" | "continue" | "return" | "import" | "as" |
     "true" | "false" | "none" | "and" | "or" | "not" |
     "spawn" | "pool" | "self" | "super" | "select" | "timeout" | "default" |
     "async" | "await" | "scope" | "all" | "extern" | "struct" | "type" |

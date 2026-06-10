@@ -1,5 +1,42 @@
 暂不支持：
   - ⏸️ 混合类型元组的打印（目前显示指针地址）
+
+---
+
+## 📌 AOT 与 JIT 功能对齐 (进行中)
+
+JIT 为参考实现。tests/ 全量 AOT 扫描结果：61 通过 / 45 失败（JIT 为 106/106）。
+失败按根因分组如下，按影响面排序：
+
+### A. AOT 缺失运行时函数声明（编译报错 "xxx not found"）
+| 缺失符号 | 影响 |
+|---|---|
+| `thread_join_int/_float/_ptr` | 所有 spawn/join 测试（~10 个） |
+| `print_list` / `print_dict` / `print_tuple` | 容器直接打印（~7 个） |
+| `select_wait_first` | async select |
+| `coroutine_await_ptr` | await 指针类型结果 |
+| `bigint_to_i64` / `decimal_from_i64` | 类型转换 |
+
+修法：在 aot.rs `register_builtins` 按 JIT 的签名补声明（运行时 staticlib 中符号已存在）。
+
+### B. AOT 缺失编译能力（编译报错）
+- 列表/字典方法不全：`len`/`pop`/`contains` 等（JIT 的 compile_list_method_call 全集需移植）
+- 类继承的方法调用（"Unknown method: get_age"）
+- 模块函数调用（"Unknown method: add"，import 后的 module.func）
+- 函数作为值/回调传参（"Function not found: f"，func_type 支持）
+- hello.bl："Duplicate definition"（用户 `fn main` 与 AOT 合成 main 冲突，需改名合成符号）
+
+### C. AOT 运行期崩溃（段错误，需逐个调试）
+- bigint 算术路径：test_bigint_arith / _simple / _noprint / func_bigint
+- test_rc / test_tuple_memory / test_coroutine_memory（RC 清理路径）
+- test_name / test_param_modes / test_borrow_only：**内置函数名冲突**——
+  JIT 已用 `@_` 前缀隔离内置符号，AOT 侧用户函数与运行时导出符号（C 链接名）
+  仍共享命名空间，需对用户函数做符号改名（如 `bolide.user.<name>`，
+  保留 `main` 不变），内部查找键不变
+
+### D. 设计约束（AOT 链接模型）
+- AOT 的运行时导入必须匹配 staticlib 的真实导出名（C 符号），无法使用 `@_`
+  这类非法 C 标识符——因此 AOT 的隔离方向是改名用户函数（见 C 组）
 Bolide 现在可以调用 C 库。让我总结当前能力：
 
   ✅ 已支持

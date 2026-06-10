@@ -3,23 +3,12 @@
 //! BolideDict 使用引用计数管理内存
 //! 键值以 i64 存储（可以是值或指针）
 
-use std::cell::Cell;
 use std::collections::HashMap;
 use std::os::raw::c_void;
 
-use crate::rc::{TypeTag, flags};
+use crate::rc::{RcHeader, TypeTag};
 use crate::{BolideString, BolideBigInt, BolideDecimal, BolideList};
 use crate::list::ElementType;
-
-/// RC 对象头
-#[repr(C)]
-struct RcHeader {
-    strong_count: Cell<u32>,
-    weak_count: Cell<u32>,
-    type_tag: TypeTag,
-    flags: Cell<u8>,
-    _padding: [u8; 6],
-}
 
 /// Bolide 字典类型（带引用计数）
 #[repr(C)]
@@ -36,13 +25,7 @@ impl BolideDict {
     pub fn new(key_type: ElementType, value_type: ElementType) -> *mut Self {
         let map = Box::into_raw(Box::new(HashMap::new()));
         Box::into_raw(Box::new(Self {
-            header: RcHeader {
-                strong_count: Cell::new(1),
-                weak_count: Cell::new(1),
-                type_tag: TypeTag::Dict,
-                flags: Cell::new(0),
-                _padding: [0; 6],
-            },
+            header: RcHeader::new(TypeTag::Dict),
             data: map,
             len: 0,
             key_type,
@@ -53,21 +36,17 @@ impl BolideDict {
     /// 获取引用计数
     #[inline]
     pub fn ref_count(&self) -> u32 {
-        self.header.strong_count.get()
+        self.header.strong_count()
     }
 
     /// 增加引用计数
     pub fn retain(&self) {
-        let count = self.header.strong_count.get();
-        self.header.strong_count.set(count + 1);
+        self.header.inc_strong();
     }
 
     /// 减少引用计数，返回是否应该释放
     pub fn release(&self) -> bool {
-        let count = self.header.strong_count.get();
-        debug_assert!(count > 0, "release on already freed dict");
-        self.header.strong_count.set(count - 1);
-        count == 1
+        self.header.dec_strong()
     }
 
     /// 设置键值对
@@ -169,12 +148,12 @@ impl BolideDict {
 
     /// 检查是否已被 move
     pub fn is_moved(&self) -> bool {
-        self.header.flags.get() & flags::MOVED != 0
+        self.header.is_moved()
     }
 
     /// 标记为已 move
     pub fn mark_moved(&self) {
-        self.header.flags.set(self.header.flags.get() | flags::MOVED);
+        self.header.mark_moved();
     }
 
     /// 增加值的引用计数

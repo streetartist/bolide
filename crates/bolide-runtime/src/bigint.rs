@@ -4,24 +4,13 @@
 
 use num_bigint::BigInt;
 use num_traits::{Zero, Signed, ToPrimitive};
-use std::cell::Cell;
 use std::sync::atomic::{AtomicI64, Ordering};
 
-use crate::rc::{TypeTag, flags};
+use crate::rc::{RcHeader, TypeTag};
 
 // Debug: 跟踪分配和释放
 static BIGINT_ALLOC_COUNT: AtomicI64 = AtomicI64::new(0);
 static BIGINT_FREE_COUNT: AtomicI64 = AtomicI64::new(0);
-
-/// RC 对象头
-#[repr(C)]
-struct RcHeader {
-    strong_count: Cell<u32>,
-    weak_count: Cell<u32>,
-    type_tag: TypeTag,
-    flags: Cell<u8>,
-    _padding: [u8; 6],
-}
 
 /// Bolide 大整数类型（带引用计数）
 #[repr(C)]
@@ -35,13 +24,7 @@ impl BolideBigInt {
     pub fn new(value: i64) -> *mut Self {
         BIGINT_ALLOC_COUNT.fetch_add(1, Ordering::SeqCst);
         Box::into_raw(Box::new(Self {
-            header: RcHeader {
-                strong_count: Cell::new(1),
-                weak_count: Cell::new(1),
-                type_tag: TypeTag::BigInt,
-                flags: Cell::new(0),
-                _padding: [0; 6],
-            },
+            header: RcHeader::new(TypeTag::BigInt),
             inner: BigInt::from(value),
         }))
     }
@@ -49,13 +32,7 @@ impl BolideBigInt {
     pub fn from_bigint(inner: BigInt) -> *mut Self {
         BIGINT_ALLOC_COUNT.fetch_add(1, Ordering::SeqCst);
         Box::into_raw(Box::new(Self {
-            header: RcHeader {
-                strong_count: Cell::new(1),
-                weak_count: Cell::new(1),
-                type_tag: TypeTag::BigInt,
-                flags: Cell::new(0),
-                _padding: [0; 6],
-            },
+            header: RcHeader::new(TypeTag::BigInt),
             inner,
         }))
     }
@@ -88,30 +65,27 @@ impl BolideBigInt {
 
     #[inline]
     pub fn retain(&self) {
-        let count = self.header.strong_count.get();
-        self.header.strong_count.set(count + 1);
+        self.header.inc_strong();
     }
 
     #[inline]
     pub fn release(&self) -> bool {
-        let count = self.header.strong_count.get();
-        self.header.strong_count.set(count - 1);
-        count == 1
+        self.header.dec_strong()
     }
 
     #[inline]
     pub fn ref_count(&self) -> u32 {
-        self.header.strong_count.get()
+        self.header.strong_count()
     }
 
     #[inline]
     pub fn is_moved(&self) -> bool {
-        self.header.flags.get() & flags::MOVED != 0
+        self.header.is_moved()
     }
 
     #[inline]
     pub fn mark_moved(&self) {
-        self.header.flags.set(self.header.flags.get() | flags::MOVED);
+        self.header.mark_moved();
     }
 }
 

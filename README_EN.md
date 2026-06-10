@@ -32,7 +32,7 @@
 - **Module System** - Namespace-isolated module imports
 - **Rich Types** - BigInt, Decimal, Dynamic, and more
 - **Concurrency** - Threads, channels, thread pools
-- **Memory Management** - ARC + lifetime annotations + weak/unowned references
+- **Memory Management** - ARC (atomic refcounts) + checked lifetime annotations + liveness-checked weak/unowned references
 
 ## Quick Start
 

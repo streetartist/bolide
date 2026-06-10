@@ -4,19 +4,8 @@
 
 use rust_decimal::Decimal;
 use rust_decimal::prelude::*;
-use std::cell::Cell;
 
-use crate::rc::{TypeTag, flags};
-
-/// RC 对象头
-#[repr(C)]
-struct RcHeader {
-    strong_count: Cell<u32>,
-    weak_count: Cell<u32>,
-    type_tag: TypeTag,
-    flags: Cell<u8>,
-    _padding: [u8; 6],
-}
+use crate::rc::{RcHeader, TypeTag};
 
 /// Bolide 精确小数类型（带引用计数）
 #[repr(C)]
@@ -29,39 +18,21 @@ impl BolideDecimal {
     /// 创建新 Decimal（ref_count = 1）
     pub fn new(value: i64) -> *mut Self {
         Box::into_raw(Box::new(Self {
-            header: RcHeader {
-                strong_count: Cell::new(1),
-                weak_count: Cell::new(1),
-                type_tag: TypeTag::Decimal,
-                flags: Cell::new(0),
-                _padding: [0; 6],
-            },
+            header: RcHeader::new(TypeTag::Decimal),
             inner: Decimal::from(value),
         }))
     }
 
     pub fn from_f64(value: f64) -> *mut Self {
         Box::into_raw(Box::new(Self {
-            header: RcHeader {
-                strong_count: Cell::new(1),
-                weak_count: Cell::new(1),
-                type_tag: TypeTag::Decimal,
-                flags: Cell::new(0),
-                _padding: [0; 6],
-            },
+            header: RcHeader::new(TypeTag::Decimal),
             inner: Decimal::from_f64(value).unwrap_or(Decimal::ZERO),
         }))
     }
 
     pub fn from_decimal(inner: Decimal) -> *mut Self {
         Box::into_raw(Box::new(Self {
-            header: RcHeader {
-                strong_count: Cell::new(1),
-                weak_count: Cell::new(1),
-                type_tag: TypeTag::Decimal,
-                flags: Cell::new(0),
-                _padding: [0; 6],
-            },
+            header: RcHeader::new(TypeTag::Decimal),
             inner,
         }))
     }
@@ -102,30 +73,27 @@ impl BolideDecimal {
 
     #[inline]
     pub fn retain(&self) {
-        let count = self.header.strong_count.get();
-        self.header.strong_count.set(count + 1);
+        self.header.inc_strong();
     }
 
     #[inline]
     pub fn release(&self) -> bool {
-        let count = self.header.strong_count.get();
-        self.header.strong_count.set(count - 1);
-        count == 1
+        self.header.dec_strong()
     }
 
     #[inline]
     pub fn ref_count(&self) -> u32 {
-        self.header.strong_count.get()
+        self.header.strong_count()
     }
 
     #[inline]
     pub fn is_moved(&self) -> bool {
-        self.header.flags.get() & flags::MOVED != 0
+        self.header.is_moved()
     }
 
     #[inline]
     pub fn mark_moved(&self) {
-        self.header.flags.set(self.header.flags.get() | flags::MOVED);
+        self.header.mark_moved();
     }
 }
 

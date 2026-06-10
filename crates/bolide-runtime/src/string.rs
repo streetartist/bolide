@@ -7,7 +7,7 @@
 
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::collections::HashMap;
 
 thread_local! {
@@ -15,17 +15,7 @@ thread_local! {
     static STRING_LITERALS: RefCell<HashMap<String, *mut BolideString>> = RefCell::new(HashMap::new());
 }
 
-use crate::rc::{TypeTag, flags};
-
-/// RC 对象头（与 rc.rs 中保持一致）
-#[repr(C)]
-struct RcHeader {
-    strong_count: Cell<u32>,
-    weak_count: Cell<u32>,
-    type_tag: TypeTag,
-    flags: Cell<u8>,
-    _padding: [u8; 6],
-}
+use crate::rc::{RcHeader, TypeTag};
 
 /// Bolide 字符串类型（带引用计数）
 ///
@@ -55,13 +45,7 @@ impl BolideString {
         let c_string = CString::new(s).unwrap();
         let len = s.len();
         let string = Self {
-            header: RcHeader {
-                strong_count: Cell::new(1),
-                weak_count: Cell::new(1),
-                type_tag: TypeTag::String,
-                flags: Cell::new(0),
-                _padding: [0; 6],
-            },
+            header: RcHeader::new(TypeTag::String),
             data: c_string.into_raw(),
             len,
             capacity: len + 1,
@@ -93,36 +77,31 @@ impl BolideString {
     /// 增加引用计数
     #[inline]
     pub fn retain(&self) {
-        let count = self.header.strong_count.get();
-        debug_assert!(count > 0, "retain on dropped string");
-        self.header.strong_count.set(count + 1);
+        self.header.inc_strong();
     }
 
     /// 减少引用计数，返回是否应该释放
     #[inline]
     pub fn release(&self) -> bool {
-        let count = self.header.strong_count.get();
-        debug_assert!(count > 0, "release underflow");
-        self.header.strong_count.set(count - 1);
-        count == 1
+        self.header.dec_strong()
     }
 
     /// 获取引用计数
     #[inline]
     pub fn ref_count(&self) -> u32 {
-        self.header.strong_count.get()
+        self.header.strong_count()
     }
 
     /// 检查是否已被 move
     #[inline]
     pub fn is_moved(&self) -> bool {
-        self.header.flags.get() & flags::MOVED != 0
+        self.header.is_moved()
     }
 
     /// 标记为已 move
     #[inline]
     pub fn mark_moved(&self) {
-        self.header.flags.set(self.header.flags.get() | flags::MOVED);
+        self.header.mark_moved();
     }
 
     /// 释放内部数据（仅当 strong_count 归零时调用）

@@ -1,0 +1,15 @@
+// 测试借用来源重赋值检测（预期编译错误）
+// 借用存活期间对来源重新赋值会释放旧对象，借用方将悬空
+
+fn get_value(ref x: bigint) -> bigint from x {
+    return x;
+}
+
+fn test_reassign() {
+    let a: bigint = 100B;
+    let b: bigint = get_value(a);  // b 借用 a
+    a = 200B;  // 错误：a 正被 b 借用
+    print(b);
+}
+
+test_reassign();

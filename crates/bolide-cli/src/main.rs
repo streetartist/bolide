@@ -129,6 +129,10 @@ fn run_file(file: &PathBuf) -> miette::Result<()> {
         .map_err(|e| miette::miette!("Parse error: {}", e))?;
 
     let mut compiler = JitCompiler::new();
+    // import 相对路径基于源文件所在目录解析
+    if let Some(parent) = file.parent() {
+        compiler.set_base_dir(&parent.to_string_lossy());
+    }
     let main_ptr = compiler.compile(&ast)
         .map_err(|e| miette::miette!("Compile error: {}", e))?;
 
@@ -151,8 +155,13 @@ fn compile_file(file: &PathBuf, output: &PathBuf) -> miette::Result<()> {
         .map_err(|e| miette::miette!("Parse error: {}", e))?;
 
     // AOT 编译
-    let compiler = AotCompiler::new()
+    let mut compiler = AotCompiler::new()
         .map_err(|e| miette::miette!("Compiler init error: {}", e))?;
+
+    // import 相对路径基于源文件所在目录解析
+    if let Some(parent) = file.parent() {
+        compiler.set_base_dir(&parent.to_string_lossy());
+    }
 
     let result = compiler.compile(&ast)
         .map_err(|e| miette::miette!("Compile error: {}", e))?;

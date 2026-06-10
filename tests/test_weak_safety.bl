@@ -1,0 +1,18 @@
+// weak/unowned 存活检查测试
+class Node {
+    value: int;
+}
+
+// 对象存活时 weak/unowned 正常访问
+let obj: Node = Node(42);
+let w: weak Node = obj;
+print(w.value);   // 42
+
+let u: unowned Node = obj;
+print(u.value);   // 42
+
+// weak 重新赋值
+let obj2: Node = Node(99);
+w = obj2;
+print(w.value);   // 99
+print("alive checks ok");

@@ -3,21 +3,10 @@
 //! BolideList 使用引用计数管理内存
 //! 元素以 i64 存储（可以是值或指针）
 
-use std::cell::Cell;
 use std::os::raw::c_void;
 
-use crate::rc::{TypeTag, flags};
+use crate::rc::{RcHeader, TypeTag};
 use crate::{BolideString, BolideBigInt, BolideDecimal};
-
-/// RC 对象头
-#[repr(C)]
-struct RcHeader {
-    strong_count: Cell<u32>,
-    weak_count: Cell<u32>,
-    type_tag: TypeTag,
-    flags: Cell<u8>,
-    _padding: [u8; 6],
-}
 
 /// 元素类型标签
 #[repr(u8)]
@@ -50,13 +39,7 @@ impl BolideList {
     /// 创建新列表（ref_count = 1）
     pub fn new(elem_type: ElementType) -> *mut Self {
         Box::into_raw(Box::new(Self {
-            header: RcHeader {
-                strong_count: Cell::new(1),
-                weak_count: Cell::new(1),
-                type_tag: TypeTag::List,
-                flags: Cell::new(0),
-                _padding: [0; 6],
-            },
+            header: RcHeader::new(TypeTag::List),
             data: std::ptr::null_mut(),
             len: 0,
             capacity: 0,
@@ -67,13 +50,7 @@ impl BolideList {
     /// 创建带初始容量的列表
     pub fn with_capacity(elem_type: ElementType, capacity: usize) -> *mut Self {
         let mut list = Self {
-            header: RcHeader {
-                strong_count: Cell::new(1),
-                weak_count: Cell::new(1),
-                type_tag: TypeTag::List,
-                flags: Cell::new(0),
-                _padding: [0; 6],
-            },
+            header: RcHeader::new(TypeTag::List),
             data: std::ptr::null_mut(),
             len: 0,
             capacity: 0,
@@ -168,30 +145,27 @@ impl BolideList {
 
     #[inline]
     pub fn retain(&self) {
-        let count = self.header.strong_count.get();
-        self.header.strong_count.set(count + 1);
+        self.header.inc_strong();
     }
 
     #[inline]
     pub fn release(&self) -> bool {
-        let count = self.header.strong_count.get();
-        self.header.strong_count.set(count - 1);
-        count == 1
+        self.header.dec_strong()
     }
 
     #[inline]
     pub fn ref_count(&self) -> u32 {
-        self.header.strong_count.get()
+        self.header.strong_count()
     }
 
     #[inline]
     pub fn is_moved(&self) -> bool {
-        self.header.flags.get() & flags::MOVED != 0
+        self.header.is_moved()
     }
 
     #[inline]
     pub fn mark_moved(&self) {
-        self.header.flags.set(self.header.flags.get() | flags::MOVED);
+        self.header.mark_moved();
     }
 
     /// 增加单个元素引用

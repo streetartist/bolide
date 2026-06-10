@@ -1,0 +1,17 @@
+// 数学工具模块
+
+fn add(a: int, b: int) -> int {
+    return a + b;
+}
+
+fn mul(a: int, b: int) -> int {
+    return a * b;
+}
+
+fn square(x: int) -> int {
+    return x * x;
+}
+
+fn cube(x: int) -> int {
+    return x * x * x;
+}

@@ -48,6 +48,8 @@ fn parse_statement(pair: Pair<Rule>) -> Result<Option<Statement>, String> {
         Rule::await_scope_stmt => Ok(Some(Statement::AwaitScope(parse_await_scope_stmt(pair)?))),
         Rule::async_select_stmt => Ok(Some(Statement::AsyncSelect(parse_async_select_stmt(pair)?))),
         Rule::send_stmt => Ok(Some(Statement::Send(parse_send_stmt(pair)?))),
+        Rule::break_stmt => Ok(Some(Statement::Break)),
+        Rule::continue_stmt => Ok(Some(Statement::Continue)),
         Rule::return_stmt => Ok(Some(parse_return_stmt(pair)?)),
         Rule::expr_stmt => Ok(Some(Statement::Expr(parse_expr_stmt(pair)?))),
         Rule::import_stmt => Ok(Some(Statement::Import(parse_import(pair)?))),
@@ -62,7 +64,20 @@ fn parse_assign(pair: Pair<Rule>) -> Result<Assign, String> {
     let mut inner = pair.into_inner();
     let target_pair = inner.next().unwrap();
     let target = parse_assign_target(target_pair)?;
-    let value = parse_expr(inner.next().unwrap())?;
+    let op_pair = inner.next().unwrap();
+    let op_str = op_pair.as_str().to_string();
+    let rhs = parse_expr(inner.next().unwrap())?;
+
+    // 复合赋值脱糖: a += b → a = a + b
+    let value = match op_str.as_str() {
+        "=" => rhs,
+        "+=" => Expr::BinOp(Box::new(target.clone()), BinOp::Add, Box::new(rhs)),
+        "-=" => Expr::BinOp(Box::new(target.clone()), BinOp::Sub, Box::new(rhs)),
+        "*=" => Expr::BinOp(Box::new(target.clone()), BinOp::Mul, Box::new(rhs)),
+        "/=" => Expr::BinOp(Box::new(target.clone()), BinOp::Div, Box::new(rhs)),
+        "%=" => Expr::BinOp(Box::new(target.clone()), BinOp::Mod, Box::new(rhs)),
+        other => return Err(format!("Unknown assignment operator: {}", other)),
+    };
     Ok(Assign { target, value })
 }
 
@@ -126,8 +141,9 @@ fn parse_func_def(pair: Pair<Rule>) -> Result<FuncDef, String> {
                 return_type = Some(parse_type(item)?);
             }
             Rule::lifetime_clause => {
-                // 解析生命周期依赖: from x, y
+                // 解析生命周期依赖: from x, y（跳过 kw_from 关键字对）
                 let deps: Vec<String> = item.into_inner()
+                    .filter(|p| p.as_rule() == Rule::ident)
                     .map(|p| p.as_str().to_string())
                     .collect();
                 lifetime_deps = Some(deps);
@@ -334,8 +350,11 @@ fn parse_for_stmt(pair: Pair<Rule>) -> Result<ForStmt, String> {
         return Err("For loop must have at least one variable".to_string());
     }
 
-    // Next is iterator expression
-    let iter_pair = inner.next().ok_or("Missing iterator expression")?;
+    // Next is iterator expression (skip the `in` keyword pair)
+    let mut iter_pair = inner.next().ok_or("Missing iterator expression")?;
+    if iter_pair.as_rule() == Rule::kw_in {
+        iter_pair = inner.next().ok_or("Missing iterator expression")?;
+    }
     let iter = parse_expr(iter_pair)?;
     
     // Next is block
@@ -455,7 +474,8 @@ fn parse_import(pair: Pair<Rule>) -> Result<Import, String> {
         _ => return Err(format!("Unexpected import path: {:?}", first.as_rule())),
     };
 
-    let alias = inner.next().map(|p| p.as_str().to_string());
+    // 跳过 kw_as 关键字对，别名是其后的 ident
+    let alias = inner.find(|p| p.as_rule() == Rule::ident).map(|p| p.as_str().to_string());
     Ok(Import { path, file_path, alias })
 }
 
@@ -506,7 +526,11 @@ fn parse_expr(pair: Pair<Rule>) -> Result<Expr, String> {
 fn parse_or_expr(pair: Pair<Rule>) -> Result<Expr, String> {
     let mut inner = pair.into_inner();
     let mut left = parse_and_expr(inner.next().unwrap())?;
-    while let Some(right_pair) = inner.next() {
+    for right_pair in inner {
+        // 跳过 kw_or 关键字对
+        if right_pair.as_rule() != Rule::and_expr {
+            continue;
+        }
         let right = parse_and_expr(right_pair)?;
         left = Expr::BinOp(Box::new(left), BinOp::Or, Box::new(right));
     }
@@ -516,7 +540,11 @@ fn parse_or_expr(pair: Pair<Rule>) -> Result<Expr, String> {
 fn parse_and_expr(pair: Pair<Rule>) -> Result<Expr, String> {
     let mut inner = pair.into_inner();
     let mut left = parse_cmp_expr(inner.next().unwrap())?;
-    while let Some(right_pair) = inner.next() {
+    for right_pair in inner {
+        // 跳过 kw_and 关键字对
+        if right_pair.as_rule() != Rule::cmp_expr {
+            continue;
+        }
         let right = parse_cmp_expr(right_pair)?;
         left = Expr::BinOp(Box::new(left), BinOp::And, Box::new(right));
     }
@@ -642,29 +670,33 @@ fn parse_primary(pair: Pair<Rule>) -> Result<Expr, String> {
     let inner = pair.into_inner().next().unwrap();
     match inner.as_rule() {
         Rule::int_lit => {
-            let s = inner.as_str();
+            let s = inner.as_str().replace('_', "");
             let n: i64 = if s.starts_with("0x") || s.starts_with("0X") {
-                i64::from_str_radix(&s[2..], 16).unwrap()
+                i64::from_str_radix(&s[2..], 16)
+                    .map_err(|e| format!("Invalid hex literal '{}': {}", s, e))?
             } else {
-                s.parse().unwrap()
+                s.parse()
+                    .map_err(|e| format!("Invalid int literal '{}': {}", s, e))?
             };
             Ok(Expr::Int(n))
         }
         Rule::float_lit => {
-            let f: f64 = inner.as_str().parse().unwrap();
+            let s = inner.as_str().replace('_', "");
+            let f: f64 = s.parse()
+                .map_err(|e| format!("Invalid float literal '{}': {}", s, e))?;
             Ok(Expr::Float(f))
         }
         Rule::bigint_lit => {
-            // 去掉后缀 B/b
+            // 去掉后缀 B/b 和下划线分隔符
             let s = inner.as_str();
-            let num_str = &s[..s.len()-1];
-            Ok(Expr::BigInt(num_str.to_string()))
+            let num_str = s[..s.len()-1].replace('_', "");
+            Ok(Expr::BigInt(num_str))
         }
         Rule::decimal_lit => {
-            // 去掉后缀 D/d
+            // 去掉后缀 D/d 和下划线分隔符
             let s = inner.as_str();
-            let num_str = &s[..s.len()-1];
-            Ok(Expr::Decimal(num_str.to_string()))
+            let num_str = s[..s.len()-1].replace('_', "");
+            Ok(Expr::Decimal(num_str))
         }
         Rule::string_lit => {
             let s = inner.as_str();
@@ -693,9 +725,13 @@ fn parse_primary(pair: Pair<Rule>) -> Result<Expr, String> {
             Ok(Expr::Dict(entries))
         }
         Rule::spawn_expr => {
-
+            // 跳过 kw_spawn 关键字对
             let mut spawn_inner = inner.into_inner();
-            let func_name = spawn_inner.next().unwrap().as_str().to_string();
+            let mut first = spawn_inner.next().unwrap();
+            if first.as_rule() == Rule::kw_spawn {
+                first = spawn_inner.next().unwrap();
+            }
+            let func_name = first.as_str().to_string();
             let args: Result<Vec<_>, _> = spawn_inner.next().unwrap()
                 .into_inner()
                 .map(parse_expr)
@@ -707,11 +743,17 @@ fn parse_primary(pair: Pair<Rule>) -> Result<Expr, String> {
             Ok(Expr::Recv(channel))
         }
         Rule::await_expr => {
-            let expr = parse_expr(inner.into_inner().next().unwrap())?;
+            // await 绑定到后缀表达式层级（跳过 kw_await 关键字对）
+            let postfix = inner.into_inner()
+                .find(|p| p.as_rule() == Rule::postfix_expr)
+                .ok_or("await expression missing operand")?;
+            let expr = parse_postfix_expr(postfix)?;
             Ok(Expr::Await(Box::new(expr)))
         }
         Rule::await_all_expr => {
+            // 跳过 kw_await 关键字对，只收集表达式
             let exprs: Result<Vec<_>, _> = inner.into_inner()
+                .filter(|p| p.as_rule() == Rule::expr)
                 .map(parse_expr).collect();
             Ok(Expr::AwaitAll(exprs?))
         }

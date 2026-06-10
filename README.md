@@ -86,7 +86,10 @@ AOT 编译的优势：
 - **更快启动** - 跳过 JIT 编译阶段
 - **便于分发** - 单文件部署，无依赖
 
-> **注意**: AOT 模式目前功能支持不如 JIT 完整，部分列表方法（如 `append`）等特性可能尚未支持。建议开发阶段使用 JIT 模式（`bolide run`），发布时测试 AOT 编译结果。
+> **注意**: AOT 模式目前功能支持不如 JIT 完整（JIT 是参考实现）。已知差距包括：
+> 列表/字典/元组的打印与部分方法、线程 `join`、`async select`、类继承方法调用、
+> 函数作为值传递、部分 bigint/decimal 转换等（完整清单见 todo.md 的 AOT 对齐一节）。
+> 建议开发阶段使用 JIT 模式（`bolide run`），发布前用 AOT 编译结果完整测试。
 
 ## 语法示例
 
@@ -99,6 +102,12 @@ let name: str = "Bolide";
 let flag: bool = true;
 let big: bigint = 123456789012345678901234567890b;
 let precise: decimal = 3.14159265358979d;
+
+// 数字字面量支持下划线分隔
+let million: int = 1_000_000;
+
+// 字符串支持转义序列: \" \\ \n \t \r \0
+let quoted: str = "he said \"hi\"\nsecond line";
 ```
 
 ### 用户输入
@@ -181,6 +190,26 @@ for n in nums {
 // while 循环
 while x > 0 {
     x = x - 1;
+}
+
+// 复合赋值
+let n: int = 10;
+n += 5;   // 15
+n -= 3;   // 12
+n *= 2;   // 24
+n /= 4;   // 6
+n %= 4;   // 2
+
+// break / continue
+let total: int = 0;
+for i in range(10) {
+    if i == 3 {
+        continue;  // 跳过本次迭代
+    }
+    if i == 6 {
+        break;     // 跳出循环
+    }
+    total += i;
 }
 
 // for 循环 - 字典遍历 (Python 风格)
@@ -287,11 +316,20 @@ let r2: int = await f2;
 async fn fetch_a() -> int { return 100; }
 async fn fetch_b() -> int { return 200; }
 
-// 并发执行所有任务并等待结果
-let (a, b) = await all {
+// 并发执行所有任务并等待结果（返回元组）
+let results: (int, int) = await all {
     fetch_a(),
     fetch_b()
 };
+print(results[0]);  // 100
+print(results[1]);  // 200
+
+// 类型标注可以省略，编译器会根据各协程的返回类型自动推断为元组
+let inferred = await all {
+    fetch_a(),
+    fetch_b()
+};
+print(inferred[0]);  // 100
 ```
 
 #### Async Select (竞态等待)
@@ -380,6 +418,8 @@ select {
 
 ### 模块系统
 
+模块按文件导入，所有符号位于以文件名命名的命名空间内（不污染全局命名空间）：
+
 ```bolide
 // math_utils.bl
 fn add(a: int, b: int) -> int {
@@ -391,7 +431,37 @@ import "math_utils.bl";
 
 let result: int = math_utils.add(10, 20);
 print(result);  // 30
+
+// 使用 as 指定别名
+import "math_utils.bl" as mu;
+print(mu.add(1, 2));  // 3
 ```
+
+**导入路径解析规则**（确定性顺序，不依赖进程工作目录）：
+
+1. 绝对路径按原样使用；
+2. 相对路径基于**导入方源文件所在目录**解析；
+3. `BOLIDE_HOME` 环境变量指向的目录（开发期可指向仓库根，以便 `import "std/..."`）；
+4. `bolide` 可执行文件所在目录（发行版布局：`std/` 与可执行文件同级）。
+
+### 标识符与内置函数隔离
+
+运行时内置函数位于编译器内部的 `@_` 命名空间（`@` 不是合法标识符字符），
+与用户代码完全隔离：
+
+- 用户函数可以使用任何合法标识符，包括 `print_bigint`、`list_push` 这类与
+  运行时内部函数同名的名字，不会冲突或递归；
+- 运行时内部 ABI（如 `list_push`、`object_alloc`）**不暴露**给用户代码，
+  列表/字典操作请使用方法语法（`xs.push(3)`）；
+- 用户可直接调用的内置函数（`print`、`input`、`range`、`str`/`int`/`float`
+  等类型转换、`join`、`channel`）是显式白名单，不受隔离影响。
+
+### 变量与作用域
+
+- 顶层 `let` 声明**全局变量**，函数内可读取、赋值（GUI 回调依赖这一点）；
+- 函数内的 `let` 声明**局部变量**，同名时遮蔽全局变量；
+- 全局变量与局部变量能力一致：可作 `ref` 实参、可作通道用于
+  `<-` 收发与 `select`、支持 `float` 等全部类型。
 
 ### 类与面向对象
 
@@ -473,7 +543,7 @@ let r: int = test_callback(my_callback, 10, 20);
 
 ## 内存管理
 
-Bolide 使用 **ARC (自动引用计数)** 作为默认内存管理方式，同时提供生命周期注解和弱引用来处理特殊场景。
+Bolide 使用 **ARC (自动引用计数)** 作为默认内存管理方式。引用计数是**原子操作**（与 Swift/Rust Arc 相同的内存序），跨线程传递对象不会产生计数竞争。同时提供生命周期注解和弱引用来处理特殊场景。
 
 ### 生命周期注解 (from)
 
@@ -489,30 +559,59 @@ let a: bigint = 100B;
 let b: bigint = get_value(a);  // b 借用 a，不增加引用计数
 ```
 
+编译器会对借用施加以下检查，违反时**编译报错**：
+
+- `from` 函数的返回值必须来源于声明的参数；
+- 借用变量在来源离开作用域后不可继续存活（悬空检测）；
+- 借用存活期间，**禁止对来源变量重新赋值**（旧对象会被释放）；
+- 借用值**不允许逃逸**：不能存入列表/字典/元组/对象字段、不能通过
+  `push`/`insert` 等存储型方法进入容器、不能通过通道发送或作为 `spawn`
+  参数跨线程传递、不能从未声明 `from` 的函数返回。
+
+需要让借用值逃逸时，请显式拷贝（如 `bigint(b)`）后再存储。
+
 ### weak 引用
 
-`weak` 引用不增加引用计数，当原对象被释放时自动变为 nil：
+`weak` 引用不增加强引用计数，用于打破循环引用：
 
 ```bolide
 class Node {
     value: int;
 }
 
-let obj: Node = Node(42);  // 直接在构造时初始化字段
+let obj: Node = Node(42);
 
-let w: weak Node = obj;  // weak 引用，不增加引用计数
-// 访问 weak 引用时会自动检查是否为 nil
+let w: weak Node = obj;  // weak 引用，不增加强引用计数
+print(w.value);          // 访问前自动检查对象是否存活
+```
+
+weak 引用会持有对象头（弱引用计数），对象被释放后访问 weak 引用会触发
+**确定性的运行时错误并中止程序**（带诊断信息），而不是未定义行为：
+
+```text
+runtime error: weak/unowned reference accessed after object was deallocated
 ```
 
 ### unowned 引用
 
-`unowned` 引用不增加引用计数，假设对象始终存在（不进行 nil 检查）：
+`unowned` 引用同样不增加强引用计数，语义上假设对象始终存在。与 weak 相同，
+访问时会进行存活检查——对象已释放时**立刻报错中止**，绝不会读到悬空内存：
 
 ```bolide
 let obj: Node = Node(42);
 let u: unowned Node = obj;  // unowned 引用
-print(u.value);  // 直接访问，无 nil 检查
+print(u.value);             // 对象存活时直接访问
 ```
+
+> weak 与 unowned 的区别是语义意图：weak 表示"对象可能先于引用消亡"（典型如
+> 子节点回指父节点），unowned 表示"对象保证活得比引用久"。两者目前都采用
+> trap 式检查保证内存安全；未来引入可选类型后，weak 将支持 nil 分支处理。
+
+### 并发安全
+
+- 所有引用计数（强/弱）均为原子操作，跨线程 retain/release 无数据竞争；
+- `spawn` 对传入对象采用 move 语义，原变量失效（运行时 MOVED 标记）；
+- channel 当前只支持值类型传递，对象传递的 Arc 方案见 todo.md。
 
 
 ## 项目结构

@@ -1,0 +1,13 @@
+fn get_value(ref x: bigint) -> bigint from x {
+    return x;
+}
+fn test_ok() {
+    let a: bigint = 100B;
+    let b: bigint = get_value(a);
+    print(b);
+    b = 300B;
+    a = 200B;
+    print(a);
+    print(b);
+}
+test_ok();

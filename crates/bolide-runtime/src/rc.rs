@@ -6,10 +6,10 @@
 //!
 //! spawn 使用 move 语义：传入数据后原变量失效
 
-use std::cell::Cell;
 use std::marker::PhantomData;
 use std::os::raw::c_void;
 use std::ptr::NonNull;
+use std::sync::atomic::{fence, AtomicU32, AtomicU8, Ordering};
 
 /// 类型标签，用于运行时类型识别
 #[repr(u8)]
@@ -46,16 +46,16 @@ pub enum TypeTag {
 /// ```
 #[repr(C)]
 pub struct RcHeader {
-    /// 强引用计数
-    strong_count: Cell<u32>,
+    /// 强引用计数（原子，跨线程安全）
+    strong_count: AtomicU32,
     /// 弱引用计数 (包含一个隐式的 +1，当 strong > 0 时)
-    weak_count: Cell<u32>,
+    weak_count: AtomicU32,
     /// 类型标签
     pub type_tag: TypeTag,
     /// 标志位
     /// - bit 0: 是否已标记为待释放
     /// - bit 1: 是否被 spawn move
-    pub flags: Cell<u8>,
+    flags: AtomicU8,
     /// 填充对齐
     _padding: [u8; 6],
 }
@@ -71,76 +71,105 @@ impl RcHeader {
     #[inline]
     pub fn new(type_tag: TypeTag) -> Self {
         RcHeader {
-            strong_count: Cell::new(1),
-            weak_count: Cell::new(1), // 隐式 +1
+            strong_count: AtomicU32::new(1),
+            weak_count: AtomicU32::new(1), // 隐式 +1
             type_tag,
-            flags: Cell::new(0),
+            flags: AtomicU8::new(0),
             _padding: [0; 6],
         }
     }
 
     /// 增加强引用计数
+    /// 与 std::sync::Arc 一致：retain 用 Relaxed 即可（持有一个引用即保证对象存活）
     #[inline]
     pub fn inc_strong(&self) {
-        let count = self.strong_count.get();
-        debug_assert!(count > 0, "inc_strong on dropped object");
-        self.strong_count.set(count + 1);
+        let old = self.strong_count.fetch_add(1, Ordering::Relaxed);
+        debug_assert!(old > 0, "inc_strong on dropped object");
+    }
+
+    /// 仅当对象仍存活时增加强引用计数（weak upgrade 用，避免 TOCTOU）
+    #[inline]
+    pub fn try_inc_strong(&self) -> bool {
+        let mut count = self.strong_count.load(Ordering::Relaxed);
+        loop {
+            if count == 0 {
+                return false;
+            }
+            match self.strong_count.compare_exchange_weak(
+                count,
+                count + 1,
+                Ordering::Acquire,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return true,
+                Err(actual) => count = actual,
+            }
+        }
     }
 
     /// 减少强引用计数，返回是否应该释放数据
+    /// release 用 Release，最后一个引用释放时插入 Acquire fence（与 Arc 相同）
     #[inline]
     pub fn dec_strong(&self) -> bool {
-        let count = self.strong_count.get();
-        debug_assert!(count > 0, "dec_strong underflow");
-        self.strong_count.set(count - 1);
-        count == 1
+        let old = self.strong_count.fetch_sub(1, Ordering::Release);
+        debug_assert!(old > 0, "dec_strong underflow");
+        if old == 1 {
+            fence(Ordering::Acquire);
+            true
+        } else {
+            false
+        }
     }
 
     /// 获取强引用计数
     #[inline]
     pub fn strong_count(&self) -> u32 {
-        self.strong_count.get()
+        self.strong_count.load(Ordering::Acquire)
     }
 
     /// 增加弱引用计数
     #[inline]
     pub fn inc_weak(&self) {
-        let count = self.weak_count.get();
-        self.weak_count.set(count + 1);
+        self.weak_count.fetch_add(1, Ordering::Relaxed);
     }
 
     /// 减少弱引用计数，返回是否应该释放头部
     #[inline]
     pub fn dec_weak(&self) -> bool {
-        let count = self.weak_count.get();
-        debug_assert!(count > 0, "dec_weak underflow");
-        self.weak_count.set(count - 1);
-        count == 1
+        let old = self.weak_count.fetch_sub(1, Ordering::Release);
+        debug_assert!(old > 0, "dec_weak underflow");
+        if old == 1 {
+            fence(Ordering::Acquire);
+            true
+        } else {
+            false
+        }
     }
 
     /// 获取弱引用计数
     #[inline]
     pub fn weak_count(&self) -> u32 {
         // 返回实际弱引用数（减去隐式的 1）
-        self.weak_count.get() - if self.strong_count.get() > 0 { 1 } else { 0 }
+        let weak = self.weak_count.load(Ordering::Acquire);
+        weak - if self.strong_count() > 0 { 1 } else { 0 }
     }
 
     /// 检查对象是否仍然存活
     #[inline]
     pub fn is_alive(&self) -> bool {
-        self.strong_count.get() > 0
+        self.strong_count.load(Ordering::Acquire) > 0
     }
 
     /// 标记为已 move（spawn 使用）
     #[inline]
     pub fn mark_moved(&self) {
-        self.flags.set(self.flags.get() | flags::MOVED);
+        self.flags.fetch_or(flags::MOVED, Ordering::Relaxed);
     }
 
     /// 检查是否已 move
     #[inline]
     pub fn is_moved(&self) -> bool {
-        self.flags.get() & flags::MOVED != 0
+        self.flags.load(Ordering::Relaxed) & flags::MOVED != 0
     }
 }
 
@@ -284,8 +313,7 @@ impl<T> BolideWeak<T> {
     /// 尝试升级为强引用
     pub fn upgrade(&self) -> Option<BolideRc<T>> {
         let header = unsafe { &(*self.ptr.as_ptr()).header };
-        if header.is_alive() {
-            header.inc_strong();
+        if header.try_inc_strong() {
             Some(BolideRc {
                 ptr: self.ptr,
                 _marker: PhantomData,
@@ -390,8 +418,7 @@ pub extern "C" fn bolide_weak_upgrade(ptr: BolideWeakPtr) -> BolideRcPtr {
     }
     unsafe {
         let header = &*((ptr as *mut RcHeader).sub(1));
-        if header.is_alive() {
-            header.inc_strong();
+        if header.try_inc_strong() {
             ptr
         } else {
             std::ptr::null_mut()
@@ -522,13 +549,7 @@ pub extern "C" fn bolide_rc_alloc(size: i64, type_tag: u8) -> BolideRcPtr {
 
         // 初始化头部
         let header = ptr as *mut RcHeader;
-        std::ptr::write(header, RcHeader {
-            strong_count: Cell::new(1),
-            weak_count: Cell::new(1),
-            type_tag: std::mem::transmute(type_tag),
-            flags: Cell::new(0),
-            _padding: [0; 6],
-        });
+        std::ptr::write(header, RcHeader::new(std::mem::transmute(type_tag)));
 
         // 返回数据部分的指针
         ptr.add(std::mem::size_of::<RcHeader>()) as BolideRcPtr

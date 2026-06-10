@@ -1,0 +1,23 @@
+// await / await all 类型自动推断测试
+async fn fetch_a() -> int { return 100; }
+async fn fetch_b() -> int { return 200; }
+async fn fetch_s() -> str { return "hello"; }
+async fn fetch_s2() -> str { return "world"; }
+
+// await all 无标注：推断为元组
+let nums = await all { fetch_a(), fetch_b() };
+print(nums[0]);   // 100
+print(nums[1]);   // 200
+
+let strs = await all { fetch_s(), fetch_s2() };
+print(strs[0]);   // hello
+print(strs[1]);   // world
+
+// await 直接调用：推断为函数返回类型
+let r = await fetch_s();
+print(r);         // hello
+
+// 两步式：future 变量后 await
+let f = fetch_s2();
+let r2 = await f;
+print(r2);        // world

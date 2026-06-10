@@ -61,7 +61,7 @@
             "patterns": [
                 {
                     "name": "keyword.control.bolide",
-                    "match": "\\b(if|elif|else|while|for|in|return|import|as|select|timeout|default)\\b"
+                    "match": "\\b(if|elif|else|while|for|in|break|continue|return|import|as|select|timeout|default)\\b"
                 },
                 {
                     "name": "keyword.other.bolide",

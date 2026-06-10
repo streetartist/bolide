@@ -2,11 +2,8 @@
 print("Testing List Variants");
 let l: list<int> = [1, 2];
 
-// Variant A: Method call (commented out if failed before, but let's try strict isolation)
-// l.push(3); 
-
-// Variant B: Builtin function call
-list_push(l, 3);
-
-// Variant C: push global function
-// push(l, 3);
+// 方法调用是受支持的列表操作形式
+// （运行时内部函数如 list_push 已隔离到 @_ 命名空间，不再暴露给用户代码）
+l.push(3);
+print(l.len());   // 3
+print(l[2]);      // 3
