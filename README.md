@@ -12,7 +12,7 @@
     <img src="https://img.shields.io/badge/License-MIT-brightgreen.svg" alt="License: MIT">
   </a>
   <a href="#">
-    <img src="https://img.shields.io/badge/version-0.8.2-blue.svg" alt="Version">
+    <img src="https://img.shields.io/badge/version-0.9.1-blue.svg" alt="Version">
   </a>
   <a href="#">
     <img src="https://img.shields.io/badge/platform-windows%20%7C%20linux-lightgrey.svg" alt="Platform">
@@ -522,6 +522,101 @@ fn my_callback(a: int, b: int) -> int {
 }
 let r: int = test_callback(my_callback, 10, 20);
 ```
+
+### 错误处理 (try/catch/throw)
+
+Bolide 提供了轻量级的异常处理机制：`throw` 抛出异常，`try/catch` 捕获异常，支持可选的 `finally` 清理块。
+
+#### 基本用法
+
+```bolide
+try {
+    print("in try body");
+    throw 42;
+    print("after throw (will not print)");
+} catch (e: int) {
+    print("caught: ");
+    print(e);  // 42
+}
+print("after try/catch");
+```
+
+#### 语法
+
+```
+throw_stmt = { "throw" ~ expr ~ ";" }
+try_stmt  = { "try" ~ block ~ catch_clause+ ~ finally? }
+catch_clause = { "catch" ~ "(" ~ ident ~ ":" ~ type_expr ~ ")" ~ block }
+```
+
+- **`throw`** 可以抛出任意类型的值（`int`、`str`、对象等）
+- **`catch (e: T)`** 通过类型标签匹配异常，支持子类匹配（编译器自动展开）
+- **`finally`** 块无论是否抛出异常都会执行，适合资源清理
+
+#### 嵌套 try/catch
+
+```bolide
+try {
+    try {
+        throw 42;
+    } catch (e: int) {
+        print("inner catch: " + str(e));
+    }
+    print("after inner try");
+} catch (e: int) {
+    print("outer catch (should not reach)");
+}
+```
+
+#### 重新抛出 (Rethrow)
+
+```bolide
+try {
+    try {
+        throw 77;
+    } catch (e: int) {
+        print("rethrowing: " + str(e));
+        throw e;  // 重新抛出
+    }
+} catch (e: int) {
+    print("outer catch: " + str(e));  // 77
+}
+```
+
+#### finally 清理
+
+```bolide
+fn open_file(path: str) -> int {
+    // ... open file, return handle
+    return 1;
+}
+
+fn close_file(handle: int) {
+    // ... close file
+}
+
+let handle: int = open_file("data.txt");
+try {
+    // ... 可能抛出异常的代码
+    throw "something went wrong";
+} catch (e: str) {
+    print("error: " + e);
+} finally {
+    close_file(handle);  // 一定会执行
+    print("cleanup done");
+}
+```
+
+#### 实现原理
+
+不使用 `setjmp/longjmp`（与 Cranelift SSA 寄存器分配不兼容）。编译器维护一个 **catch 落点栈**：`throw` 将异常值和类型标签存入 thread-local，然后直接跳转到最近的 catch 块。异常值通过内存（thread-local）传递，不经过寄存器，因此 SSA 安全。
+
+类型标签机制：
+- 基本类型（`int`、`float`、`str` 等）有固定标签
+- 自定义类按声明顺序分配 ID（≥100）
+- `catch (e: T)` 的类型过滤在编译器展开为标签比较的 OR 链（含 T 的所有已知子类）
+
+> **当前限制**: 仅支持同函数内的 try/catch（catch 与 throw 必须在同一编译函数内）。跨函数异常的栈展开计划在后续版本实现。
 
 ## 类型系统
 
