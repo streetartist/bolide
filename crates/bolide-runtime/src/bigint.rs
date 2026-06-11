@@ -4,13 +4,28 @@
 
 use num_bigint::BigInt;
 use num_traits::{Zero, Signed, ToPrimitive};
+#[cfg(debug_assertions)]
 use std::sync::atomic::{AtomicI64, Ordering};
 
 use crate::rc::{RcHeader, TypeTag};
 
-// Debug: 跟踪分配和释放
+// Debug: 跟踪分配和释放（仅 debug 构建，release 下零开销）
+#[cfg(debug_assertions)]
 static BIGINT_ALLOC_COUNT: AtomicI64 = AtomicI64::new(0);
+#[cfg(debug_assertions)]
 static BIGINT_FREE_COUNT: AtomicI64 = AtomicI64::new(0);
+
+#[inline(always)]
+fn track_alloc() {
+    #[cfg(debug_assertions)]
+    BIGINT_ALLOC_COUNT.fetch_add(1, Ordering::Relaxed);
+}
+
+#[inline(always)]
+fn track_free() {
+    #[cfg(debug_assertions)]
+    BIGINT_FREE_COUNT.fetch_add(1, Ordering::Relaxed);
+}
 
 /// Bolide 大整数类型（带引用计数）
 #[repr(C)]
@@ -22,7 +37,7 @@ pub struct BolideBigInt {
 impl BolideBigInt {
     /// 创建新 BigInt（ref_count = 1）
     pub fn new(value: i64) -> *mut Self {
-        BIGINT_ALLOC_COUNT.fetch_add(1, Ordering::SeqCst);
+        track_alloc();
         Box::into_raw(Box::new(Self {
             header: RcHeader::new(TypeTag::BigInt),
             inner: BigInt::from(value),
@@ -30,7 +45,7 @@ impl BolideBigInt {
     }
 
     pub fn from_bigint(inner: BigInt) -> *mut Self {
-        BIGINT_ALLOC_COUNT.fetch_add(1, Ordering::SeqCst);
+        track_alloc();
         Box::into_raw(Box::new(Self {
             header: RcHeader::new(TypeTag::BigInt),
             inner,
@@ -118,7 +133,7 @@ pub extern "C" fn bolide_bigint_release(b: *mut BolideBigInt) {
     if b.is_null() { return; }
     unsafe {
         if (*b).release() {
-            BIGINT_FREE_COUNT.fetch_add(1, Ordering::SeqCst);
+            track_free();
             let _ = Box::from_raw(b);
         }
     }
@@ -248,19 +263,27 @@ pub extern "C" fn bolide_bigint_ge(a: *const BolideBigInt, b: *const BolideBigIn
 
 // ==================== Debug Stats ====================
 
-/// 打印 BigInt 内存统计
+/// 打印 BigInt 内存统计（仅 debug 构建有数据）
 #[no_mangle]
 pub extern "C" fn bolide_bigint_debug_stats() {
-    let alloc = BIGINT_ALLOC_COUNT.load(Ordering::SeqCst);
-    let free = BIGINT_FREE_COUNT.load(Ordering::SeqCst);
-    println!("[BigInt Stats] alloc: {}, free: {}, leak: {}", alloc, free, alloc - free);
+    #[cfg(debug_assertions)]
+    {
+        let alloc = BIGINT_ALLOC_COUNT.load(Ordering::Relaxed);
+        let free = BIGINT_FREE_COUNT.load(Ordering::Relaxed);
+        println!("[BigInt Stats] alloc: {}, free: {}, leak: {}", alloc, free, alloc - free);
+    }
+    #[cfg(not(debug_assertions))]
+    println!("[BigInt Stats] not tracked in release build");
 }
 
 /// 重置统计计数器
 #[no_mangle]
 pub extern "C" fn bolide_bigint_reset_stats() {
-    BIGINT_ALLOC_COUNT.store(0, Ordering::SeqCst);
-    BIGINT_FREE_COUNT.store(0, Ordering::SeqCst);
+    #[cfg(debug_assertions)]
+    {
+        BIGINT_ALLOC_COUNT.store(0, Ordering::Relaxed);
+        BIGINT_FREE_COUNT.store(0, Ordering::Relaxed);
+    }
 }
 
 // ==================== 测试 ====================

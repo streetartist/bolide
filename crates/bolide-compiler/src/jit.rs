@@ -75,8 +75,14 @@ pub struct JitCompiler {
 
 impl JitCompiler {
     pub fn new() -> Self {
-        let mut builder = JITBuilder::new(cranelift_module::default_libcall_names())
-            .expect("Failed to create JIT builder");
+        // 开启 Cranelift 优化（默认 opt_level=none 不做任何优化）
+        let mut flag_builder = settings::builder();
+        flag_builder.set("opt_level", "speed").expect("invalid opt_level");
+        let isa_builder = cranelift_native::builder().expect("host machine is not supported");
+        let isa = isa_builder
+            .finish(settings::Flags::new(flag_builder))
+            .expect("Failed to create ISA");
+        let mut builder = JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
 
         // 注册运行时函数 - 基本类型打印 (统一在 print.rs)
         builder.symbol("@_print_int", bolide_runtime::bolide_print_int as *const u8);
@@ -1301,6 +1307,13 @@ impl JitCompiler {
         self.functions.insert("@_string_to_float".to_string(), id);
 
         // ===== RC Release 函数 =====
+        // string_retain(ptr) -> ptr
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(ptr));
+        sig.returns.push(AbiParam::new(ptr));
+        let id = self.module.declare_function("@_string_retain", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        self.functions.insert("@_string_retain".to_string(), id);
+
         // string_release(ptr) -> void
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
@@ -3889,7 +3902,11 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         let value_val = self.compile_expr(value)?;
 
         match base_type {
-            BolideType::List(_) => {
+            BolideType::List(ref elem_ty) => {
+                // Int/Float/Bool 内联：单次 store，无运行时调用
+                if matches!(elem_ty.as_ref(), BolideType::Int | BolideType::Float | BolideType::Bool) {
+                    return self.emit_list_set_inline(base_val, index_val, value_val, elem_ty.as_ref());
+                }
                 let list_set = *self.func_refs.get("@_list_set")
                     .ok_or("list_set not found")?;
                 self.builder.ins().call(list_set, &[base_val, index_val, value_val]);
@@ -4206,7 +4223,12 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         };
 
         if let Some(ref value) = decl.value {
-            let val = self.compile_expr(value)?;
+            // 空列表字面量需用类型标注确定元素类型
+            let val = if matches!(value, Expr::List(items) if items.is_empty()) && matches!(&bolide_ty, BolideType::List(_)) {
+                self.compile_list_with_hint(&[], Some(&bolide_ty))?
+            } else {
+                self.compile_expr(value)?
+            };
 
             // 检查值是否来自生命周期函数调用（返回借用而非拥有的值）
             let is_from_lifetime_func = self.is_lifetime_func_call(value);
@@ -5002,25 +5024,19 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             Expr::Float(f) => Ok(self.builder.ins().f64const(*f)),
             Expr::Bool(b) => Ok(self.builder.ins().iconst(types::I64, if *b { 1 } else { 0 })),
             Expr::String(s) => {
-                // 将字符串字面量泄露到堆上，确保在程序生命周期内有效
-                let bytes: Box<[u8]> = s.as_bytes().into();
-                let ptr = Box::leak(bytes).as_ptr();
-                let len = s.len();
+                // JIT 与生成代码同进程：编译期直接完成 interning，
+                // 运行期只做一次 retain（替代原先每次求值的哈希查找）
+                let interned = bolide_runtime::bolide_string_literal(
+                    s.as_ptr() as *const i8,
+                    s.len(),
+                );
 
-                let len = s.len();
+                let retain_ref = *self.func_refs.get("@_string_retain")
+                    .ok_or("string_retain not found")?;
 
-                // 获取 string_literal 函数引用 (Uses interning)
-                let func_ref = *self.func_refs.get("@_string_literal")
-                    .ok_or("string_literal not found")?;
-
-                // 创建指针和长度的立即数
-                let ptr_val = self.builder.ins().iconst(self.ptr_type, ptr as i64);
-                let len_val = self.builder.ins().iconst(types::I64, len as i64);
-
-                // 调用 string_from_slice(ptr, len) -> BolideString*
-                let call = self.builder.ins().call(func_ref, &[ptr_val, len_val]);
-                let results = self.builder.inst_results(call);
-                Ok(results[0])
+                let ptr_val = self.builder.ins().iconst(self.ptr_type, interned as i64);
+                self.builder.ins().call(retain_ref, &[ptr_val]);
+                Ok(ptr_val)
             }
             Expr::BigInt(s) => self.compile_bigint_literal(s),
             Expr::Decimal(s) => self.compile_decimal_literal(s),
@@ -6767,13 +6783,31 @@ impl<'a, 'b> CompileContext<'a, 'b> {
 
     /// 编译列表字面量 [a, b, c]
     fn compile_list(&mut self, items: &[Expr]) -> Result<Value, String> {
+        self.compile_list_with_hint(items, None)
+    }
+
+    /// hint 提供类型标注指定的元素类型（用于空列表或未初始化列表）
+    fn compile_list_with_hint(&mut self, items: &[Expr], hint: Option<&BolideType>) -> Result<Value, String> {
         // from 借用检查：借用值禁止存入列表
         for item in items {
             self.check_borrow_escape(item, "list literal")?;
         }
 
-        // 确定元素类型（默认 int = 0）
-        let elem_type = if items.is_empty() {
+        // 确定元素类型：优先用标注，否则从元素推断
+        let elem_type = if let Some(BolideType::List(inner)) = hint {
+            match inner.as_ref() {
+                BolideType::Int => 0,
+                BolideType::Float => 1,
+                BolideType::Bool => 2,
+                BolideType::Str => 3,
+                BolideType::BigInt => 4,
+                BolideType::Decimal => 5,
+                BolideType::List(_) => 6,
+                BolideType::Dict(_, _) => 8,
+                BolideType::Dynamic => 9,
+                _ => 0,
+            }
+        } else if items.is_empty() {
             0u8 // int
         } else {
             match self.infer_expr_type(&items[0]) {
@@ -6783,7 +6817,7 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                 BolideType::Str => 3,
                 BolideType::BigInt => 4,
                 BolideType::Decimal => 5,
-                _ => 0, // default to int
+                _ => 0,
             }
         };
 
@@ -6917,7 +6951,11 @@ impl<'a, 'b> CompileContext<'a, 'b> {
 
         // 根据类型选择不同的索引函数
         match base_type {
-            BolideType::List(_) => {
+            BolideType::List(ref elem_ty) => {
+                // Int/Float/Bool 内联：单次 load，无运行时调用
+                if matches!(elem_ty.as_ref(), BolideType::Int | BolideType::Float | BolideType::Bool) {
+                    return self.emit_list_get_inline(base_val, index_val, elem_ty.as_ref());
+                }
                 let list_get = *self.func_refs.get("@_list_get")
                     .ok_or("list_get not found")?;
                 let call = self.builder.ins().call(list_get, &[base_val, index_val]);
@@ -6940,6 +6978,67 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         }
     }
 
+
+    // ==================== List 内联索引（Int/Float/Bool） ====================
+    /// BolideList 内存布局常量
+    ///   offset 0..16: RcHeader
+    ///   offset 16:   data (*mut i64)
+    ///   offset 24:   len (usize / i64)
+    const LIST_DATA_OFFSET: i64 = 16;
+    const LIST_LEN_OFFSET: i64 = 24;
+
+    /// 内联 list[index] 读取（仅 Int/Float/Bool）
+    fn emit_list_get_inline(&mut self, list_ptr: Value, index: Value, elem_ty: &BolideType) -> Result<Value, String> {
+        let (elem_byte_width, load_ty) = if matches!(elem_ty, BolideType::Bool) {
+            (1, types::I8)
+        } else {
+            (8, types::I64)
+        };
+        // load len
+        let len_ptr = self.builder.ins().iadd_imm(list_ptr, Self::LIST_LEN_OFFSET);
+        let len = self.builder.ins().load(types::I64, MemFlags::new(), len_ptr, 0);
+        let in_bounds = self.builder.ins().icmp(IntCC::UnsignedLessThan, index, len);
+        // load data ptr (now *mut u8)
+        let data_ptr_addr = self.builder.ins().iadd_imm(list_ptr, Self::LIST_DATA_OFFSET);
+        let data_ptr = self.builder.ins().load(self.ptr_type, MemFlags::new(), data_ptr_addr, 0);
+        let offset = self.builder.ins().imul_imm(index, elem_byte_width);
+        let elem_addr = self.builder.ins().iadd(data_ptr, offset);
+        let loaded = self.builder.ins().load(load_ty, MemFlags::new(), elem_addr, 0);
+        let value = if load_ty == types::I8 {
+            self.builder.ins().uextend(types::I64, loaded)
+        } else {
+            loaded
+        };
+        let zero = self.builder.ins().iconst(types::I64, 0);
+        Ok(self.builder.ins().select(in_bounds, value, zero))
+    }
+
+    /// 内联 list[index] = value 写入（仅 Int/Float/Bool）
+    fn emit_list_set_inline(
+        &mut self, list_ptr: Value, index: Value, value: Value, elem_ty: &BolideType,
+    ) -> Result<(), String> {
+        let (elem_byte_width, store_ty) = if matches!(elem_ty, BolideType::Bool) {
+            (1, types::I8)
+        } else {
+            (8, types::I64)
+        };
+        // load len
+        let len_ptr = self.builder.ins().iadd_imm(list_ptr, Self::LIST_LEN_OFFSET);
+        let _len = self.builder.ins().load(types::I64, MemFlags::new(), len_ptr, 0);
+        // load data ptr
+        let data_ptr_addr = self.builder.ins().iadd_imm(list_ptr, Self::LIST_DATA_OFFSET);
+        let data_ptr = self.builder.ins().load(self.ptr_type, MemFlags::new(), data_ptr_addr, 0);
+        let offset = self.builder.ins().imul_imm(index, elem_byte_width);
+        let elem_addr = self.builder.ins().iadd(data_ptr, offset);
+        // 窄存储时必须 ireduce，否则 store 按 value 类型宽度写出
+        let store_val = if store_ty == types::I8 {
+            self.builder.ins().ireduce(types::I8, value)
+        } else {
+            value
+        };
+        self.builder.ins().store(MemFlags::new(), store_val, elem_addr, 0);
+        Ok(())
+    }
 
     /// 编译 await all 表达式
     fn compile_await_all(&mut self, exprs: &[Expr]) -> Result<Value, String> {

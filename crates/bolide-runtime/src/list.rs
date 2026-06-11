@@ -1,7 +1,7 @@
 //! Bolide List type with reference counting
 //!
-//! BolideList 使用引用计数管理内存
-//! 元素以 i64 存储（可以是值或指针）
+//! BolideList 使用引用计数管理内存，元素按类型选用最小宽度存储：
+//!   Bool → 1 字节, Ptr/Int/Float → 8 字节, RC 类型 → 8 字节(指针)
 
 use std::os::raw::c_void;
 
@@ -24,18 +24,54 @@ pub enum ElementType {
     Dynamic = 9, // 动态类型
 }
 
+impl ElementType {
+    /// 每元素存储字节数
+    #[inline]
+    pub fn byte_width(self) -> usize {
+        match self {
+            ElementType::Bool => 1,
+            _ => 8,
+        }
+    }
+}
 
 /// Bolide 列表类型（带引用计数）
 #[repr(C)]
 pub struct BolideList {
     header: RcHeader,
-    data: *mut i64,      // 元素数组（i64 可存值或指针）
+    data: *mut u8,        // 元素字节数组
     len: usize,
-    capacity: usize,
+    capacity: usize,      // 已分配元素数（非字节）
     elem_type: ElementType,
 }
 
+// 内联的读写辅助（编译成单次有符号/无符号 load/store）
 impl BolideList {
+    #[inline]
+    unsafe fn read_at(&self, idx: usize) -> i64 {
+        let p = self.data.add(idx * self.byte_width());
+        if self.elem_type as u8 == ElementType::Bool as u8 {
+            *p as i64
+        } else {
+            (p as *const i64).read_unaligned()
+        }
+    }
+
+    #[inline]
+    unsafe fn write_at(&self, idx: usize, val: i64) {
+        let p = self.data.add(idx * self.byte_width());
+        if self.elem_type as u8 == ElementType::Bool as u8 {
+            *p = val as u8;
+        } else {
+            (p as *mut i64).write_unaligned(val);
+        }
+    }
+
+    #[inline]
+    fn byte_width(&self) -> usize {
+        self.elem_type.byte_width()
+    }
+
     /// 创建新列表（ref_count = 1）
     pub fn new(elem_type: ElementType) -> *mut Self {
         Box::into_raw(Box::new(Self {
@@ -69,15 +105,14 @@ impl BolideList {
         }
 
         let new_cap = new_cap.max(self.capacity * 2).max(8);
-        let layout = std::alloc::Layout::array::<i64>(new_cap).unwrap();
+        let bw = self.byte_width();
+        let layout = std::alloc::Layout::array::<u8>(new_cap * bw).unwrap();
 
         let new_data = if self.data.is_null() {
-            unsafe { std::alloc::alloc(layout) as *mut i64 }
+            unsafe { std::alloc::alloc(layout) }
         } else {
-            let old_layout = std::alloc::Layout::array::<i64>(self.capacity).unwrap();
-            unsafe {
-                std::alloc::realloc(self.data as *mut u8, old_layout, layout.size()) as *mut i64
-            }
+            let old_layout = std::alloc::Layout::array::<u8>(self.capacity * bw).unwrap();
+            unsafe { std::alloc::realloc(self.data, old_layout, layout.size()) }
         };
 
         self.data = new_data;
@@ -97,7 +132,7 @@ impl BolideList {
             self.reserve(1);
         }
         unsafe {
-            *self.data.add(self.len) = value;
+            self.write_at(self.len, value);
             self.retain_element(value);
         }
         self.len += 1;
@@ -108,7 +143,7 @@ impl BolideList {
             None
         } else {
             self.len -= 1;
-            unsafe { Some(*self.data.add(self.len)) }
+            unsafe { Some(self.read_at(self.len)) }
         }
     }
 
@@ -116,7 +151,7 @@ impl BolideList {
         if index >= self.len {
             None
         } else {
-            unsafe { Some(*self.data.add(index)) }
+            unsafe { Some(self.read_at(index)) }
         }
     }
 
@@ -125,11 +160,10 @@ impl BolideList {
             false
         } else {
             unsafe {
-                let p = self.data.add(index);
-                let old = *p;
+                let old = self.read_at(index);
                 if old != value {
                     self.release_element(old);
-                    *p = value;
+                    self.write_at(index, value);
                     self.retain_element(value);
                 }
             }
@@ -201,16 +235,8 @@ impl BolideList {
     /// 释放所有元素的引用（仅当 strong_count 归零时调用）
     unsafe fn release_elements(&self) {
         for i in 0..self.len {
-            let val = *self.data.add(i);
+            let val = self.read_at(i);
             self.release_element(val);
-        }
-    }
-
-    /// 增加所有元素的引用计数（用于 clone）
-    unsafe fn retain_elements(&self) {
-        for i in 0..self.len {
-            let val = *self.data.add(i);
-            self.retain_element(val);
         }
     }
 }
@@ -267,14 +293,12 @@ pub extern "C" fn bolide_list_release(list: *mut BolideList) {
     if list.is_null() { return; }
     unsafe {
         if (*list).release() {
-            // 释放所有元素
             (*list).release_elements();
-            // 释放数据数组
             if !(*list).data.is_null() {
-                let layout = std::alloc::Layout::array::<i64>((*list).capacity).unwrap();
-                std::alloc::dealloc((*list).data as *mut u8, layout);
+                let bw = (*list).byte_width();
+                let layout = std::alloc::Layout::array::<u8>((*list).capacity * bw).unwrap();
+                std::alloc::dealloc((*list).data, layout);
             }
-            // 释放列表本身
             let _ = Box::from_raw(list);
         }
     }
@@ -297,14 +321,11 @@ pub extern "C" fn bolide_list_clone(list: *const BolideList) -> *mut BolideList 
         let new_list = BolideList::with_capacity(src.elem_type, src.len);
         let dst = &mut *new_list;
 
-        // 复制元素
+        // 复制元素（push 内部已 retain）
         for i in 0..src.len {
-            let value = *src.data.add(i);
+            let value = src.read_at(i);
             dst.push(value);
         }
-
-        // 增加所有元素的引用计数
-        dst.retain_elements();
 
         new_list
     }
@@ -376,30 +397,30 @@ pub extern "C" fn bolide_list_mark_moved(list: *mut BolideList) {
 
 // ==================== Python-like Methods ====================
 
+unsafe fn ptr_copy(dst: *mut u8, src: *const u8, count: usize, bw: usize) {
+    std::ptr::copy(src, dst, count * bw);
+}
+
 /// 在指定位置插入元素
 #[no_mangle]
 pub extern "C" fn bolide_list_insert(list: *mut BolideList, index: usize, value: i64) {
     if list.is_null() { return; }
     unsafe {
         let list = &mut *list;
-        let index = index.min(list.len); // 允许在末尾插入
-        
-        // 确保有空间
+        let index = index.min(list.len);
         if list.len >= list.capacity {
             list.reserve(1);
         }
-        
-        // 移动元素腾出空间
+        let bw = list.byte_width();
         if index < list.len {
-            std::ptr::copy(
-                list.data.add(index),
-                list.data.add(index + 1),
+            ptr_copy(
+                list.data.add((index + 1) * bw),
+                list.data.add(index * bw),
                 list.len - index,
+                bw,
             );
         }
-        
-        // 插入新元素
-        *list.data.add(index) = value;
+        list.write_at(index, value);
         list.len += 1;
         list.retain_element(value);
     }
@@ -411,21 +432,18 @@ pub extern "C" fn bolide_list_remove(list: *mut BolideList, index: usize) -> i64
     if list.is_null() { return 0; }
     unsafe {
         let list = &mut *list;
-        if index >= list.len {
-            return 0;
-        }
-        
-        let value = *list.data.add(index);
-        
-        // 移动后续元素
+        if index >= list.len { return 0; }
+
+        let value = list.read_at(index);
         if index < list.len - 1 {
-            std::ptr::copy(
-                list.data.add(index + 1),
-                list.data.add(index),
+            let bw = list.byte_width();
+            ptr_copy(
+                list.data.add(index * bw),
+                list.data.add((index + 1) * bw),
                 list.len - index - 1,
+                bw,
             );
         }
-        
         list.len -= 1;
         value
     }
@@ -437,7 +455,6 @@ pub extern "C" fn bolide_list_clear(list: *mut BolideList) {
     if list.is_null() { return; }
     unsafe {
         let list = &mut *list;
-        // 释放所有元素的引用
         list.release_elements();
         list.len = 0;
     }
@@ -450,13 +467,14 @@ pub extern "C" fn bolide_list_reverse(list: *mut BolideList) {
     unsafe {
         let list = &mut *list;
         if list.len <= 1 { return; }
-        
-        let mut left = 0;
+        let bw = list.byte_width();
+        let mut left = 0usize;
         let mut right = list.len - 1;
         while left < right {
-            let tmp = *list.data.add(left);
-            *list.data.add(left) = *list.data.add(right);
-            *list.data.add(right) = tmp;
+            // swap via temp buffer on stack
+            let lp = list.data.add(left * bw);
+            let rp = list.data.add(right * bw);
+            std::ptr::swap_nonoverlapping(lp, rp, bw);
             left += 1;
             right -= 1;
         }
@@ -470,13 +488,9 @@ pub extern "C" fn bolide_list_extend(list: *mut BolideList, other: *const Bolide
     unsafe {
         let list = &mut *list;
         let other = &*other;
-        
-        // 确保有足够空间
         list.reserve(other.len);
-        
-        // 复制元素
         for i in 0..other.len {
-            let value = *other.data.add(i);
+            let value = other.read_at(i);
             list.push(value);
         }
     }
@@ -489,7 +503,7 @@ pub extern "C" fn bolide_list_contains(list: *const BolideList, value: i64) -> i
     unsafe {
         let list = &*list;
         for i in 0..list.len {
-            if *list.data.add(i) == value {
+            if list.read_at(i) == value {
                 return 1;
             }
         }
@@ -504,7 +518,7 @@ pub extern "C" fn bolide_list_index_of(list: *const BolideList, value: i64) -> i
     unsafe {
         let list = &*list;
         for i in 0..list.len {
-            if *list.data.add(i) == value {
+            if list.read_at(i) == value {
                 return i as i64;
             }
         }
@@ -520,7 +534,7 @@ pub extern "C" fn bolide_list_count(list: *const BolideList, value: i64) -> i64 
         let list = &*list;
         let mut count = 0i64;
         for i in 0..list.len {
-            if *list.data.add(i) == value {
+            if list.read_at(i) == value {
                 count += 1;
             }
         }
@@ -535,24 +549,21 @@ pub extern "C" fn bolide_list_sort(list: *mut BolideList) {
     unsafe {
         let list = &mut *list;
         if list.len <= 1 { return; }
-        
+
         match list.elem_type {
             ElementType::Int => {
-                // 转换为 slice 并排序
-                let slice = std::slice::from_raw_parts_mut(list.data, list.len);
+                let slice = std::slice::from_raw_parts_mut(list.data as *mut i64, list.len);
                 slice.sort();
             }
             ElementType::Float => {
-                let slice = std::slice::from_raw_parts_mut(list.data, list.len);
+                let slice = std::slice::from_raw_parts_mut(list.data as *mut i64, list.len);
                 slice.sort_by(|a, b| {
                     let fa = f64::from_bits(*a as u64);
                     let fb = f64::from_bits(*b as u64);
                     fa.partial_cmp(&fb).unwrap_or(std::cmp::Ordering::Equal)
                 });
             }
-            _ => {
-                // 其他类型不支持排序
-            }
+            _ => {}
         }
     }
 }
@@ -563,28 +574,24 @@ pub extern "C" fn bolide_list_slice(list: *const BolideList, start: i64, end: i6
     if list.is_null() { return std::ptr::null_mut(); }
     unsafe {
         let src = &*list;
-        
-        // 处理负索引和边界
         let len = src.len as i64;
         let start = if start < 0 { (len + start).max(0) } else { start.min(len) } as usize;
         let end = if end < 0 { (len + end).max(0) } else { end.min(len) } as usize;
-        
+
         if start >= end {
             return BolideList::new(src.elem_type);
         }
-        
+
         let slice_len = end - start;
         let new_list = BolideList::with_capacity(src.elem_type, slice_len);
         let dst = &mut *new_list;
-        
+
+        // push 内部已 retain
         for i in start..end {
-            let value = *src.data.add(i);
+            let value = src.read_at(i);
             dst.push(value);
         }
-        
-        // 增加元素引用计数
-        dst.retain_elements();
-        
+
         new_list
     }
 }
@@ -603,7 +610,7 @@ pub extern "C" fn bolide_list_first(list: *const BolideList) -> i64 {
     unsafe {
         let list = &*list;
         if list.len == 0 { return 0; }
-        *list.data
+        list.read_at(0)
     }
 }
 
@@ -614,7 +621,7 @@ pub extern "C" fn bolide_list_last(list: *const BolideList) -> i64 {
     unsafe {
         let list = &*list;
         if list.len == 0 { return 0; }
-        *list.data.add(list.len - 1)
+        list.read_at(list.len - 1)
     }
 }
 
@@ -630,7 +637,7 @@ pub extern "C" fn bolide_print_list(list: *const BolideList) {
         print!("[");
         for i in 0..list.len {
             if i > 0 { print!(", "); }
-            let val = *list.data.add(i);
+            let val = list.read_at(i);
             match list.elem_type {
                 ElementType::Int => print!("{}", val),
                 ElementType::Float => print!("{}", f64::from_bits(val as u64)),
@@ -653,7 +660,6 @@ pub extern "C" fn bolide_print_list(list: *const BolideList) {
 // ==================== 测试 ====================
 
 #[cfg(test)]
-
 mod tests {
     use super::*;
 
@@ -668,6 +674,26 @@ mod tests {
 
             bolide_list_release(list);
             assert_eq!((*list).ref_count(), 1);
+
+            bolide_list_release(list);
+        }
+    }
+
+    #[test]
+    fn test_list_bool_elements() {
+        let list = BolideList::new(ElementType::Bool);
+        unsafe {
+            bolide_list_push(list, 1); // true
+            bolide_list_push(list, 0); // false
+            bolide_list_push(list, 1);
+
+            assert_eq!((*list).len(), 3);
+            assert_eq!(bolide_list_get(list, 0), 1);
+            assert_eq!(bolide_list_get(list, 1), 0);
+            assert_eq!(bolide_list_get(list, 2), 1);
+
+            // Bool 元素应占 1 字节
+            assert_eq!((*list).byte_width(), 1);
 
             bolide_list_release(list);
         }
@@ -708,11 +734,9 @@ mod tests {
 
             assert_eq!((*list).len(), 2);
 
-            // 获取并验证字符串
             let got = bolide_list_get(list, 0) as *const crate::BolideString;
             assert_eq!((*got).as_str(), "hello");
 
-            // 释放列表（会自动释放所有字符串）
             bolide_list_release(list);
         }
     }
@@ -732,6 +756,52 @@ mod tests {
 
             bolide_list_release(list);
             bolide_list_release(cloned);
+        }
+    }
+
+    #[test]
+    fn test_list_reverse() {
+        let list = BolideList::new(ElementType::Int);
+        unsafe {
+            bolide_list_push(list, 1);
+            bolide_list_push(list, 2);
+            bolide_list_push(list, 3);
+            bolide_list_reverse(list);
+            assert_eq!(bolide_list_get(list, 0), 3);
+            assert_eq!(bolide_list_get(list, 1), 2);
+            assert_eq!(bolide_list_get(list, 2), 1);
+            bolide_list_release(list);
+        }
+    }
+
+    #[test]
+    fn test_list_reverse_bool() {
+        let list = BolideList::new(ElementType::Bool);
+        unsafe {
+            bolide_list_push(list, 1);
+            bolide_list_push(list, 0);
+            bolide_list_push(list, 1);
+            bolide_list_reverse(list);
+            assert_eq!(bolide_list_get(list, 0), 1);
+            assert_eq!(bolide_list_get(list, 1), 0);
+            assert_eq!(bolide_list_get(list, 2), 1);
+            bolide_list_release(list);
+        }
+    }
+
+    #[test]
+    fn test_list_slice() {
+        let list = BolideList::new(ElementType::Int);
+        unsafe {
+            bolide_list_push(list, 10);
+            bolide_list_push(list, 20);
+            bolide_list_push(list, 30);
+            let sliced = bolide_list_slice(list, 0, 2);
+            assert_eq!((*sliced).len(), 2);
+            assert_eq!(bolide_list_get(sliced, 0), 10);
+            assert_eq!(bolide_list_get(sliced, 1), 20);
+            bolide_list_release(list);
+            bolide_list_release(sliced);
         }
     }
 }

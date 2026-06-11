@@ -4,6 +4,41 @@
 
 use crate::rc::{RcHeader, TypeTag};
 use crate::{BolideBigInt, BolideDecimal, BolideString, BolideList};
+use once_cell::sync::Lazy;
+
+/// newtype 包装 *mut T 使其满足 Send+Sync（不可变单例指针跨线程安全）
+struct DynPtr(*mut BolideDynamic);
+unsafe impl Send for DynPtr {}
+unsafe impl Sync for DynPtr {}
+
+/// 创建一个不可变的堆分配 Dynamic 对象（永不释放，RC 操作无效应）
+fn immortal_dynamic(tag: DynamicType, data: DynamicData) -> DynPtr {
+    let ptr = Box::into_raw(Box::new(BolideDynamic {
+        header: RcHeader::new(TypeTag::Object),
+        tag,
+        data,
+    }));
+    unsafe {
+        (*ptr).header.make_immortal();
+    }
+    DynPtr(ptr)
+}
+
+// 不可变单例缓存：None / Bool / 小整数 (-128..255) 永不分配
+static DYN_NONE: Lazy<DynPtr> = Lazy::new(|| {
+    immortal_dynamic(DynamicType::None, DynamicData { none: () })
+});
+static DYN_TRUE: Lazy<DynPtr> = Lazy::new(|| {
+    immortal_dynamic(DynamicType::Bool, DynamicData { bool_val: 1 })
+});
+static DYN_FALSE: Lazy<DynPtr> = Lazy::new(|| {
+    immortal_dynamic(DynamicType::Bool, DynamicData { bool_val: 0 })
+});
+static SMALL_INTS: Lazy<Vec<DynPtr>> = Lazy::new(|| {
+    (-128i64..=255).map(|i| {
+        immortal_dynamic(DynamicType::Int, DynamicData { int_val: i })
+    }).collect()
+});
 
 /// 动态值类型标签
 #[repr(C)]
@@ -43,27 +78,23 @@ pub struct BolideDynamic {
 impl BolideDynamic {
     /// 创建 None 值
     pub fn none() -> *mut Self {
-        Box::into_raw(Box::new(Self {
-            header: RcHeader::new(TypeTag::Object),
-            tag: DynamicType::None,
-            data: DynamicData { none: () },
-        }))
+        DYN_NONE.0
     }
 
     pub fn from_bool(value: bool) -> *mut Self {
-        Box::into_raw(Box::new(Self {
-            header: RcHeader::new(TypeTag::Object),
-            tag: DynamicType::Bool,
-            data: DynamicData { bool_val: if value { 1 } else { 0 } },
-        }))
+        if value { DYN_TRUE.0 } else { DYN_FALSE.0 }
     }
 
     pub fn from_int(value: i64) -> *mut Self {
-        Box::into_raw(Box::new(Self {
-            header: RcHeader::new(TypeTag::Object),
-            tag: DynamicType::Int,
-            data: DynamicData { int_val: value },
-        }))
+        if value >= -128 && value <= 255 {
+            SMALL_INTS[(value + 128) as usize].0
+        } else {
+            Box::into_raw(Box::new(Self {
+                header: RcHeader::new(TypeTag::Object),
+                tag: DynamicType::Int,
+                data: DynamicData { int_val: value },
+            }))
+        }
     }
 
     pub fn from_float(value: f64) -> *mut Self {
@@ -651,7 +682,8 @@ mod tests {
 
     #[test]
     fn test_dynamic_rc() {
-        let d = BolideDynamic::from_int(42);
+        // 使用超出小整数缓存的值以测试完整 RC 语义
+        let d = BolideDynamic::from_int(1000);
         unsafe {
             assert_eq!((*d).ref_count(), 1);
 

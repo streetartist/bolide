@@ -9,7 +9,7 @@
 //! - 弱引用计数（含一个隐式 +1，当 strong > 0 时）归零时，整个分配被释放。
 
 use std::alloc::{alloc, dealloc, Layout};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{fence, AtomicUsize, Ordering};
 
 /// 对象头部结构（每个对象都有）
 #[repr(C)]
@@ -61,6 +61,7 @@ pub extern "C" fn object_alloc(size: usize) -> *mut u8 {
 }
 
 /// 增加引用计数
+/// 与 std::sync::Arc 一致：retain 用 Relaxed（持有引用即保证对象存活）
 #[no_mangle]
 pub extern "C" fn object_retain(data_ptr: *mut u8) {
     if data_ptr.is_null() {
@@ -68,12 +69,13 @@ pub extern "C" fn object_retain(data_ptr: *mut u8) {
     }
     unsafe {
         let header = header_of(data_ptr);
-        (*header).ref_count.fetch_add(1, Ordering::SeqCst);
+        (*header).ref_count.fetch_add(1, Ordering::Relaxed);
     }
 }
 
 /// 减少引用计数，强引用归零时对象进入僵尸状态；
 /// 仅当弱引用也归零时才真正释放内存
+/// release 用 Release，最后一个引用释放时插入 Acquire fence（与 Arc 相同）
 #[no_mangle]
 pub extern "C" fn object_release(data_ptr: *mut u8) {
     if data_ptr.is_null() {
@@ -83,11 +85,13 @@ pub extern "C" fn object_release(data_ptr: *mut u8) {
         let header_ptr = (data_ptr as *mut u8).sub(HEADER_SIZE);
         let header = header_ptr as *mut ObjectHeader;
 
-        let old_count = (*header).ref_count.fetch_sub(1, Ordering::SeqCst);
+        let old_count = (*header).ref_count.fetch_sub(1, Ordering::Release);
         if old_count == 1 {
+            fence(Ordering::Acquire);
             // 强引用归零，移除隐式弱引用
-            let old_weak = (*header).weak_count.fetch_sub(1, Ordering::SeqCst);
+            let old_weak = (*header).weak_count.fetch_sub(1, Ordering::Release);
             if old_weak == 1 {
+                fence(Ordering::Acquire);
                 // 没有弱引用存在，释放整个分配
                 dealloc_object(header_ptr);
             }
@@ -104,7 +108,7 @@ pub extern "C" fn object_weak_retain(data_ptr: *mut u8) {
     }
     unsafe {
         let header = header_of(data_ptr);
-        (*header).weak_count.fetch_add(1, Ordering::SeqCst);
+        (*header).weak_count.fetch_add(1, Ordering::Relaxed);
     }
 }
 
@@ -117,8 +121,9 @@ pub extern "C" fn object_weak_release(data_ptr: *mut u8) {
     unsafe {
         let header_ptr = (data_ptr as *mut u8).sub(HEADER_SIZE);
         let header = header_ptr as *mut ObjectHeader;
-        let old_weak = (*header).weak_count.fetch_sub(1, Ordering::SeqCst);
+        let old_weak = (*header).weak_count.fetch_sub(1, Ordering::Release);
         if old_weak == 1 {
+            fence(Ordering::Acquire);
             dealloc_object(header_ptr);
         }
     }
@@ -134,7 +139,7 @@ pub extern "C" fn object_assert_alive(data_ptr: *mut u8) {
     }
     unsafe {
         let header = header_of(data_ptr);
-        if (*header).ref_count.load(Ordering::SeqCst) == 0 {
+        if (*header).ref_count.load(Ordering::Acquire) == 0 {
             eprintln!("runtime error: weak/unowned reference accessed after object was deallocated");
             std::process::abort();
         }
@@ -149,7 +154,7 @@ pub extern "C" fn object_is_alive(data_ptr: *mut u8) -> i64 {
     }
     unsafe {
         let header = header_of(data_ptr);
-        if (*header).ref_count.load(Ordering::SeqCst) > 0 { 1 } else { 0 }
+        if (*header).ref_count.load(Ordering::Acquire) > 0 { 1 } else { 0 }
     }
 }
 
@@ -161,7 +166,7 @@ pub extern "C" fn object_ref_count(data_ptr: *mut u8) -> i64 {
     }
     unsafe {
         let header = header_of(data_ptr);
-        (*header).ref_count.load(Ordering::SeqCst) as i64
+        (*header).ref_count.load(Ordering::Acquire) as i64
     }
 }
 

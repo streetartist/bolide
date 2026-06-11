@@ -5,7 +5,7 @@
 //! - clone 时 strong_count += 1（浅拷贝）
 //! - drop 时 strong_count -= 1，归零时释放
 
-use std::ffi::{CStr, CString};
+use std::ffi::CStr;
 use std::os::raw::c_char;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -40,13 +40,48 @@ pub struct BolideString {
 }
 
 impl BolideString {
+    /// 分配 len+1 字节缓冲区（末尾 NUL，兼容 C 字符串用法）
+    fn alloc_buffer(len: usize) -> *mut c_char {
+        let layout = std::alloc::Layout::array::<u8>(len + 1).unwrap();
+        unsafe {
+            let p = std::alloc::alloc(layout);
+            if p.is_null() {
+                std::alloc::handle_alloc_error(layout);
+            }
+            *p.add(len) = 0;
+            p as *mut c_char
+        }
+    }
+
     /// 创建新字符串（strong_count = 1）
+    ///
+    /// 内容必须是合法 UTF-8（&str 保证），as_str 据此免校验
     pub fn new(s: &str) -> *mut Self {
-        let c_string = CString::new(s).unwrap();
         let len = s.len();
+        let data = Self::alloc_buffer(len);
+        unsafe {
+            std::ptr::copy_nonoverlapping(s.as_ptr(), data as *mut u8, len);
+        }
         let string = Self {
             header: RcHeader::new(TypeTag::String),
-            data: c_string.into_raw(),
+            data,
+            len,
+            capacity: len + 1,
+        };
+        Box::into_raw(Box::new(string))
+    }
+
+    /// 拼接两个字符串为新字符串（单次分配，无中间拷贝）
+    pub fn concat(a: &str, b: &str) -> *mut Self {
+        let len = a.len() + b.len();
+        let data = Self::alloc_buffer(len);
+        unsafe {
+            std::ptr::copy_nonoverlapping(a.as_ptr(), data as *mut u8, a.len());
+            std::ptr::copy_nonoverlapping(b.as_ptr(), (data as *mut u8).add(a.len()), b.len());
+        }
+        let string = Self {
+            header: RcHeader::new(TypeTag::String),
+            data,
             len,
             capacity: len + 1,
         };
@@ -54,13 +89,17 @@ impl BolideString {
     }
 
     /// 获取字符串内容
+    ///
+    /// O(1)：直接用 len 字段构造切片。内容在创建时已保证是合法 UTF-8，
+    /// 无需每次重新 strlen + 校验
+    #[inline]
     pub fn as_str(&self) -> &str {
         if self.data.is_null() {
             return "";
         }
         unsafe {
-            let c_str = CStr::from_ptr(self.data);
-            c_str.to_str().unwrap_or("")
+            let bytes = std::slice::from_raw_parts(self.data as *const u8, self.len);
+            std::str::from_utf8_unchecked(bytes)
         }
     }
 
@@ -107,7 +146,8 @@ impl BolideString {
     /// 释放内部数据（仅当 strong_count 归零时调用）
     unsafe fn drop_data(&mut self) {
         if !self.data.is_null() {
-            let _ = CString::from_raw(self.data);
+            let layout = std::alloc::Layout::array::<u8>(self.capacity).unwrap();
+            std::alloc::dealloc(self.data as *mut u8, layout);
             self.data = std::ptr::null_mut();
         }
     }
@@ -223,8 +263,7 @@ pub extern "C" fn bolide_string_ref_count(s: *const BolideString) -> u32 {
 pub extern "C" fn bolide_string_concat(a: *const BolideString, b: *const BolideString) -> *mut BolideString {
     let a_str = if a.is_null() { "" } else { unsafe { (*a).as_str() } };
     let b_str = if b.is_null() { "" } else { unsafe { (*b).as_str() } };
-    let result = format!("{}{}", a_str, b_str);
-    BolideString::new(&result)
+    BolideString::concat(a_str, b_str)
 }
 
 /// 字符串比较
@@ -236,9 +275,16 @@ pub extern "C" fn bolide_string_eq(a: *const BolideString, b: *const BolideStrin
     if a.is_null() || b.is_null() {
         return 0;
     }
+    if a == b {
+        return 1;
+    }
     let a = unsafe { &*a };
     let b = unsafe { &*b };
-    if a.as_str() == b.as_str() { 1 } else { 0 }
+    // 先比长度，再按字节比较（slice eq 内部即 memcmp）
+    if a.len != b.len {
+        return 0;
+    }
+    if a.as_str().as_bytes() == b.as_str().as_bytes() { 1 } else { 0 }
 }
 
 /// 检查是否已被 move

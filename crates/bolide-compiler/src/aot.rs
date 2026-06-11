@@ -159,7 +159,10 @@ impl AotCompiler {
         let isa_builder = cranelift_native::builder()
             .map_err(|e| format!("Failed to create ISA builder: {}", e))?;
 
-        let flag_builder = settings::builder();
+        // 开启 Cranelift 优化（默认 opt_level=none 不做任何优化）
+        let mut flag_builder = settings::builder();
+        flag_builder.set("opt_level", "speed")
+            .map_err(|e| format!("Failed to set opt_level: {}", e))?;
         let flags = settings::Flags::new(flag_builder);
         let isa = isa_builder.finish(flags)
             .map_err(|e| format!("Failed to create ISA: {}", e))?;
@@ -3215,7 +3218,10 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         // 根据类型选择不同的索引函数
         // 根据类型选择不同的索引函数
         match base_type {
-            Some(BolideType::List(elem_ty)) => {
+            Some(BolideType::List(ref elem_ty)) => {
+                if matches!(elem_ty.as_ref(), BolideType::Int | BolideType::Float | BolideType::Bool) {
+                    return self.emit_list_get_inline(base_val, index_val, elem_ty.as_ref());
+                }
                 let func_ref = *self.func_refs.get("@_list_get")
                     .ok_or("list_get not found")?;
                 let call = self.builder.ins().call(func_ref, &[base_val, index_val]);
@@ -3251,6 +3257,57 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
                 Ok(val)
             }
         }
+    }
+
+    // ==================== List 内联索引（Int/Float/Bool） ====================
+    const LIST_DATA_OFFSET: i64 = 16;
+    const LIST_LEN_OFFSET: i64 = 24;
+
+    fn emit_list_get_inline(&mut self, list_ptr: Value, index: Value, elem_ty: &BolideType) -> Result<Value, String> {
+        let (elem_byte_width, load_ty) = if matches!(elem_ty, BolideType::Bool) {
+            (1, types::I8)
+        } else {
+            (8, types::I64)
+        };
+        let len_ptr = self.builder.ins().iadd_imm(list_ptr, Self::LIST_LEN_OFFSET);
+        let len = self.builder.ins().load(types::I64, MemFlags::new(), len_ptr, 0);
+        let in_bounds = self.builder.ins().icmp(IntCC::UnsignedLessThan, index, len);
+        let data_ptr_addr = self.builder.ins().iadd_imm(list_ptr, Self::LIST_DATA_OFFSET);
+        let data_ptr = self.builder.ins().load(self.ptr_type, MemFlags::new(), data_ptr_addr, 0);
+        let offset = self.builder.ins().imul_imm(index, elem_byte_width);
+        let elem_addr = self.builder.ins().iadd(data_ptr, offset);
+        let loaded = self.builder.ins().load(load_ty, MemFlags::new(), elem_addr, 0);
+        let value = if load_ty == types::I8 {
+            self.builder.ins().uextend(types::I64, loaded)
+        } else {
+            loaded
+        };
+        let zero = self.builder.ins().iconst(types::I64, 0);
+        Ok(self.builder.ins().select(in_bounds, value, zero))
+    }
+
+    fn emit_list_set_inline(
+        &mut self, list_ptr: Value, index: Value, value: Value, elem_ty: &BolideType,
+    ) -> Result<(), String> {
+        let (elem_byte_width, store_ty) = if matches!(elem_ty, BolideType::Bool) {
+            (1, types::I8)
+        } else {
+            (8, types::I64)
+        };
+        let len_ptr = self.builder.ins().iadd_imm(list_ptr, Self::LIST_LEN_OFFSET);
+        let _len = self.builder.ins().load(types::I64, MemFlags::new(), len_ptr, 0);
+        let data_ptr_addr = self.builder.ins().iadd_imm(list_ptr, Self::LIST_DATA_OFFSET);
+        let data_ptr = self.builder.ins().load(self.ptr_type, MemFlags::new(), data_ptr_addr, 0);
+        let offset = self.builder.ins().imul_imm(index, elem_byte_width);
+        let elem_addr = self.builder.ins().iadd(data_ptr, offset);
+        // 窄存储时必须 ireduce，否则 store 按 value 类型宽度写出
+        let store_val = if store_ty == types::I8 {
+            self.builder.ins().ireduce(types::I8, value)
+        } else {
+            value
+        };
+        self.builder.ins().store(MemFlags::new(), store_val, elem_addr, 0);
+        Ok(())
     }
 
     /// 编译成员访问
@@ -3506,9 +3563,41 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
 
     /// 编译列表字面量
     fn compile_list(&mut self, items: &[Expr]) -> Result<Value, String> {
+        self.compile_list_with_hint(items, None)
+    }
+
+    fn compile_list_with_hint(&mut self, items: &[Expr], hint: Option<&BolideType>) -> Result<Value, String> {
+        // 确定元素类型：优先用标注，否则从元素推断（空列表默认 int）
+        let elem_tag: u8 = if let Some(BolideType::List(inner)) = hint {
+            match inner.as_ref() {
+                BolideType::Int => 0,
+                BolideType::Float => 1,
+                BolideType::Bool => 2,
+                BolideType::Str => 3,
+                BolideType::BigInt => 4,
+                BolideType::Decimal => 5,
+                BolideType::List(_) => 6,
+                BolideType::Dict(_, _) => 8,
+                BolideType::Dynamic => 9,
+                _ => 0,
+            }
+        } else if items.is_empty() {
+            0u8
+        } else {
+            match self.infer_expr_type(&items[0]) {
+                Some(BolideType::Int) => 0,
+                Some(BolideType::Float) => 1,
+                Some(BolideType::Bool) => 2,
+                Some(BolideType::Str) => 3,
+                Some(BolideType::BigInt) => 4,
+                Some(BolideType::Decimal) => 5,
+                _ => 0,
+            }
+        };
+
         let func_ref = *self.func_refs.get("@_list_new")
             .ok_or("list_new not found")?;
-        let elem_type = self.builder.ins().iconst(types::I8, 0);
+        let elem_type = self.builder.ins().iconst(types::I8, elem_tag as i64);
         let call = self.builder.ins().call(func_ref, &[elem_type]);
         let list_ptr = self.builder.inst_results(call)[0];
 
@@ -4325,7 +4414,12 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         }
 
         if let Some(ref value) = decl.value {
-            let val = self.compile_expr(value)?;
+            // 空列表字面量需用类型标注确定元素类型
+            let val = if matches!(value, Expr::List(items) if items.is_empty()) && matches!(decl.ty, Some(BolideType::List(_))) {
+                self.compile_list_with_hint(&[], decl.ty.as_ref())?
+            } else {
+                self.compile_expr(value)?
+            };
 
             let declared_ty = self.var_types.get(&decl.name).cloned();
             let is_weak_decl = declared_ty.as_ref()
@@ -4512,14 +4606,28 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         // Consume value ownership
         self.remove_temp_rc_value(val);
 
-        let func_name = match base_type {
-            Some(BolideType::Dict(_, _)) => "@_dict_set",
-            Some(BolideType::Tuple(_)) => "@_tuple_set",
-            _ => "@_list_set",
+        match base_type {
+            Some(BolideType::List(ref elem_ty))
+                if matches!(elem_ty.as_ref(), BolideType::Int | BolideType::Float | BolideType::Bool) =>
+            {
+                return self.emit_list_set_inline(base_val, index_val, val, elem_ty.as_ref());
+            }
+            Some(BolideType::Dict(_, _)) => {
+                let func_ref = *self.func_refs.get("@_dict_set")
+                    .ok_or_else(|| "@_dict_set not found")?;
+                self.builder.ins().call(func_ref, &[base_val, index_val, val]);
+            }
+            Some(BolideType::Tuple(_)) => {
+                let func_ref = *self.func_refs.get("@_tuple_set")
+                    .ok_or_else(|| "@_tuple_set not found")?;
+                self.builder.ins().call(func_ref, &[base_val, index_val, val]);
+            }
+            _ => {
+                let func_ref = *self.func_refs.get("@_list_set")
+                    .ok_or_else(|| "@_list_set not found")?;
+                self.builder.ins().call(func_ref, &[base_val, index_val, val]);
+            }
         };
-        let func_ref = *self.func_refs.get(func_name)
-            .ok_or_else(|| format!("{} not found", func_name))?;
-        self.builder.ins().call(func_ref, &[base_val, index_val, val]);
         Ok(())
     }
 

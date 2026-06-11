@@ -2,35 +2,89 @@
 //!
 //! BolideDict 使用引用计数管理内存
 //! 键值以 i64 存储（可以是值或指针）
+//!
+//! - 键为 string 时按内容哈希/比较（而非指针），并对键持有强引用
+//! - 哈希器使用 FxHash（键来自程序内部，无需抗碰撞攻击的 SipHash）
 
-use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::os::raw::c_void;
 
-use crate::rc::{RcHeader, TypeTag};
-use crate::{BolideString, BolideBigInt, BolideDecimal, BolideList};
+use rustc_hash::FxHashMap;
+
 use crate::list::ElementType;
+use crate::rc::{RcHeader, TypeTag};
+use crate::{BolideBigInt, BolideDecimal, BolideList, BolideString};
+
+/// 字典键。string 键按内容哈希与比较，其余按 i64 原值
+#[derive(Clone, Copy)]
+struct DictKey {
+    raw: i64,
+    is_str: bool,
+}
+
+impl DictKey {
+    #[inline]
+    fn as_str(&self) -> Option<&str> {
+        if !self.is_str {
+            return None;
+        }
+        let ptr = self.raw as *const BolideString;
+        if ptr.is_null() {
+            return None;
+        }
+        Some(unsafe { (*ptr).as_str() })
+    }
+}
+
+impl PartialEq for DictKey {
+    fn eq(&self, other: &Self) -> bool {
+        if self.raw == other.raw {
+            return true;
+        }
+        match (self.as_str(), other.as_str()) {
+            (Some(a), Some(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for DictKey {}
+
+impl Hash for DictKey {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match self.as_str() {
+            Some(s) => s.hash(state),
+            None => self.raw.hash(state),
+        }
+    }
+}
 
 /// Bolide 字典类型（带引用计数）
 #[repr(C)]
 pub struct BolideDict {
     header: RcHeader,
-    data: *mut HashMap<i64, i64>,  // 使用 Box 管理的 HashMap
-    len: usize,
     key_type: ElementType,
     value_type: ElementType,
+    map: FxHashMap<DictKey, i64>,
 }
 
 impl BolideDict {
     /// 创建新字典（ref_count = 1）
     pub fn new(key_type: ElementType, value_type: ElementType) -> *mut Self {
-        let map = Box::into_raw(Box::new(HashMap::new()));
         Box::into_raw(Box::new(Self {
             header: RcHeader::new(TypeTag::Dict),
-            data: map,
-            len: 0,
             key_type,
             value_type,
+            map: FxHashMap::default(),
         }))
+    }
+
+    #[inline]
+    fn make_key(&self, raw: i64) -> DictKey {
+        DictKey {
+            raw,
+            is_str: self.key_type == ElementType::String,
+        }
     }
 
     /// 获取引用计数
@@ -51,87 +105,69 @@ impl BolideDict {
 
     /// 设置键值对
     pub fn set(&mut self, key: i64, value: i64) {
-        unsafe {
-            let map = &mut *self.data;
-            // 如果是覆盖，需要释放旧值
-            if let Some(old_value) = map.insert(key, value) {
-                self.release_value(old_value);
-            } else {
-                self.len += 1;
-            }
-            // 增加新值的引用计数
-            self.retain_value(value);
+        let k = self.make_key(key);
+        // 注意：HashMap::insert 在键已存在时保留原有键对象，
+        // 因此仅在新插入时 retain 键
+        if let Some(old_value) = self.map.insert(k, value) {
+            self.release_raw(self.value_type, old_value);
+        } else {
+            self.retain_raw(self.key_type, key);
         }
+        // 增加新值的引用计数
+        self.retain_raw(self.value_type, value);
     }
 
-    /// 获取值（不存在返回 0）
+    /// 获取值（不存在返回 None）
     pub fn get(&self, key: i64) -> Option<i64> {
-        unsafe {
-            let map = &*self.data;
-            map.get(&key).copied()
-        }
+        self.map.get(&self.make_key(key)).copied()
     }
 
     /// 检查键是否存在
     pub fn contains(&self, key: i64) -> bool {
-        unsafe {
-            let map = &*self.data;
-            map.contains_key(&key)
-        }
+        self.map.contains_key(&self.make_key(key))
     }
 
-    /// 移除键值对，返回值
+    /// 移除键值对，返回值（值的所有权转移给调用者）
     pub fn remove(&mut self, key: i64) -> Option<i64> {
-        unsafe {
-            let map = &mut *self.data;
-            if let Some(value) = map.remove(&key) {
-                self.len -= 1;
-                // 注意：不释放值，因为我们返回它
-                Some(value)
-            } else {
-                None
-            }
+        if let Some((stored_key, value)) = self.map.remove_entry(&self.make_key(key)) {
+            // 释放字典持有的键引用；值不释放，所有权转移给调用者
+            self.release_raw(self.key_type, stored_key.raw);
+            Some(value)
+        } else {
+            None
         }
     }
 
     /// 获取长度
     #[inline]
     pub fn len(&self) -> usize {
-        self.len
+        self.map.len()
     }
 
     /// 是否为空
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.len == 0
+        self.map.is_empty()
     }
 
     /// 清空字典
     pub fn clear(&mut self) {
-        unsafe {
-            let map = &mut *self.data;
-            // 释放所有值的引用
-            for (_, value) in map.drain() {
-                self.release_value(value);
-            }
-            self.len = 0;
+        let key_type = self.key_type;
+        let value_type = self.value_type;
+        for (key, value) in self.map.drain() {
+            release_raw_static(key_type, key.raw);
+            release_raw_static(value_type, value);
         }
     }
 
     /// 获取所有键
     pub fn keys(&self) -> Vec<i64> {
-        unsafe {
-            let map = &*self.data;
-            map.keys().copied().collect()
-        }
+        self.map.keys().map(|k| k.raw).collect()
     }
 
     /// 获取所有值
     pub fn values(&self) -> Vec<i64> {
-        unsafe {
-            let map = &*self.data;
-            map.values().copied().collect()
-        }
+        self.map.values().copied().collect()
     }
 
     /// 获取键类型
@@ -156,67 +192,79 @@ impl BolideDict {
         self.header.mark_moved();
     }
 
-    /// 增加值的引用计数
-    fn retain_value(&self, value: i64) {
-        let ptr = value as *mut c_void;
-        if ptr.is_null() { return; }
-        match self.value_type {
-            ElementType::String => unsafe {
-                crate::bolide_string_retain(ptr as *mut BolideString);
-            },
-            ElementType::BigInt => unsafe {
-                crate::bolide_bigint_retain(ptr as *mut BolideBigInt);
-            },
-            ElementType::Decimal => unsafe {
-                crate::bolide_decimal_retain(ptr as *mut BolideDecimal);
-            },
-            ElementType::List => unsafe {
-                crate::bolide_list_retain(ptr as *mut BolideList);
-            },
-            ElementType::Dynamic => unsafe {
-                crate::bolide_dynamic_retain(ptr as *mut crate::dynamic::BolideDynamic);
-            },
-            _ => {}
-        }
+    /// 增加 RC 类型元素的引用计数（键/值通用）
+    fn retain_raw(&self, elem_type: ElementType, raw: i64) {
+        retain_raw_static(elem_type, raw);
     }
 
-    /// 释放值的引用计数
-    fn release_value(&self, value: i64) {
-        let ptr = value as *mut c_void;
-        if ptr.is_null() { return; }
-        match self.value_type {
-            ElementType::String => unsafe {
-                crate::bolide_string_release(ptr as *mut BolideString);
-            },
-            ElementType::BigInt => unsafe {
-                crate::bolide_bigint_release(ptr as *mut BolideBigInt);
-            },
-            ElementType::Decimal => unsafe {
-                crate::bolide_decimal_release(ptr as *mut BolideDecimal);
-            },
-            ElementType::List => unsafe {
-                crate::bolide_list_release(ptr as *mut BolideList);
-            },
-            ElementType::Dynamic => unsafe {
-                crate::bolide_dynamic_release(ptr as *mut crate::dynamic::BolideDynamic);
-            },
-            _ => {}
-        }
+    /// 释放 RC 类型元素的引用计数（键/值通用）
+    fn release_raw(&self, elem_type: ElementType, raw: i64) {
+        release_raw_static(elem_type, raw);
+    }
+}
+
+fn retain_raw_static(elem_type: ElementType, raw: i64) {
+    let ptr = raw as *mut c_void;
+    if ptr.is_null() {
+        return;
+    }
+    match elem_type {
+        ElementType::String => unsafe {
+            crate::bolide_string_retain(ptr as *mut BolideString);
+        },
+        ElementType::BigInt => unsafe {
+            crate::bolide_bigint_retain(ptr as *mut BolideBigInt);
+        },
+        ElementType::Decimal => unsafe {
+            crate::bolide_decimal_retain(ptr as *mut BolideDecimal);
+        },
+        ElementType::List => unsafe {
+            crate::bolide_list_retain(ptr as *mut BolideList);
+        },
+        ElementType::Dict => unsafe {
+            crate::bolide_dict_retain(ptr as *mut BolideDict);
+        },
+        ElementType::Dynamic => unsafe {
+            crate::bolide_dynamic_retain(ptr as *mut crate::dynamic::BolideDynamic);
+        },
+        _ => {}
+    }
+}
+
+fn release_raw_static(elem_type: ElementType, raw: i64) {
+    let ptr = raw as *mut c_void;
+    if ptr.is_null() {
+        return;
+    }
+    match elem_type {
+        ElementType::String => unsafe {
+            crate::bolide_string_release(ptr as *mut BolideString);
+        },
+        ElementType::BigInt => unsafe {
+            crate::bolide_bigint_release(ptr as *mut BolideBigInt);
+        },
+        ElementType::Decimal => unsafe {
+            crate::bolide_decimal_release(ptr as *mut BolideDecimal);
+        },
+        ElementType::List => unsafe {
+            crate::bolide_list_release(ptr as *mut BolideList);
+        },
+        ElementType::Dict => unsafe {
+            crate::bolide_dict_release(ptr as *mut BolideDict);
+        },
+        ElementType::Dynamic => unsafe {
+            crate::bolide_dynamic_release(ptr as *mut crate::dynamic::BolideDynamic);
+        },
+        _ => {}
     }
 }
 
 impl Drop for BolideDict {
     fn drop(&mut self) {
-        unsafe {
-            // 释放所有值
-            if !self.data.is_null() {
-                let map = &*self.data;
-                for (_, &value) in map.iter() {
-                    self.release_value(value);
-                }
-                // 释放 HashMap
-                let _ = Box::from_raw(self.data);
-            }
+        // 释放所有键和值的引用
+        for (key, &value) in self.map.iter() {
+            release_raw_static(self.key_type, key.raw);
+            release_raw_static(self.value_type, value);
         }
     }
 }
@@ -258,12 +306,11 @@ pub extern "C" fn bolide_dict_clone(dict: *const BolideDict) -> *mut BolideDict 
         let src = &*dict;
         let new_dict = BolideDict::new(src.key_type, src.value_type);
         let dst = &mut *new_dict;
-        
-        let src_map = &*src.data;
-        for (&key, &value) in src_map.iter() {
-            dst.set(key, value);
+
+        for (key, &value) in src.map.iter() {
+            dst.set(key.raw, value);
         }
-        
+
         new_dict
     }
 }
@@ -324,7 +371,7 @@ pub extern "C" fn bolide_dict_keys(dict: *const BolideDict) -> *mut BolideList {
     unsafe {
         let d = &*dict;
         let keys = d.keys();
-        let list = crate::list::BolideList::new(d.key_type);
+        let list = crate::list::BolideList::with_capacity(d.key_type, keys.len());
         for key in keys {
             crate::bolide_list_push(list, key);
         }
@@ -339,11 +386,10 @@ pub extern "C" fn bolide_dict_values(dict: *const BolideDict) -> *mut BolideList
     unsafe {
         let d = &*dict;
         let values = d.values();
-        let list = crate::list::BolideList::new(d.value_type);
+        let list = crate::list::BolideList::with_capacity(d.value_type, values.len());
         for value in values {
+            // push 内部会对 RC 类型元素 retain
             crate::bolide_list_push(list, value);
-            // 增加值的引用计数（因为 values() 不增加）
-            d.retain_value(value);
         }
         list
     }
@@ -387,29 +433,28 @@ pub extern "C" fn bolide_print_dict(dict: *const BolideDict) {
     }
     unsafe {
         let d = &*dict;
-        let map = &*d.data;
         print!("{{");
         let mut first = true;
-        for (&key, &value) in map.iter() {
+        for (key, &value) in d.map.iter() {
             if !first { print!(", "); }
             first = false;
-            
+
             // 打印键
             match d.key_type {
-                ElementType::Int => print!("{}", key),
+                ElementType::Int => print!("{}", key.raw),
                 ElementType::String => {
-                    let s = key as *const BolideString;
+                    let s = key.raw as *const BolideString;
                     if !s.is_null() {
                         print!("\"{}\"", (*s).as_str());
                     } else {
                         print!("null");
                     }
                 }
-                _ => print!("{}", key),
+                _ => print!("{}", key.raw),
             }
-            
+
             print!(": ");
-            
+
             // 打印值
             match d.value_type {
                 ElementType::Int => print!("{}", value),
@@ -452,20 +497,20 @@ mod tests {
             bolide_dict_set(dict, 1, 100);
             bolide_dict_set(dict, 2, 200);
             bolide_dict_set(dict, 3, 300);
-            
+
             assert_eq!((*dict).len(), 3);
             assert_eq!(bolide_dict_get(dict, 1), 100);
             assert_eq!(bolide_dict_get(dict, 2), 200);
             assert_eq!(bolide_dict_get(dict, 3), 300);
             assert_eq!(bolide_dict_get(dict, 999), 0); // not found
-            
+
             assert_eq!(bolide_dict_contains(dict, 1), 1);
             assert_eq!(bolide_dict_contains(dict, 999), 0);
-            
+
             let removed = bolide_dict_remove(dict, 2);
             assert_eq!(removed, 200);
             assert_eq!((*dict).len(), 2);
-            
+
             bolide_dict_release(dict);
         }
     }
@@ -476,13 +521,58 @@ mod tests {
         unsafe {
             bolide_dict_set(dict, 1, 10);
             bolide_dict_set(dict, 2, 20);
-            
+
             let cloned = bolide_dict_clone(dict);
             assert_eq!((*cloned).len(), 2);
             assert_eq!(bolide_dict_get(cloned, 1), 10);
-            
+
             bolide_dict_release(dict);
             bolide_dict_release(cloned);
+        }
+    }
+
+    #[test]
+    fn test_dict_string_key_by_content() {
+        // 两个内容相同但指针不同的字符串键应命中同一项
+        let dict = BolideDict::new(ElementType::String, ElementType::Int);
+        unsafe {
+            let k1 = crate::BolideString::new("hello");
+            let k2 = crate::BolideString::new("hello"); // 不同指针，相同内容
+            assert_ne!(k1 as i64, k2 as i64);
+
+            bolide_dict_set(dict, k1 as i64, 42);
+            assert_eq!(bolide_dict_get(dict, k2 as i64), 42);
+            assert_eq!(bolide_dict_contains(dict, k2 as i64), 1);
+
+            // 覆盖写不重复插入
+            bolide_dict_set(dict, k2 as i64, 43);
+            assert_eq!((*dict).len(), 1);
+            assert_eq!(bolide_dict_get(dict, k1 as i64), 43);
+
+            crate::bolide_string_release(k1);
+            crate::bolide_string_release(k2);
+            bolide_dict_release(dict);
+        }
+    }
+
+    #[test]
+    fn test_dict_retains_string_key() {
+        // 字典应对键持有强引用：调用者释放后键仍可安全使用
+        let dict = BolideDict::new(ElementType::String, ElementType::Int);
+        unsafe {
+            let k = crate::BolideString::new("key");
+            assert_eq!((*k).ref_count(), 1);
+
+            bolide_dict_set(dict, k as i64, 7);
+            assert_eq!((*k).ref_count(), 2); // 字典 retain 了键
+
+            crate::bolide_string_release(k); // 调用者放弃所有权
+
+            let probe = crate::BolideString::new("key");
+            assert_eq!(bolide_dict_get(dict, probe as i64), 7);
+            crate::bolide_string_release(probe);
+
+            bolide_dict_release(dict);
         }
     }
 }

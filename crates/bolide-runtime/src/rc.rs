@@ -39,7 +39,9 @@ pub enum TypeTag {
 /// +------------------+
 /// | flags: u8        |  1 byte
 /// +------------------+
-/// | padding          |  6 bytes (对齐到 16)
+/// | padding          |  2 bytes
+/// +------------------+
+/// | alloc_size: u32  |  4 bytes (bolide_rc_alloc 分配的数据大小，Box 分配为 0)
 /// +------------------+
 /// | data...          |  实际数据
 /// +------------------+
@@ -57,13 +59,17 @@ pub struct RcHeader {
     /// - bit 1: 是否被 spawn move
     flags: AtomicU8,
     /// 填充对齐
-    _padding: [u8; 6],
+    _padding: [u8; 2],
+    /// 经 bolide_rc_alloc 分配时记录数据区大小，dealloc 时必须用同一 Layout；
+    /// Box 路径（BolideRc::new 等）为 0，不会走 layout dealloc
+    alloc_size: u32,
 }
 
 /// 标志位常量
 pub mod flags {
     pub const DROPPING: u8 = 0b0000_0001;
     pub const MOVED: u8 = 0b0000_0010;
+    pub const IMMORTAL: u8 = 0b0000_0100; // 不可变单例，RC 操作无效且永不释放
 }
 
 impl RcHeader {
@@ -75,14 +81,19 @@ impl RcHeader {
             weak_count: AtomicU32::new(1), // 隐式 +1
             type_tag,
             flags: AtomicU8::new(0),
-            _padding: [0; 6],
+            _padding: [0; 2],
+            alloc_size: 0,
         }
     }
 
     /// 增加强引用计数
     /// 与 std::sync::Arc 一致：retain 用 Relaxed 即可（持有一个引用即保证对象存活）
+    /// 不可变单例跳过 RC 操作
     #[inline]
     pub fn inc_strong(&self) {
+        if self.flags.load(Ordering::Relaxed) & flags::IMMORTAL != 0 {
+            return;
+        }
         let old = self.strong_count.fetch_add(1, Ordering::Relaxed);
         debug_assert!(old > 0, "inc_strong on dropped object");
     }
@@ -90,6 +101,10 @@ impl RcHeader {
     /// 仅当对象仍存活时增加强引用计数（weak upgrade 用，避免 TOCTOU）
     #[inline]
     pub fn try_inc_strong(&self) -> bool {
+        // 不可变单例永远可升级
+        if self.flags.load(Ordering::Relaxed) & flags::IMMORTAL != 0 {
+            return true;
+        }
         let mut count = self.strong_count.load(Ordering::Relaxed);
         loop {
             if count == 0 {
@@ -109,8 +124,12 @@ impl RcHeader {
 
     /// 减少强引用计数，返回是否应该释放数据
     /// release 用 Release，最后一个引用释放时插入 Acquire fence（与 Arc 相同）
+    /// 不可变单例永不返回 true（永久存活）
     #[inline]
     pub fn dec_strong(&self) -> bool {
+        if self.flags.load(Ordering::Relaxed) & flags::IMMORTAL != 0 {
+            return false;
+        }
         let old = self.strong_count.fetch_sub(1, Ordering::Release);
         debug_assert!(old > 0, "dec_strong underflow");
         if old == 1 {
@@ -170,6 +189,12 @@ impl RcHeader {
     #[inline]
     pub fn is_moved(&self) -> bool {
         self.flags.load(Ordering::Relaxed) & flags::MOVED != 0
+    }
+
+    /// 设为不可变单例（RC 操作永远无效，永不释放）
+    #[inline]
+    pub fn make_immortal(&self) {
+        self.flags.fetch_or(flags::IMMORTAL, Ordering::Relaxed);
     }
 }
 
@@ -386,12 +411,8 @@ pub extern "C" fn bolide_rc_release(ptr: BolideRcPtr, type_tag: u8) {
 
             // 减少隐式弱引用
             if header.dec_weak() {
-                // 释放头部
-                let layout = std::alloc::Layout::from_size_align(
-                    std::mem::size_of::<RcHeader>() + get_type_size(type_tag),
-                    16
-                ).unwrap();
-                std::alloc::dealloc(header_ptr as *mut u8, layout);
+                // 释放头部（Layout 必须与 bolide_rc_alloc 一致）
+                dealloc_rc_allocation(header_ptr, type_tag);
             }
         }
     }
@@ -437,12 +458,8 @@ pub extern "C" fn bolide_weak_release(ptr: BolideWeakPtr, type_tag: u8) {
         let header = &*header_ptr;
 
         if header.dec_weak() {
-            // 释放头部
-            let layout = std::alloc::Layout::from_size_align(
-                std::mem::size_of::<RcHeader>() + get_type_size(type_tag),
-                16
-            ).unwrap();
-            std::alloc::dealloc(header_ptr as *mut u8, layout);
+            // 释放头部（Layout 必须与 bolide_rc_alloc 一致）
+            dealloc_rc_allocation(header_ptr, type_tag);
         }
     }
 }
@@ -518,7 +535,7 @@ unsafe fn drop_by_type(ptr: *mut c_void, type_tag: u8) {
     }
 }
 
-/// 获取类型的数据大小
+/// 获取类型的数据大小（仅作为 alloc_size 缺失时的回退）
 fn get_type_size(type_tag: u8) -> usize {
     match type_tag {
         1 => std::mem::size_of::<crate::BolideString>(),
@@ -527,6 +544,22 @@ fn get_type_size(type_tag: u8) -> usize {
         4 => std::mem::size_of::<crate::BolideList>(),
         _ => 8,  // 默认指针大小
     }
+}
+
+/// 用与 bolide_rc_alloc 一致的 Layout 释放整个分配
+///
+/// # Safety
+/// header_ptr 必须指向 bolide_rc_alloc 分配的头部
+unsafe fn dealloc_rc_allocation(header_ptr: *mut RcHeader, type_tag: u8) {
+    let data_size = {
+        let size = (*header_ptr).alloc_size as usize;
+        if size > 0 { size } else { get_type_size(type_tag) }
+    };
+    let layout = std::alloc::Layout::from_size_align(
+        std::mem::size_of::<RcHeader>() + data_size,
+        16
+    ).unwrap();
+    std::alloc::dealloc(header_ptr as *mut u8, layout);
 }
 
 // ==================== 带 RC 的分配函数 ====================
@@ -547,9 +580,10 @@ pub extern "C" fn bolide_rc_alloc(size: i64, type_tag: u8) -> BolideRcPtr {
             return std::ptr::null_mut();
         }
 
-        // 初始化头部
+        // 初始化头部，并记录数据区大小供 dealloc 还原 Layout
         let header = ptr as *mut RcHeader;
         std::ptr::write(header, RcHeader::new(std::mem::transmute(type_tag)));
+        (*header).alloc_size = size as u32;
 
         // 返回数据部分的指针
         ptr.add(std::mem::size_of::<RcHeader>()) as BolideRcPtr

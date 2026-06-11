@@ -42,3 +42,4 @@ clap = { version = "4", features = ["derive"] }
 
 # 工具
 once_cell = "1.19"
+rustc-hash = "2"
