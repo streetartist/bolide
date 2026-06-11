@@ -681,6 +681,10 @@ impl JitCompiler {
             bolide_runtime::bolide_string_clone as *const u8,
         );
         builder.symbol(
+            "@_string_len",
+            bolide_runtime::bolide_string_len as *const u8,
+        );
+        builder.symbol(
             "@_bigint_retain",
             bolide_runtime::bolide_bigint_retain as *const u8,
         );
@@ -2055,6 +2059,16 @@ impl JitCompiler {
             .declare_function("@_string_clone", Linkage::Import, &sig)
             .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_string_clone".to_string(), id);
+
+        // string_len(ptr) -> i64
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(ptr));
+        sig.returns.push(AbiParam::new(types::I64));
+        let id = self
+            .module
+            .declare_function("@_string_len", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
+        self.functions.insert("@_string_len".to_string(), id);
 
         // bigint_clone(ptr) -> ptr
         let mut sig = self.module.make_signature();
@@ -3785,6 +3799,12 @@ impl JitCompiler {
                     self.collect_spawn_targets_in_stmt(s, targets);
                 }
             }
+            Statement::For(for_stmt) => {
+                self.collect_spawn_targets_in_expr(&for_stmt.iter, targets);
+                for s in &for_stmt.body {
+                    self.collect_spawn_targets_in_stmt(s, targets);
+                }
+            }
             Statement::VarDecl(decl) => {
                 if let Some(ref expr) = decl.value {
                     self.collect_spawn_targets_in_expr(expr, targets);
@@ -3801,6 +3821,33 @@ impl JitCompiler {
             }
             Statement::Send(send) => {
                 self.collect_spawn_targets_in_expr(&send.value, targets);
+            }
+            Statement::Try(try_stmt) => {
+                for s in &try_stmt.try_body {
+                    self.collect_spawn_targets_in_stmt(s, targets);
+                }
+                for clause in &try_stmt.catch_clauses {
+                    for s in &clause.body {
+                        self.collect_spawn_targets_in_stmt(s, targets);
+                    }
+                }
+                if let Some(ref finally_body) = try_stmt.finally {
+                    for s in finally_body {
+                        self.collect_spawn_targets_in_stmt(s, targets);
+                    }
+                }
+            }
+            Statement::Select(select_stmt) => {
+                for branch in &select_stmt.branches {
+                    if let bolide_parser::SelectBranch::Recv { body, .. } = branch {
+                        for s in body {
+                            self.collect_spawn_targets_in_stmt(s, targets);
+                        }
+                    }
+                }
+            }
+            Statement::Throw(expr) => {
+                self.collect_spawn_targets_in_expr(expr, targets);
             }
             Statement::AwaitScope(scope_stmt) => {
                 for s in &scope_stmt.body {
@@ -4668,6 +4715,17 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                 .unwrap_or(BolideType::Int),
             _ => BolideType::Int,
         }
+    }
+
+    /// 获取变量的 Bolide 类型（先查局部，再查全局）
+    fn get_var_type(&self, name: &str) -> Result<BolideType, String> {
+        if let Some(ty) = self.var_types.get(name) {
+            return Ok(ty.clone());
+        }
+        if let Some(ty) = self.global_var_types.get(name) {
+            return Ok(ty.clone());
+        }
+        Err(format!("Undefined variable: {}", name))
     }
 
     /// 读取变量的当前值（局部变量或全局变量）
@@ -6838,6 +6896,13 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                 BinOp::And | BinOp::Or => {
                     return Err("Logical operations not supported for float".to_string());
                 }
+                BinOp::Shl
+                | BinOp::Shr
+                | BinOp::BitAnd
+                | BinOp::BitOr
+                | BinOp::Xor => {
+                    return Err("Bit operations not supported for float".to_string());
+                }
             }
         } else {
             // Int 运算
@@ -6881,6 +6946,11 @@ impl<'a, 'b> CompileContext<'a, 'b> {
 
                 BinOp::And => self.builder.ins().band(lhs, rhs),
                 BinOp::Or => self.builder.ins().bor(lhs, rhs),
+                BinOp::Shl => self.builder.ins().ishl(lhs, rhs),
+                BinOp::Shr => self.builder.ins().sshr(lhs, rhs),
+                BinOp::BitAnd => self.builder.ins().band(lhs, rhs),
+                BinOp::BitOr => self.builder.ins().bor(lhs, rhs),
+                BinOp::Xor => self.builder.ins().bxor(lhs, rhs),
             }
         };
 
@@ -6924,6 +6994,13 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             BinOp::Ge => "@_bigint_ge",
             BinOp::And | BinOp::Or => {
                 return Err("Logical operations not supported for BigInt".to_string());
+            }
+            BinOp::Shl
+            | BinOp::Shr
+            | BinOp::BitAnd
+            | BinOp::BitOr
+            | BinOp::Xor => {
+                return Err("Bit operations not yet supported for BigInt".to_string());
             }
         };
 
@@ -6979,6 +7056,13 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             BinOp::Ge => "@_decimal_ge",
             BinOp::And | BinOp::Or => {
                 return Err("Logical operations not supported for Decimal".to_string());
+            }
+            BinOp::Shl
+            | BinOp::Shr
+            | BinOp::BitAnd
+            | BinOp::BitOr
+            | BinOp::Xor => {
+                return Err("Bit operations not supported for Decimal".to_string());
             }
         };
 
@@ -7998,6 +8082,31 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         // 编译要发送的值
         let value = self.compile_expr(&send_stmt.value)?;
 
+        // 如果通道元素类型是 RC 类型，先 retain 再发送
+        // （确保接收方拿到的是活指针，不受发送方释放影响）
+        let send_value = if let Ok(ch_ty) = self.get_var_type(&send_stmt.channel) {
+            if let BolideType::Channel(inner) = &ch_ty {
+                if Self::is_rc_type(inner) {
+                    if let Some(clone_func) = Self::get_clone_func_name(inner) {
+                        if let Some(&func_ref) = self.func_refs.get(clone_func) {
+                            let call = self.builder.ins().call(func_ref, &[value]);
+                            self.builder.inst_results(call)[0]
+                        } else {
+                            value
+                        }
+                    } else {
+                        value
+                    }
+                } else {
+                    value
+                }
+            } else {
+                value
+            }
+        } else {
+            value
+        };
+
         // 调用 channel_send(channel, value)
         let channel_send_ref = *self
             .func_refs
@@ -8005,7 +8114,7 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             .ok_or("channel_send not found")?;
         self.builder
             .ins()
-            .call(channel_send_ref, &[channel_ptr, value]);
+            .call(channel_send_ref, &[channel_ptr, send_value]);
 
         Ok(())
     }
@@ -8253,6 +8362,7 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             | Some(BolideType::Dynamic)
             | Some(BolideType::Ptr)
             | Some(BolideType::List(_))
+            | Some(BolideType::Tuple(_))
             | Some(BolideType::Custom(_)) => "_ptr",
             _ => "_int", // Int, Bool, None 都用 int
         };
@@ -8408,6 +8518,16 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             .ok_or("channel_recv not found")?;
         let call = self.builder.ins().call(channel_recv_ref, &[channel_ptr]);
         let value = self.builder.inst_results(call)[0];
+
+        // 如果通道元素类型是 RC 类型，追踪接收的值
+        // （发送方已 retain，接收方接管这个引用）
+        if let Ok(ch_ty) = self.get_var_type(channel_name) {
+            if let BolideType::Channel(inner) = &ch_ty {
+                if Self::is_rc_type(inner) {
+                    self.track_temp_rc_value(value, inner);
+                }
+            }
+        }
 
         Ok(value)
     }
@@ -9199,6 +9319,7 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             | Some(BolideType::Dynamic)
             | Some(BolideType::Ptr)
             | Some(BolideType::List(_))
+            | Some(BolideType::Tuple(_))
             | Some(BolideType::Custom(_)) => "_ptr",
             _ => "_int", // Int, Bool, Channel, Future, None 都用 int
         };
@@ -9212,6 +9333,7 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             | Some(BolideType::Dynamic)
             | Some(BolideType::Ptr)
             | Some(BolideType::List(_))
+            | Some(BolideType::Tuple(_))
             | Some(BolideType::Custom(_)) => self.ptr_type,
             _ => types::I64,
         };
@@ -9395,6 +9517,17 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             }
             Expr::Call(callee, _) => {
                 if let Expr::Ident(func_name) = callee.as_ref() {
+                    // 内置类型转换函数
+                    match func_name.as_str() {
+                        "bigint" => return Ok(BolideType::BigInt),
+                        "decimal" => return Ok(BolideType::Decimal),
+                        "int" => return Ok(BolideType::Int),
+                        "float" => return Ok(BolideType::Float),
+                        "str" => return Ok(BolideType::Str),
+                        "input" => return Ok(BolideType::Str),
+                        "channel" => return Ok(BolideType::Channel(Box::new(BolideType::Int))),
+                        _ => {}
+                    }
                     if self.classes.contains_key(func_name) {
                         return Ok(BolideType::Custom(func_name.clone()));
                     }
@@ -9522,6 +9655,12 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             }
         }
 
+        // 检查是否是 Str 类型的方法调用
+        if matches!(class_name, BolideType::Str) {
+            let str_ptr = self.compile_expr(base)?;
+            return self.compile_str_method_call(str_ptr, method_name);
+        }
+
         // 检查是否是 List 类型的方法调用
         if matches!(class_name, BolideType::List(_)) {
             let list_ptr = self.compile_expr(base)?;
@@ -9569,6 +9708,24 @@ impl<'a, 'b> CompileContext<'a, 'b> {
     }
 
     /// 编译列表方法调用
+    fn compile_str_method_call(
+        &mut self,
+        str_ptr: Value,
+        method_name: &str,
+    ) -> Result<Value, String> {
+        match method_name {
+            "len" | "length" | "size" => {
+                let func_ref = *self
+                    .func_refs
+                    .get("@_string_len")
+                    .ok_or("string_len not found")?;
+                let call = self.builder.ins().call(func_ref, &[str_ptr]);
+                Ok(self.builder.inst_results(call)[0])
+            }
+            _ => Err(format!("Unknown Str method: {}", method_name)),
+        }
+    }
+
     fn compile_list_method_call(
         &mut self,
         list_ptr: Value,

@@ -2,7 +2,7 @@
   "name": "bolide",
   "displayName": "Bolide Language",
   "description": "Syntax highlighting and run support for Bolide programming language",
-  "version": "0.8.2",
+  "version": "0.10.1",
   "publisher": "bolide",
   "engines": {
     "vscode": "^1.80.0"

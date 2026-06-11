@@ -257,6 +257,11 @@ pub enum BinOp {
     Ge,
     And,
     Or,
+    Shl,    // <<
+    Shr,    // >>
+    BitAnd, // &
+    BitOr,  // |
+    Xor,    // ^
 }
 
 /// 一元运算符

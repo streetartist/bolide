@@ -605,14 +605,59 @@ fn parse_or_expr(pair: Pair<Rule>) -> Result<Expr, String> {
 
 fn parse_and_expr(pair: Pair<Rule>) -> Result<Expr, String> {
     let mut inner = pair.into_inner();
-    let mut left = parse_cmp_expr(inner.next().unwrap())?;
+    let mut left = parse_bitor_expr(inner.next().unwrap())?;
     for right_pair in inner {
         // 跳过 kw_and 关键字对
-        if right_pair.as_rule() != Rule::cmp_expr {
+        if right_pair.as_rule() != Rule::bitor_expr {
             continue;
         }
-        let right = parse_cmp_expr(right_pair)?;
+        let right = parse_bitor_expr(right_pair)?;
         left = Expr::BinOp(Box::new(left), BinOp::And, Box::new(right));
+    }
+    Ok(left)
+}
+
+fn parse_bitor_expr(pair: Pair<Rule>) -> Result<Expr, String> {
+    let mut inner = pair.into_inner();
+    let mut left = parse_xor_expr(inner.next().unwrap())?;
+    while let Some(_op_pair) = inner.next() {
+        let right = parse_xor_expr(inner.next().unwrap())?;
+        left = Expr::BinOp(Box::new(left), BinOp::BitOr, Box::new(right));
+    }
+    Ok(left)
+}
+
+fn parse_xor_expr(pair: Pair<Rule>) -> Result<Expr, String> {
+    let mut inner = pair.into_inner();
+    let mut left = parse_bitand_expr(inner.next().unwrap())?;
+    while let Some(_op_pair) = inner.next() {
+        let right = parse_bitand_expr(inner.next().unwrap())?;
+        left = Expr::BinOp(Box::new(left), BinOp::Xor, Box::new(right));
+    }
+    Ok(left)
+}
+
+fn parse_bitand_expr(pair: Pair<Rule>) -> Result<Expr, String> {
+    let mut inner = pair.into_inner();
+    let mut left = parse_shift_expr(inner.next().unwrap())?;
+    while let Some(_op_pair) = inner.next() {
+        let right = parse_shift_expr(inner.next().unwrap())?;
+        left = Expr::BinOp(Box::new(left), BinOp::BitAnd, Box::new(right));
+    }
+    Ok(left)
+}
+
+fn parse_shift_expr(pair: Pair<Rule>) -> Result<Expr, String> {
+    let mut inner = pair.into_inner();
+    let mut left = parse_cmp_expr(inner.next().unwrap())?;
+    while let Some(op_pair) = inner.next() {
+        let op = match op_pair.as_str() {
+            "<<" => BinOp::Shl,
+            ">>" => BinOp::Shr,
+            _ => return Err(format!("Unknown shift op: {}", op_pair.as_str())),
+        };
+        let right = parse_cmp_expr(inner.next().unwrap())?;
+        left = Expr::BinOp(Box::new(left), op, Box::new(right));
     }
     Ok(left)
 }

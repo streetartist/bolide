@@ -1,0 +1,77 @@
+// 斐波那契 — 快速倍增 + pool(16) 并行矩阵拆分
+// 将 n 拆成 16 块, 每块并行算 M^chunk, 再顺序乘起
+
+fn fib_pair(k: int) -> (bigint, bigint) {
+    if k <= 0 { return (0B, 1B); }
+    if k == 1 { return (1B, 1B); }
+
+    let bits: int = 0; let t: int = k;
+    while t > 0 { bits = bits + 1; t = t >> 1; }
+
+    // 跳过 MSB (始终为1): 起始状态 = 处理 MSB 后 = (F(1), F(2))
+    let a: bigint = 1B; let b: bigint = 1B; let i: int = bits - 2;
+    while i >= 0 {
+        let two_b: bigint = b + b;
+        let c: bigint = a * (two_b - a);
+        let d: bigint = a * a + b * b;
+        if ((k >> i) & 1) == 1 { a = d; b = c + d; }
+        else { a = c; b = d; }
+        i = i - 1;
+    }
+    return (a, b);
+}
+
+// 矩阵乘法: (F(a),F(a+1)) × (F(b),F(b+1)) → (F(a+b), F(a+b+1))
+fn mat_mul(a: bigint, a1: bigint, b: bigint, b1: bigint) -> (bigint, bigint) {
+    let a_1: bigint = a1 - a;
+    let b_1: bigint = b1 - b;
+    return (a1 * b + a * b_1, a1 * b1 + a * b);
+}
+
+// 全局结果数组 (16 块 × 2 值)
+let Fk:  list<bigint> = [0B,0B,0B,0B,0B,0B,0B,0B,0B,0B,0B,0B,0B,0B,0B,0B];
+let Fk1: list<bigint> = [0B,0B,0B,0B,0B,0B,0B,0B,0B,0B,0B,0B,0B,0B,0B,0B];
+
+fn worker(i: int, target: int) {
+    let p: (bigint, bigint) = fib_pair(target);
+    Fk[i]  = p[0];
+    Fk1[i] = p[1];
+}
+
+// ============================================================
+print("=== 斐波那契 (快速倍增 + 16 核并行) ===");
+let s: str = input("请输入 n: ");
+let n: int = int(s);
+
+if n < 0 { print("n 不能为负数"); }
+elif n <= 100 {
+    let p: (bigint, bigint) = fib_pair(n);
+    print("F(" + str(n) + ") = " + str(p[0]));
+} else {
+    let cs: int = n / 16;
+    let rem: int = n % 16;
+
+    // 16 核并行: 每核算一对 (F(chunk), F(chunk+1))
+    pool(16) {
+        for i in range(16) {
+            let t: int = cs;
+            if i == 15 { t = cs + rem; }
+            spawn worker(i, t);
+        }
+    }
+
+    // 顺序合并 16 个矩阵
+    let cur: bigint  = 0B;
+    let cur1: bigint = 1B;
+    for i in range(16) {
+        let m: (bigint, bigint) = mat_mul(cur, cur1, Fk[i], Fk1[i]);
+        cur = m[0]; cur1 = m[1];
+    }
+
+    print("F(" + str(n) + ") = " + str(cur));
+    print("位数: " + str(str(cur).len()));
+
+    // 验证
+    if cur == fib_pair(n)[0] { print("✓ 验证通过"); }
+    else { print("✗ 验证失败"); }
+}

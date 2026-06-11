@@ -77,6 +77,10 @@ pub struct AotCompiler {
     lifetime_funcs: HashSet<String>,
     /// 字符串常量数据
     string_data: HashMap<String, DataId>,
+    /// 全局变量名 -> DataId
+    global_data_ids: HashMap<String, DataId>,
+    /// 全局变量名 -> Bolide 类型
+    global_var_types: HashMap<String, BolideType>,
     /// 源文件所在目录（import 相对路径的解析基准）
     base_dir: Option<String>,
 }
@@ -341,6 +345,8 @@ impl AotCompiler {
             modules: HashMap::new(),
             lifetime_funcs: HashSet::new(),
             string_data: HashMap::new(),
+            global_data_ids: HashMap::new(),
+            global_var_types: HashMap::new(),
             base_dir: None,
         })
     }
@@ -537,6 +543,28 @@ impl AotCompiler {
             self.compile_class_constructor(&class_name)?;
         }
         self.compile_class_methods(&program)?;
+
+        // 扫描顶层 VarDecl，声明全局数据对象（必须在编译函数之前）
+        for stmt in &program.statements {
+            if let Statement::VarDecl(decl) = stmt {
+                let data_name = format!("_g_{}", decl.name);
+                let data_id = self
+                    .module
+                    .declare_data(&data_name, Linkage::Local, true, false)
+                    .map_err(|e| format!("Declare global data error: {}", e))?;
+                // 初始化为 0 (null pointer)
+                self.data_desc.clear();
+                self.data_desc.define_zeroinit(8); // 8 bytes = pointer size
+                self.module
+                    .define_data(data_id, &self.data_desc)
+                    .map_err(|e| format!("Define global data error: {}", e))?;
+                self.global_data_ids
+                    .insert(decl.name.clone(), data_id);
+                let gvar_ty = decl.ty.clone().unwrap_or(BolideType::Int);
+                self.global_var_types
+                    .insert(decl.name.clone(), gvar_ty);
+            }
+        }
 
         // 第二遍：编译函数
         let mut toplevel_stmts = Vec::new();
@@ -1729,6 +1757,10 @@ impl AotCompiler {
             Statement::If(i) => {
                 self.collect_spawn_in_expr(&i.condition, targets);
                 self.collect_spawn_in_stmts(&i.then_body, targets);
+                for (cond, body) in &i.elif_branches {
+                    self.collect_spawn_in_expr(cond, targets);
+                    self.collect_spawn_in_stmts(body, targets);
+                }
                 if let Some(ref else_body) = i.else_body {
                     self.collect_spawn_in_stmts(else_body, targets);
                 }
@@ -1738,11 +1770,44 @@ impl AotCompiler {
                 self.collect_spawn_in_stmts(&w.body, targets);
             }
             Statement::For(f) => {
+                self.collect_spawn_in_expr(&f.iter, targets);
                 self.collect_spawn_in_stmts(&f.body, targets);
+            }
+            Statement::Pool(p) => {
+                self.collect_spawn_in_expr(&p.size, targets);
+                self.collect_spawn_in_stmts(&p.body, targets);
             }
             Statement::FuncDef(f) => {
                 self.collect_spawn_in_stmts(&f.body, targets);
             }
+            Statement::Try(t) => {
+                self.collect_spawn_in_stmts(&t.try_body, targets);
+                for clause in &t.catch_clauses {
+                    self.collect_spawn_in_stmts(&clause.body, targets);
+                }
+                if let Some(ref finally_body) = t.finally {
+                    self.collect_spawn_in_stmts(finally_body, targets);
+                }
+            }
+            Statement::Select(s) => {
+                for branch in &s.branches {
+                    if let bolide_parser::SelectBranch::Recv { body, .. } = branch {
+                        self.collect_spawn_in_stmts(body, targets);
+                    }
+                }
+            }
+            Statement::AsyncSelect(s) => {
+                for branch in &s.branches {
+                    let (expr, body) = match branch {
+                        bolide_parser::AsyncSelectBranch::Bind { expr, body, .. } => (expr, body),
+                        bolide_parser::AsyncSelectBranch::Expr { expr, body } => (expr, body),
+                    };
+                    self.collect_spawn_in_expr(expr, targets);
+                    self.collect_spawn_in_stmts(body, targets);
+                }
+            }
+            Statement::Send(s) => self.collect_spawn_in_expr(&s.value, targets),
+            Statement::Throw(e) => self.collect_spawn_in_expr(e, targets),
             Statement::AwaitScope(a) => {
                 self.collect_spawn_in_stmts(&a.body, targets);
             }
@@ -2017,6 +2082,13 @@ impl AotCompiler {
             string_globals.insert(s.clone(), (gv, s.len()));
         }
 
+        // 在函数中预声明全局变量的 GlobalValue
+        let mut global_refs = HashMap::new();
+        for (name, data_id) in &self.global_data_ids {
+            let gv = self.module.declare_data_in_func(*data_id, builder.func);
+            global_refs.insert(name.clone(), gv);
+        }
+
         // 使用作用域来确保 ctx 在 finalize 之前被释放
         {
             let mut ctx = AotCompileContext::new(
@@ -2030,6 +2102,8 @@ impl AotCompiler {
                 self.modules.clone(),
                 self.func_params.clone(),
                 self.extern_funcs.clone(),
+                global_refs,
+                self.global_var_types.clone(),
             );
 
             // 设置 self 参数
@@ -2132,6 +2206,13 @@ impl AotCompiler {
             string_globals.insert(s.clone(), (gv, s.len()));
         }
 
+        // 在函数中预声明全局变量的 GlobalValue
+        let mut global_refs = HashMap::new();
+        for (name, data_id) in &self.global_data_ids {
+            let gv = self.module.declare_data_in_func(*data_id, builder.func);
+            global_refs.insert(name.clone(), gv);
+        }
+
         // 使用作用域来确保 ctx 在 finalize 之前被释放
         {
             let mut ctx = AotCompileContext::new(
@@ -2145,6 +2226,8 @@ impl AotCompiler {
                 self.modules.clone(),
                 self.func_params.clone(),
                 self.extern_funcs.clone(),
+                global_refs,
+                self.global_var_types.clone(),
             );
 
             // 设置参数变量
@@ -2250,6 +2333,10 @@ struct AotCompileContext<'a, 'b> {
     extern_funcs: HashMap<String, (String, bolide_parser::ExternFunc)>,
     /// 当前函数中归调用方所有的参数名（borrow/ref 模式），返回它们时需 clone
     caller_owned_params: HashSet<String>,
+    /// 全局变量 GlobalValue 映射（已在函数中预声明）
+    global_refs: HashMap<String, cranelift_codegen::ir::GlobalValue>,
+    /// 全局变量类型映射
+    global_var_types: HashMap<String, BolideType>,
 }
 
 impl<'a, 'b> AotCompileContext<'a, 'b> {
@@ -2264,6 +2351,8 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         modules: HashMap<String, String>,
         func_params: HashMap<String, Vec<Param>>,
         extern_funcs: HashMap<String, (String, bolide_parser::ExternFunc)>,
+        global_refs: HashMap<String, cranelift_codegen::ir::GlobalValue>,
+        global_var_types: HashMap<String, BolideType>,
     ) -> Self {
         Self {
             builder,
@@ -2289,6 +2378,8 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             ref_params_reassigned: HashSet::new(),
             extern_funcs,
             caller_owned_params: HashSet::new(),
+            global_refs,
+            global_var_types,
         }
     }
 
@@ -2752,6 +2843,23 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             // 所有权只在 let / 赋值 / Owned 实参 / 返回等转移点处理。
             return Ok(val);
         }
+        // 全局变量
+        if let Some(&gv) = self.global_refs.get(name) {
+            let addr = self.builder.ins().global_value(self.ptr_type, gv);
+            let load_ty = self
+                .global_var_types
+                .get(name)
+                .map(|t| self.bolide_type_to_cranelift(t))
+                .unwrap_or(self.ptr_type);
+            let val = self.builder.ins().load(load_ty, MemFlags::new(), addr, 0);
+            // weak/unowned 检查
+            if self.weak_variables.contains(name) {
+                if let Some(&assert_ref) = self.func_refs.get("@_object_assert_alive") {
+                    self.builder.ins().call(assert_ref, &[val]);
+                }
+            }
+            return Ok(val);
+        }
         if let Some(&func_ref) = self.func_refs.get(name) {
             return Ok(self.builder.ins().func_addr(self.ptr_type, func_ref));
         }
@@ -2845,6 +2953,13 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
                 BinOp::And | BinOp::Or => {
                     Err("Logical operations not supported for floats".to_string())
                 }
+                BinOp::Shl
+                | BinOp::Shr
+                | BinOp::BitAnd
+                | BinOp::BitOr
+                | BinOp::Xor => {
+                    Err("Bit operations not supported for float".to_string())
+                }
             }
         } else {
             // 整数运算
@@ -2886,6 +3001,11 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
                 }
                 BinOp::And => Ok(self.builder.ins().band(lhs, rhs)),
                 BinOp::Or => Ok(self.builder.ins().bor(lhs, rhs)),
+                BinOp::Shl => Ok(self.builder.ins().ishl(lhs, rhs)),
+                BinOp::Shr => Ok(self.builder.ins().sshr(lhs, rhs)),
+                BinOp::BitAnd => Ok(self.builder.ins().band(lhs, rhs)),
+                BinOp::BitOr => Ok(self.builder.ins().bor(lhs, rhs)),
+                BinOp::Xor => Ok(self.builder.ins().bxor(lhs, rhs)),
             }
         }
     }
@@ -2999,6 +3119,13 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             BinOp::And | BinOp::Or => {
                 return Err("Logical operations not supported for BigInt".to_string());
             }
+            BinOp::Shl
+            | BinOp::Shr
+            | BinOp::BitAnd
+            | BinOp::BitOr
+            | BinOp::Xor => {
+                return Err("Bit operations not yet supported for BigInt".to_string());
+            }
         };
 
         let func_ref = *self
@@ -3050,6 +3177,13 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             BinOp::Ge => "@_decimal_ge",
             BinOp::And | BinOp::Or => {
                 return Err("Logical operations not supported for Decimal".to_string());
+            }
+            BinOp::Shl
+            | BinOp::Shr
+            | BinOp::BitAnd
+            | BinOp::BitOr
+            | BinOp::Xor => {
+                return Err("Bit operations not supported for Decimal".to_string());
             }
         };
 
@@ -3356,10 +3490,17 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         method_name: &str,
         _args: &[Expr],
     ) -> Result<Value, String> {
-        let _str_val = self.compile_expr(base)?;
+        let str_val = self.compile_expr(base)?;
 
         match method_name {
-            // 可以添加更多字符串方法
+            "len" | "length" | "size" => {
+                let func_ref = *self
+                    .func_refs
+                    .get("@_string_len")
+                    .ok_or("string_len not found")?;
+                let call = self.builder.ins().call(func_ref, &[str_val]);
+                Ok(self.builder.inst_results(call)[0])
+            }
             _ => Err(format!("Unknown string method: {}", method_name)),
         }
     }
@@ -4285,6 +4426,7 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             | Some(BolideType::Dynamic)
             | Some(BolideType::Ptr)
             | Some(BolideType::List(_))
+            | Some(BolideType::Tuple(_))
             | Some(BolideType::Custom(_)) => self.ptr_type,
             _ => types::I64,
         };
@@ -4579,7 +4721,11 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
     /// 推断表达式类型
     fn infer_expr_type(&self, expr: &Expr) -> Option<BolideType> {
         match expr {
-            Expr::Ident(name) => self.var_types.get(name).cloned(),
+            Expr::Ident(name) => self
+                .var_types
+                .get(name)
+                .cloned()
+                .or_else(|| self.global_var_types.get(name).cloned()),
             Expr::Int(_) => Some(BolideType::Int),
             Expr::Float(_) => Some(BolideType::Float),
             Expr::Bool(_) => Some(BolideType::Bool),
@@ -5015,6 +5161,7 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             | Some(BolideType::Dynamic)
             | Some(BolideType::Ptr)
             | Some(BolideType::List(_))
+            | Some(BolideType::Tuple(_))
             | Some(BolideType::Custom(_)) => "_ptr",
             _ => "_int",
         }
@@ -5162,6 +5309,7 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             | BolideType::BigInt
             | BolideType::Decimal
             | BolideType::List(_)
+            | BolideType::Tuple(_)
             | BolideType::Custom(_) => "@_coroutine_await_ptr",
             _ => "@_coroutine_await_int",
         };
@@ -5195,7 +5343,27 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             .get("@_channel_recv")
             .ok_or("channel_recv not found")?;
         let call = self.builder.ins().call(func_ref, &[ch]);
-        Ok(self.builder.inst_results(call)[0])
+        let value = self.builder.inst_results(call)[0];
+
+        // 如果通道元素类型是 RC 类型，追踪接收的值
+        let inner_ty = if let Some(ch_ty) = self.var_types.get(channel_name) {
+            if let BolideType::Channel(inner) = ch_ty {
+                if Self::is_rc_type(inner) {
+                    Some(inner.as_ref().clone())
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        if let Some(inner) = inner_ty {
+            self.track_temp_rc_value(value, &inner);
+        }
+
+        Ok(value)
     }
 
     /// 编译 AwaitAll 表达式
@@ -5438,11 +5606,36 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             return Err(format!("Channel not found: {}", send_stmt.channel));
         };
         let val = self.compile_expr(&send_stmt.value)?;
+
+        // 如果通道元素类型是 RC 类型，先 retain 再发送
+        let send_val = if let Some(ch_ty) = self.var_types.get(&send_stmt.channel) {
+            if let BolideType::Channel(inner) = ch_ty {
+                if Self::is_rc_type(inner) {
+                    if let Some(clone_func) = Self::get_clone_func_name(inner) {
+                        if let Some(&func_ref) = self.func_refs.get(clone_func) {
+                            let call = self.builder.ins().call(func_ref, &[val]);
+                            self.builder.inst_results(call)[0]
+                        } else {
+                            val
+                        }
+                    } else {
+                        val
+                    }
+                } else {
+                    val
+                }
+            } else {
+                val
+            }
+        } else {
+            val
+        };
+
         let func_ref = *self
             .func_refs
             .get("@_channel_send")
             .ok_or("channel_send not found")?;
-        self.builder.ins().call(func_ref, &[ch, val]);
+        self.builder.ins().call(func_ref, &[ch, send_val]);
         Ok(())
     }
 
@@ -5818,6 +6011,19 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
 
     /// 编译变量声明
     fn compile_var_decl(&mut self, decl: &bolide_parser::VarDecl) -> Result<(), String> {
+        // 全局变量：存储到全局数据槽而非创建局部变量
+        if self.global_refs.contains_key(&decl.name) {
+            if let Some(ref value) = decl.value {
+                let val = self.compile_expr(value)?;
+                // 从临时列表移除（全局变量接管所有权，不在语句结束时释放）
+                self.remove_temp_rc_value(val);
+                let gv = self.global_refs[&decl.name];
+                let addr = self.builder.ins().global_value(self.ptr_type, gv);
+                self.builder.ins().store(MemFlags::new(), val, addr, 0);
+            }
+            return Ok(());
+        }
+
         let ty = if let Some(ref t) = decl.ty {
             self.bolide_type_to_cranelift(t)
         } else {

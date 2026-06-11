@@ -134,9 +134,14 @@ expr_stmt = { expr ~ ";" }
 block = { "{" ~ statement* ~ "}" }
 
 // 表达式
+// 优先级从低到高: or > and > | > ^ > & > ==/!=/</>/<=/>= > << >> > + - > * / %
 expr = { or_expr }
 or_expr = { and_expr ~ (kw_or ~ and_expr)* }
-and_expr = { cmp_expr ~ (kw_and ~ cmp_expr)* }
+and_expr = { bitor_expr ~ (kw_and ~ bitor_expr)* }
+bitor_expr = { xor_expr ~ (bitor_op ~ xor_expr)* }
+xor_expr = { bitand_expr ~ (xor_op ~ bitand_expr)* }
+bitand_expr = { shift_expr ~ (bitand_op ~ shift_expr)* }
+shift_expr = { cmp_expr ~ (shift_op ~ cmp_expr)? }
 // 比较运算符不可链式（a < b < c 是语法错误，避免歧义语义）
 cmp_expr = { add_expr ~ (cmp_op ~ add_expr)? }
 add_expr = { mul_expr ~ (add_op ~ mul_expr)* }
@@ -145,8 +150,12 @@ unary_expr = { unary_op? ~ postfix_expr }
 postfix_expr = { primary ~ (call_args | index | member)* }
 
 cmp_op = { "==" | "!=" | "<=" | ">=" | "<" | ">" }
+shift_op = { "<<" | ">>" }
 add_op = { "+" | "-" }
 mul_op = { "*" | "/" | "%" }
+bitor_op = { "|" }
+xor_op = { "^" }
+bitand_op = { "&" }
 unary_op = @{ "-" | "not" ~ !id_char }
 
 // 后缀操作
