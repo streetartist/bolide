@@ -1,11 +1,11 @@
 use clap::{Parser, Subcommand};
-use std::path::{Path, PathBuf};
 use std::fs;
 use std::io::{self, Write};
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use bolide_compiler::{AotCompiler, JitCompiler};
 use bolide_parser::parse_source;
-use bolide_compiler::{JitCompiler, AotCompiler};
 
 /// REPL 状态，维护累积的代码
 struct ReplState {
@@ -122,18 +122,18 @@ fn main() -> miette::Result<()> {
 
 fn run_file(file: &PathBuf) -> miette::Result<()> {
     println!("Running: {}", file.display());
-    let source = fs::read_to_string(file)
-        .map_err(|e| miette::miette!("Failed to read file: {}", e))?;
+    let source =
+        fs::read_to_string(file).map_err(|e| miette::miette!("Failed to read file: {}", e))?;
 
-    let ast = parse_source(&source)
-        .map_err(|e| miette::miette!("Parse error: {}", e))?;
+    let ast = parse_source(&source).map_err(|e| miette::miette!("Parse error: {}", e))?;
 
     let mut compiler = JitCompiler::new();
     // import 相对路径基于源文件所在目录解析
     if let Some(parent) = file.parent() {
         compiler.set_base_dir(&parent.to_string_lossy());
     }
-    let main_ptr = compiler.compile(&ast)
+    let main_ptr = compiler
+        .compile(&ast)
         .map_err(|e| miette::miette!("Compile error: {}", e))?;
 
     let main_fn: fn() -> i64 = unsafe { std::mem::transmute(main_ptr) };
@@ -147,23 +147,23 @@ fn compile_file(file: &PathBuf, output: &PathBuf) -> miette::Result<()> {
     println!("Compiling: {} -> {}", file.display(), output.display());
 
     // 读取源文件
-    let source = fs::read_to_string(file)
-        .map_err(|e| miette::miette!("Failed to read file: {}", e))?;
+    let source =
+        fs::read_to_string(file).map_err(|e| miette::miette!("Failed to read file: {}", e))?;
 
     // 解析
-    let ast = parse_source(&source)
-        .map_err(|e| miette::miette!("Parse error: {}", e))?;
+    let ast = parse_source(&source).map_err(|e| miette::miette!("Parse error: {}", e))?;
 
     // AOT 编译
-    let mut compiler = AotCompiler::new()
-        .map_err(|e| miette::miette!("Compiler init error: {}", e))?;
+    let mut compiler =
+        AotCompiler::new().map_err(|e| miette::miette!("Compiler init error: {}", e))?;
 
     // import 相对路径基于源文件所在目录解析
     if let Some(parent) = file.parent() {
         compiler.set_base_dir(&parent.to_string_lossy());
     }
 
-    let result = compiler.compile(&ast)
+    let result = compiler
+        .compile(&ast)
         .map_err(|e| miette::miette!("Compile error: {}", e))?;
 
     // 打印外部库信息
@@ -228,7 +228,11 @@ fn find_runtime_lib() -> miette::Result<String> {
 }
 
 /// 链接可执行文件
-fn link_executable(obj_path: &PathBuf, output: &PathBuf, extern_libs: &[String]) -> miette::Result<()> {
+fn link_executable(
+    obj_path: &PathBuf,
+    output: &PathBuf,
+    extern_libs: &[String],
+) -> miette::Result<()> {
     #[cfg(target_os = "windows")]
     {
         link_windows(obj_path, output, extern_libs)
@@ -241,7 +245,11 @@ fn link_executable(obj_path: &PathBuf, output: &PathBuf, extern_libs: &[String])
 }
 
 #[cfg(target_os = "windows")]
-fn link_windows(obj_path: &PathBuf, output: &PathBuf, extern_libs: &[String]) -> miette::Result<()> {
+fn link_windows(
+    obj_path: &PathBuf,
+    output: &PathBuf,
+    extern_libs: &[String],
+) -> miette::Result<()> {
     // 查找运行时库
     let runtime_lib_path = PathBuf::from(find_runtime_lib()?);
     let runtime_lib_dir = runtime_lib_path.parent().unwrap().display().to_string();
@@ -277,7 +285,7 @@ fn link_windows(obj_path: &PathBuf, output: &PathBuf, extern_libs: &[String]) ->
     // 添加外部库 (将 .dll 转换为 .lib)
     for lib in extern_libs {
         let lib_name = if lib.to_lowercase().ends_with(".dll") {
-            lib[..lib.len()-4].to_string() + ".lib"
+            lib[..lib.len() - 4].to_string() + ".lib"
         } else {
             lib.clone()
         };
@@ -316,7 +324,7 @@ fn link_unix(obj_path: &PathBuf, output: &PathBuf, extern_libs: &[String]) -> mi
     for lib in extern_libs {
         let lib_name = if lib.starts_with("lib") && lib.ends_with(".so") {
             // libfoo.so -> -lfoo
-            format!("-l{}", &lib[3..lib.len()-3])
+            format!("-l{}", &lib[3..lib.len() - 3])
         } else if lib.ends_with(".so") {
             // foo.so -> -l:foo.so
             format!("-l:{}", lib)
@@ -365,13 +373,14 @@ fn run_repl() -> miette::Result<()> {
 
         let line = line.trim_end_matches('\n').trim_end_matches('\r');
 
-        // 处理多行输入（函数/类定义）
+        // 处理多行输入（函数/类定义、嵌套字典等）
         if in_multiline {
             input_buffer.push_str(line);
             input_buffer.push('\n');
 
-            // 检查是否结束（以 } 结尾）
-            if line.trim() == "}" {
+            // 用括号深度判断是否结束
+            let depth = count_brace_depth(&input_buffer);
+            if depth == 0 {
                 in_multiline = false;
                 let input = input_buffer.trim().to_string();
                 input_buffer.clear();
@@ -403,8 +412,9 @@ fn run_repl() -> miette::Result<()> {
             _ => {}
         }
 
-        // 检查是否是多行输入的开始（包含 { 但不以 } 结尾）
-        if input.contains('{') && !input.trim().ends_with('}') {
+        // 检查是否是多行输入——按括号深度判断
+        let depth = count_brace_depth(input);
+        if depth > 0 {
             in_multiline = true;
             input_buffer = input.to_string();
             input_buffer.push('\n');
@@ -419,6 +429,19 @@ fn run_repl() -> miette::Result<()> {
 
     println!("Goodbye!");
     Ok(())
+}
+
+/// 计算未闭合的 { } 括号深度。>0 表示还有未闭合的 {
+fn count_brace_depth(s: &str) -> usize {
+    let mut depth = 0usize;
+    for ch in s.chars() {
+        match ch {
+            '{' => depth += 1,
+            '}' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+    }
+    depth
 }
 
 fn print_help() {

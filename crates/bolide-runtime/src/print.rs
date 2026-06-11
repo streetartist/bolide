@@ -92,6 +92,66 @@ pub extern "C" fn bolide_print_float_inline(value: f64) {
     print!("{}", value);
 }
 
+#[no_mangle]
+pub extern "C" fn bolide_print_bool_inline(value: i64) {
+    print!("{}", if value != 0 { "true" } else { "false" });
+}
+
+#[no_mangle]
+pub extern "C" fn bolide_print_bigint_inline(ptr: *const BolideBigInt) {
+    if ptr.is_null() {
+        print!("null");
+        return;
+    }
+    let value = unsafe { &*ptr };
+    print!("{}", value.to_string());
+}
+
+#[no_mangle]
+pub extern "C" fn bolide_print_decimal_inline(ptr: *const BolideDecimal) {
+    if ptr.is_null() {
+        print!("null");
+        return;
+    }
+    let value = unsafe { &*ptr };
+    print!("{}", value.to_string());
+}
+
+#[no_mangle]
+pub extern "C" fn bolide_print_string_inline(ptr: *const BolideString) {
+    if ptr.is_null() {
+        print!("null");
+        return;
+    }
+    let value = unsafe { &*ptr };
+    print!("{}", value.as_str());
+}
+
+#[no_mangle]
+pub extern "C" fn bolide_print_dynamic_inline(ptr: *const BolideDynamic) {
+    if ptr.is_null() {
+        print!("null");
+        return;
+    }
+    let value = unsafe { &*ptr };
+    print!("{}", value.to_string_repr());
+}
+
+#[no_mangle]
+pub extern "C" fn bolide_print_tuple_start() {
+    print!("(");
+}
+
+#[no_mangle]
+pub extern "C" fn bolide_print_tuple_separator() {
+    print!(", ");
+}
+
+#[no_mangle]
+pub extern "C" fn bolide_print_tuple_end_inline() {
+    print!(")");
+}
+
 // ==================== 输入函数 ====================
 
 /// 读取用户输入（无提示）

@@ -15,30 +15,28 @@ use crate::list::ElementType;
 use crate::rc::{RcHeader, TypeTag};
 use crate::{BolideBigInt, BolideDecimal, BolideList, BolideString};
 
-/// 字典键。string 键按内容哈希与比较，其余按 i64 原值
+/// 字符串字典键，按内容哈希与比较。
 #[derive(Clone, Copy)]
-struct DictKey {
-    raw: i64,
-    is_str: bool,
-}
+struct StringKey(*const BolideString);
 
-impl DictKey {
+impl StringKey {
+    #[inline]
+    fn raw(&self) -> i64 {
+        self.0 as i64
+    }
+
     #[inline]
     fn as_str(&self) -> Option<&str> {
-        if !self.is_str {
+        if self.0.is_null() {
             return None;
         }
-        let ptr = self.raw as *const BolideString;
-        if ptr.is_null() {
-            return None;
-        }
-        Some(unsafe { (*ptr).as_str() })
+        Some(unsafe { (*self.0).as_str() })
     }
 }
 
-impl PartialEq for DictKey {
+impl PartialEq for StringKey {
     fn eq(&self, other: &Self) -> bool {
-        if self.raw == other.raw {
+        if self.0 == other.0 {
             return true;
         }
         match (self.as_str(), other.as_str()) {
@@ -48,15 +46,20 @@ impl PartialEq for DictKey {
     }
 }
 
-impl Eq for DictKey {}
+impl Eq for StringKey {}
 
-impl Hash for DictKey {
+impl Hash for StringKey {
     fn hash<H: Hasher>(&self, state: &mut H) {
         match self.as_str() {
             Some(s) => s.hash(state),
-            None => self.raw.hash(state),
+            None => 0usize.hash(state),
         }
     }
+}
+
+enum DictMap {
+    Raw(FxHashMap<i64, i64>),
+    String(FxHashMap<StringKey, i64>),
 }
 
 /// Bolide 字典类型（带引用计数）
@@ -65,7 +68,7 @@ pub struct BolideDict {
     header: RcHeader,
     key_type: ElementType,
     value_type: ElementType,
-    map: FxHashMap<DictKey, i64>,
+    map: DictMap,
 }
 
 impl BolideDict {
@@ -75,16 +78,17 @@ impl BolideDict {
             header: RcHeader::new(TypeTag::Dict),
             key_type,
             value_type,
-            map: FxHashMap::default(),
+            map: if key_type == ElementType::String {
+                DictMap::String(FxHashMap::default())
+            } else {
+                DictMap::Raw(FxHashMap::default())
+            },
         }))
     }
 
     #[inline]
-    fn make_key(&self, raw: i64) -> DictKey {
-        DictKey {
-            raw,
-            is_str: self.key_type == ElementType::String,
-        }
+    fn make_string_key(raw: i64) -> StringKey {
+        StringKey(raw as *const BolideString)
     }
 
     /// 获取引用计数
@@ -105,13 +109,26 @@ impl BolideDict {
 
     /// 设置键值对
     pub fn set(&mut self, key: i64, value: i64) {
-        let k = self.make_key(key);
-        // 注意：HashMap::insert 在键已存在时保留原有键对象，
-        // 因此仅在新插入时 retain 键
-        if let Some(old_value) = self.map.insert(k, value) {
-            self.release_raw(self.value_type, old_value);
-        } else {
-            self.retain_raw(self.key_type, key);
+        let inserted = match &mut self.map {
+            DictMap::String(map) => {
+                if let Some(old_value) = map.insert(Self::make_string_key(key), value) {
+                    release_raw_static(self.value_type, old_value);
+                    false
+                } else {
+                    true
+                }
+            }
+            DictMap::Raw(map) => {
+                if let Some(old_value) = map.insert(key, value) {
+                    release_raw_static(self.value_type, old_value);
+                    false
+                } else {
+                    true
+                }
+            }
+        };
+        if inserted {
+            retain_raw_static(self.key_type, key);
         }
         // 增加新值的引用计数
         self.retain_raw(self.value_type, value);
@@ -119,55 +136,94 @@ impl BolideDict {
 
     /// 获取值（不存在返回 None）
     pub fn get(&self, key: i64) -> Option<i64> {
-        self.map.get(&self.make_key(key)).copied()
+        match &self.map {
+            DictMap::String(map) => map.get(&Self::make_string_key(key)).copied(),
+            DictMap::Raw(map) => map.get(&key).copied(),
+        }
     }
 
     /// 检查键是否存在
     pub fn contains(&self, key: i64) -> bool {
-        self.map.contains_key(&self.make_key(key))
+        match &self.map {
+            DictMap::String(map) => map.contains_key(&Self::make_string_key(key)),
+            DictMap::Raw(map) => map.contains_key(&key),
+        }
     }
 
     /// 移除键值对，返回值（值的所有权转移给调用者）
     pub fn remove(&mut self, key: i64) -> Option<i64> {
-        if let Some((stored_key, value)) = self.map.remove_entry(&self.make_key(key)) {
+        let removed = match &mut self.map {
+            DictMap::String(map) => map
+                .remove_entry(&Self::make_string_key(key))
+                .map(|(k, v)| (k.raw(), v)),
+            DictMap::Raw(map) => map.remove_entry(&key),
+        };
+        removed.map(|(stored_key, value)| {
             // 释放字典持有的键引用；值不释放，所有权转移给调用者
-            self.release_raw(self.key_type, stored_key.raw);
-            Some(value)
-        } else {
-            None
+            release_raw_static(self.key_type, stored_key);
+            value
+        })
+    }
+
+    fn entries(&self) -> Vec<(i64, i64)> {
+        match &self.map {
+            DictMap::String(map) => map.iter().map(|(k, &v)| (k.raw(), v)).collect(),
+            DictMap::Raw(map) => map.iter().map(|(&k, &v)| (k, v)).collect(),
         }
     }
 
     /// 获取长度
     #[inline]
     pub fn len(&self) -> usize {
-        self.map.len()
+        match &self.map {
+            DictMap::String(map) => map.len(),
+            DictMap::Raw(map) => map.len(),
+        }
     }
 
     /// 是否为空
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.map.is_empty()
+        match &self.map {
+            DictMap::String(map) => map.is_empty(),
+            DictMap::Raw(map) => map.is_empty(),
+        }
     }
 
     /// 清空字典
     pub fn clear(&mut self) {
         let key_type = self.key_type;
         let value_type = self.value_type;
-        for (key, value) in self.map.drain() {
-            release_raw_static(key_type, key.raw);
-            release_raw_static(value_type, value);
+        match &mut self.map {
+            DictMap::String(map) => {
+                for (key, value) in map.drain() {
+                    release_raw_static(key_type, key.raw());
+                    release_raw_static(value_type, value);
+                }
+            }
+            DictMap::Raw(map) => {
+                for (key, value) in map.drain() {
+                    release_raw_static(key_type, key);
+                    release_raw_static(value_type, value);
+                }
+            }
         }
     }
 
     /// 获取所有键
     pub fn keys(&self) -> Vec<i64> {
-        self.map.keys().map(|k| k.raw).collect()
+        match &self.map {
+            DictMap::String(map) => map.keys().map(StringKey::raw).collect(),
+            DictMap::Raw(map) => map.keys().copied().collect(),
+        }
     }
 
     /// 获取所有值
     pub fn values(&self) -> Vec<i64> {
-        self.map.values().copied().collect()
+        match &self.map {
+            DictMap::String(map) => map.values().copied().collect(),
+            DictMap::Raw(map) => map.values().copied().collect(),
+        }
     }
 
     /// 获取键类型
@@ -196,11 +252,6 @@ impl BolideDict {
     fn retain_raw(&self, elem_type: ElementType, raw: i64) {
         retain_raw_static(elem_type, raw);
     }
-
-    /// 释放 RC 类型元素的引用计数（键/值通用）
-    fn release_raw(&self, elem_type: ElementType, raw: i64) {
-        release_raw_static(elem_type, raw);
-    }
 }
 
 fn retain_raw_static(elem_type: ElementType, raw: i64) {
@@ -209,24 +260,24 @@ fn retain_raw_static(elem_type: ElementType, raw: i64) {
         return;
     }
     match elem_type {
-        ElementType::String => unsafe {
+        ElementType::String => {
             crate::bolide_string_retain(ptr as *mut BolideString);
-        },
-        ElementType::BigInt => unsafe {
+        }
+        ElementType::BigInt => {
             crate::bolide_bigint_retain(ptr as *mut BolideBigInt);
-        },
-        ElementType::Decimal => unsafe {
+        }
+        ElementType::Decimal => {
             crate::bolide_decimal_retain(ptr as *mut BolideDecimal);
-        },
-        ElementType::List => unsafe {
+        }
+        ElementType::List => {
             crate::bolide_list_retain(ptr as *mut BolideList);
-        },
-        ElementType::Dict => unsafe {
+        }
+        ElementType::Dict => {
             crate::bolide_dict_retain(ptr as *mut BolideDict);
-        },
-        ElementType::Dynamic => unsafe {
+        }
+        ElementType::Dynamic => {
             crate::bolide_dynamic_retain(ptr as *mut crate::dynamic::BolideDynamic);
-        },
+        }
         _ => {}
     }
 }
@@ -237,24 +288,24 @@ fn release_raw_static(elem_type: ElementType, raw: i64) {
         return;
     }
     match elem_type {
-        ElementType::String => unsafe {
+        ElementType::String => {
             crate::bolide_string_release(ptr as *mut BolideString);
-        },
-        ElementType::BigInt => unsafe {
+        }
+        ElementType::BigInt => {
             crate::bolide_bigint_release(ptr as *mut BolideBigInt);
-        },
-        ElementType::Decimal => unsafe {
+        }
+        ElementType::Decimal => {
             crate::bolide_decimal_release(ptr as *mut BolideDecimal);
-        },
-        ElementType::List => unsafe {
+        }
+        ElementType::List => {
             crate::bolide_list_release(ptr as *mut BolideList);
-        },
-        ElementType::Dict => unsafe {
+        }
+        ElementType::Dict => {
             crate::bolide_dict_release(ptr as *mut BolideDict);
-        },
-        ElementType::Dynamic => unsafe {
+        }
+        ElementType::Dynamic => {
             crate::bolide_dynamic_release(ptr as *mut crate::dynamic::BolideDynamic);
-        },
+        }
         _ => {}
     }
 }
@@ -262,8 +313,8 @@ fn release_raw_static(elem_type: ElementType, raw: i64) {
 impl Drop for BolideDict {
     fn drop(&mut self) {
         // 释放所有键和值的引用
-        for (key, &value) in self.map.iter() {
-            release_raw_static(self.key_type, key.raw);
+        for (key, value) in self.entries() {
+            release_raw_static(self.key_type, key);
             release_raw_static(self.value_type, value);
         }
     }
@@ -283,14 +334,18 @@ pub extern "C" fn bolide_dict_new(key_type: u8, value_type: u8) -> *mut BolideDi
 #[no_mangle]
 pub extern "C" fn bolide_dict_retain(dict: *mut BolideDict) {
     if !dict.is_null() {
-        unsafe { (*dict).retain(); }
+        unsafe {
+            (*dict).retain();
+        }
     }
 }
 
 /// 减少引用计数
 #[no_mangle]
 pub extern "C" fn bolide_dict_release(dict: *mut BolideDict) {
-    if dict.is_null() { return; }
+    if dict.is_null() {
+        return;
+    }
     unsafe {
         if (*dict).release() {
             let _ = Box::from_raw(dict);
@@ -301,14 +356,16 @@ pub extern "C" fn bolide_dict_release(dict: *mut BolideDict) {
 /// 克隆字典（深拷贝）
 #[no_mangle]
 pub extern "C" fn bolide_dict_clone(dict: *const BolideDict) -> *mut BolideDict {
-    if dict.is_null() { return std::ptr::null_mut(); }
+    if dict.is_null() {
+        return std::ptr::null_mut();
+    }
     unsafe {
         let src = &*dict;
         let new_dict = BolideDict::new(src.key_type, src.value_type);
         let dst = &mut *new_dict;
 
-        for (key, &value) in src.map.iter() {
-            dst.set(key.raw, value);
+        for (key, value) in src.entries() {
+            dst.set(key, value);
         }
 
         new_dict
@@ -318,56 +375,96 @@ pub extern "C" fn bolide_dict_clone(dict: *const BolideDict) -> *mut BolideDict 
 /// 设置键值对
 #[no_mangle]
 pub extern "C" fn bolide_dict_set(dict: *mut BolideDict, key: i64, value: i64) {
-    if dict.is_null() { return; }
-    unsafe { (*dict).set(key, value); }
+    if dict.is_null() {
+        return;
+    }
+    unsafe {
+        (*dict).set(key, value);
+    }
 }
 
-/// 获取值（不存在返回 0）
+/// 获取值（不存在时确定性中止，避免把缺失键伪装成合法的 0/null）
 #[no_mangle]
 pub extern "C" fn bolide_dict_get(dict: *const BolideDict, key: i64) -> i64 {
-    if dict.is_null() { return 0; }
-    unsafe { (*dict).get(key).unwrap_or(0) }
+    if dict.is_null() {
+        eprintln!("runtime error: index into null dict");
+        std::process::abort();
+    }
+    unsafe {
+        if let Some(value) = (*dict).get(key) {
+            value
+        } else {
+            eprintln!("runtime error: dict key not found");
+            std::process::abort();
+        }
+    }
 }
 
 /// 检查键是否存在
 #[no_mangle]
 pub extern "C" fn bolide_dict_contains(dict: *const BolideDict, key: i64) -> i64 {
-    if dict.is_null() { return 0; }
-    unsafe { if (*dict).contains(key) { 1 } else { 0 } }
+    if dict.is_null() {
+        return 0;
+    }
+    unsafe {
+        if (*dict).contains(key) {
+            1
+        } else {
+            0
+        }
+    }
 }
 
 /// 移除键值对，返回值
 #[no_mangle]
 pub extern "C" fn bolide_dict_remove(dict: *mut BolideDict, key: i64) -> i64 {
-    if dict.is_null() { return 0; }
+    if dict.is_null() {
+        return 0;
+    }
     unsafe { (*dict).remove(key).unwrap_or(0) }
 }
 
 /// 获取长度
 #[no_mangle]
 pub extern "C" fn bolide_dict_len(dict: *const BolideDict) -> i64 {
-    if dict.is_null() { return 0; }
+    if dict.is_null() {
+        return 0;
+    }
     unsafe { (*dict).len() as i64 }
 }
 
 /// 是否为空
 #[no_mangle]
 pub extern "C" fn bolide_dict_is_empty(dict: *const BolideDict) -> i64 {
-    if dict.is_null() { return 1; }
-    unsafe { if (*dict).is_empty() { 1 } else { 0 } }
+    if dict.is_null() {
+        return 1;
+    }
+    unsafe {
+        if (*dict).is_empty() {
+            1
+        } else {
+            0
+        }
+    }
 }
 
 /// 清空字典
 #[no_mangle]
 pub extern "C" fn bolide_dict_clear(dict: *mut BolideDict) {
-    if dict.is_null() { return; }
-    unsafe { (*dict).clear(); }
+    if dict.is_null() {
+        return;
+    }
+    unsafe {
+        (*dict).clear();
+    }
 }
 
 /// 获取所有键（返回新列表）
 #[no_mangle]
 pub extern "C" fn bolide_dict_keys(dict: *const BolideDict) -> *mut BolideList {
-    if dict.is_null() { return std::ptr::null_mut(); }
+    if dict.is_null() {
+        return std::ptr::null_mut();
+    }
     unsafe {
         let d = &*dict;
         let keys = d.keys();
@@ -382,7 +479,9 @@ pub extern "C" fn bolide_dict_keys(dict: *const BolideDict) -> *mut BolideList {
 /// 获取所有值（返回新列表）
 #[no_mangle]
 pub extern "C" fn bolide_dict_values(dict: *const BolideDict) -> *mut BolideList {
-    if dict.is_null() { return std::ptr::null_mut(); }
+    if dict.is_null() {
+        return std::ptr::null_mut();
+    }
     unsafe {
         let d = &*dict;
         let values = d.values();
@@ -398,80 +497,87 @@ pub extern "C" fn bolide_dict_values(dict: *const BolideDict) -> *mut BolideList
 /// 获取键类型
 #[no_mangle]
 pub extern "C" fn bolide_dict_key_type(dict: *const BolideDict) -> u8 {
-    if dict.is_null() { return 0; }
+    if dict.is_null() {
+        return 0;
+    }
     unsafe { (*dict).key_type() as u8 }
 }
 
 /// 获取值类型
 #[no_mangle]
 pub extern "C" fn bolide_dict_value_type(dict: *const BolideDict) -> u8 {
-    if dict.is_null() { return 0; }
+    if dict.is_null() {
+        return 0;
+    }
     unsafe { (*dict).value_type() as u8 }
 }
 
 /// 检查是否已被 move
 #[no_mangle]
 pub extern "C" fn bolide_dict_is_moved(dict: *const BolideDict) -> i64 {
-    if dict.is_null() { return 0; }
-    unsafe { if (*dict).is_moved() { 1 } else { 0 } }
+    if dict.is_null() {
+        return 0;
+    }
+    unsafe {
+        if (*dict).is_moved() {
+            1
+        } else {
+            0
+        }
+    }
 }
 
 /// 标记为已 move
 #[no_mangle]
 pub extern "C" fn bolide_dict_mark_moved(dict: *mut BolideDict) {
     if !dict.is_null() {
-        unsafe { (*dict).mark_moved(); }
+        unsafe {
+            (*dict).mark_moved();
+        }
     }
 }
 
 /// 打印字典
 #[no_mangle]
 pub extern "C" fn bolide_print_dict(dict: *const BolideDict) {
+    print_dict_inline(dict);
+    println!();
+}
+
+pub(crate) fn print_dict_inline(dict: *const BolideDict) {
     if dict.is_null() {
-        println!("{{}}");
+        print!("null");
         return;
     }
     unsafe {
         let d = &*dict;
         print!("{{");
         let mut first = true;
-        for (key, &value) in d.map.iter() {
-            if !first { print!(", "); }
+        for (key, value) in d.entries() {
+            if !first {
+                print!(", ");
+            }
             first = false;
 
             // 打印键
             match d.key_type {
-                ElementType::Int => print!("{}", key.raw),
+                ElementType::Int => print!("{}", key),
                 ElementType::String => {
-                    let s = key.raw as *const BolideString;
+                    let s = key as *const BolideString;
                     if !s.is_null() {
                         print!("\"{}\"", (*s).as_str());
                     } else {
                         print!("null");
                     }
                 }
-                _ => print!("{}", key.raw),
+                _ => crate::list::print_element_inline(d.key_type, key),
             }
 
             print!(": ");
 
-            // 打印值
-            match d.value_type {
-                ElementType::Int => print!("{}", value),
-                ElementType::Float => print!("{}", f64::from_bits(value as u64)),
-                ElementType::Bool => print!("{}", if value != 0 { "true" } else { "false" }),
-                ElementType::String => {
-                    let s = value as *const BolideString;
-                    if !s.is_null() {
-                        print!("\"{}\"", (*s).as_str());
-                    } else {
-                        print!("null");
-                    }
-                }
-                _ => print!("{}", value),
-            }
+            crate::list::print_element_inline(d.value_type, value);
         }
-        println!("}}");
+        print!("}}");
     }
 }
 
@@ -502,8 +608,6 @@ mod tests {
             assert_eq!(bolide_dict_get(dict, 1), 100);
             assert_eq!(bolide_dict_get(dict, 2), 200);
             assert_eq!(bolide_dict_get(dict, 3), 300);
-            assert_eq!(bolide_dict_get(dict, 999), 0); // not found
-
             assert_eq!(bolide_dict_contains(dict, 1), 1);
             assert_eq!(bolide_dict_contains(dict, 999), 0);
 

@@ -2,8 +2,8 @@
 //!
 //! BolideDecimal 使用引用计数管理内存
 
-use rust_decimal::Decimal;
 use rust_decimal::prelude::*;
+use rust_decimal::Decimal;
 
 use crate::rc::{RcHeader, TypeTag};
 
@@ -120,7 +120,9 @@ pub extern "C" fn bolide_decimal_from_str(s: *const i8, len: usize) -> *mut Boli
 #[no_mangle]
 pub extern "C" fn bolide_decimal_retain(d: *mut BolideDecimal) -> *mut BolideDecimal {
     if !d.is_null() {
-        unsafe { (*d).retain(); }
+        unsafe {
+            (*d).retain();
+        }
     }
     d
 }
@@ -128,7 +130,9 @@ pub extern "C" fn bolide_decimal_retain(d: *mut BolideDecimal) -> *mut BolideDec
 /// 减少引用计数
 #[no_mangle]
 pub extern "C" fn bolide_decimal_release(d: *mut BolideDecimal) {
-    if d.is_null() { return; }
+    if d.is_null() {
+        return;
+    }
     unsafe {
         if (*d).release() {
             let _ = Box::from_raw(d);
@@ -139,7 +143,9 @@ pub extern "C" fn bolide_decimal_release(d: *mut BolideDecimal) {
 /// 深拷贝
 #[no_mangle]
 pub extern "C" fn bolide_decimal_clone(a: *const BolideDecimal) -> *mut BolideDecimal {
-    if a.is_null() { return std::ptr::null_mut(); }
+    if a.is_null() {
+        return std::ptr::null_mut();
+    }
     let a = unsafe { &*a };
     BolideDecimal::from_decimal(a.inner)
 }
@@ -152,64 +158,101 @@ pub extern "C" fn bolide_decimal_free(d: *mut BolideDecimal) {
 
 #[no_mangle]
 pub extern "C" fn bolide_decimal_ref_count(d: *const BolideDecimal) -> u32 {
-    if d.is_null() { return 0; }
+    if d.is_null() {
+        return 0;
+    }
     unsafe { (*d).ref_count() }
 }
 
 #[no_mangle]
 pub extern "C" fn bolide_decimal_to_i64(a: *const BolideDecimal) -> i64 {
-    if a.is_null() { return 0; }
+    if a.is_null() {
+        return 0;
+    }
     unsafe { (*a).to_i64() }
 }
 
 #[no_mangle]
 pub extern "C" fn bolide_decimal_to_f64(a: *const BolideDecimal) -> f64 {
-    if a.is_null() { return 0.0; }
+    if a.is_null() {
+        return 0.0;
+    }
     unsafe { (*a).to_f64() }
 }
 
 // ==================== 算术运算（返回新对象，ref_count = 1）====================
 
 #[no_mangle]
-pub extern "C" fn bolide_decimal_add(a: *const BolideDecimal, b: *const BolideDecimal) -> *mut BolideDecimal {
-    if a.is_null() || b.is_null() { return std::ptr::null_mut(); }
+pub extern "C" fn bolide_decimal_add(
+    a: *const BolideDecimal,
+    b: *const BolideDecimal,
+) -> *mut BolideDecimal {
+    if a.is_null() || b.is_null() {
+        return std::ptr::null_mut();
+    }
     let (a, b) = unsafe { (&*a, &*b) };
     BolideDecimal::from_decimal(a.inner + b.inner)
 }
 
 #[no_mangle]
-pub extern "C" fn bolide_decimal_sub(a: *const BolideDecimal, b: *const BolideDecimal) -> *mut BolideDecimal {
-    if a.is_null() || b.is_null() { return std::ptr::null_mut(); }
+pub extern "C" fn bolide_decimal_sub(
+    a: *const BolideDecimal,
+    b: *const BolideDecimal,
+) -> *mut BolideDecimal {
+    if a.is_null() || b.is_null() {
+        return std::ptr::null_mut();
+    }
     let (a, b) = unsafe { (&*a, &*b) };
     BolideDecimal::from_decimal(a.inner - b.inner)
 }
 
 #[no_mangle]
-pub extern "C" fn bolide_decimal_mul(a: *const BolideDecimal, b: *const BolideDecimal) -> *mut BolideDecimal {
-    if a.is_null() || b.is_null() { return std::ptr::null_mut(); }
+pub extern "C" fn bolide_decimal_mul(
+    a: *const BolideDecimal,
+    b: *const BolideDecimal,
+) -> *mut BolideDecimal {
+    if a.is_null() || b.is_null() {
+        return std::ptr::null_mut();
+    }
     let (a, b) = unsafe { (&*a, &*b) };
     BolideDecimal::from_decimal(a.inner * b.inner)
 }
 
 #[no_mangle]
-pub extern "C" fn bolide_decimal_div(a: *const BolideDecimal, b: *const BolideDecimal) -> *mut BolideDecimal {
-    if a.is_null() || b.is_null() { return std::ptr::null_mut(); }
+pub extern "C" fn bolide_decimal_div(
+    a: *const BolideDecimal,
+    b: *const BolideDecimal,
+) -> *mut BolideDecimal {
+    if a.is_null() || b.is_null() {
+        return std::ptr::null_mut();
+    }
     let (a, b) = unsafe { (&*a, &*b) };
-    if b.is_zero() { return std::ptr::null_mut(); }
+    if b.is_zero() {
+        return std::ptr::null_mut();
+    }
     BolideDecimal::from_decimal(a.inner / b.inner)
 }
 
 #[no_mangle]
-pub extern "C" fn bolide_decimal_rem(a: *const BolideDecimal, b: *const BolideDecimal) -> *mut BolideDecimal {
-    if a.is_null() || b.is_null() { return std::ptr::null_mut(); }
+pub extern "C" fn bolide_decimal_rem(
+    a: *const BolideDecimal,
+    b: *const BolideDecimal,
+) -> *mut BolideDecimal {
+    if a.is_null() || b.is_null() {
+        return std::ptr::null_mut();
+    }
     let (a, b) = unsafe { (&*a, &*b) };
-    if b.is_zero() { return std::ptr::null_mut(); }
+    if b.is_zero() {
+        return std::ptr::null_mut();
+    }
     BolideDecimal::from_decimal(a.inner % b.inner)
 }
 
 #[no_mangle]
 pub extern "C" fn bolide_decimal_neg(a: *const BolideDecimal) -> *mut BolideDecimal {
-    if a.is_null() { return std::ptr::null_mut(); }
+    if a.is_null() {
+        return std::ptr::null_mut();
+    }
     let a = unsafe { &*a };
     BolideDecimal::from_decimal(-a.inner)
 }
@@ -218,79 +261,125 @@ pub extern "C" fn bolide_decimal_neg(a: *const BolideDecimal) -> *mut BolideDeci
 
 #[no_mangle]
 pub extern "C" fn bolide_decimal_eq(a: *const BolideDecimal, b: *const BolideDecimal) -> i64 {
-    if a.is_null() || b.is_null() { return 0; }
+    if a.is_null() || b.is_null() {
+        return 0;
+    }
     let (a, b) = unsafe { (&*a, &*b) };
-    if a.inner == b.inner { 1 } else { 0 }
+    if a.inner == b.inner {
+        1
+    } else {
+        0
+    }
 }
 
 #[no_mangle]
 pub extern "C" fn bolide_decimal_ne(a: *const BolideDecimal, b: *const BolideDecimal) -> i64 {
-    if a.is_null() || b.is_null() { return 0; }
+    if a.is_null() || b.is_null() {
+        return 0;
+    }
     let (a, b) = unsafe { (&*a, &*b) };
-    if a.inner != b.inner { 1 } else { 0 }
+    if a.inner != b.inner {
+        1
+    } else {
+        0
+    }
 }
 
 #[no_mangle]
 pub extern "C" fn bolide_decimal_lt(a: *const BolideDecimal, b: *const BolideDecimal) -> i64 {
-    if a.is_null() || b.is_null() { return 0; }
+    if a.is_null() || b.is_null() {
+        return 0;
+    }
     let (a, b) = unsafe { (&*a, &*b) };
-    if a.inner < b.inner { 1 } else { 0 }
+    if a.inner < b.inner {
+        1
+    } else {
+        0
+    }
 }
 
 #[no_mangle]
 pub extern "C" fn bolide_decimal_le(a: *const BolideDecimal, b: *const BolideDecimal) -> i64 {
-    if a.is_null() || b.is_null() { return 0; }
+    if a.is_null() || b.is_null() {
+        return 0;
+    }
     let (a, b) = unsafe { (&*a, &*b) };
-    if a.inner <= b.inner { 1 } else { 0 }
+    if a.inner <= b.inner {
+        1
+    } else {
+        0
+    }
 }
 
 #[no_mangle]
 pub extern "C" fn bolide_decimal_gt(a: *const BolideDecimal, b: *const BolideDecimal) -> i64 {
-    if a.is_null() || b.is_null() { return 0; }
+    if a.is_null() || b.is_null() {
+        return 0;
+    }
     let (a, b) = unsafe { (&*a, &*b) };
-    if a.inner > b.inner { 1 } else { 0 }
+    if a.inner > b.inner {
+        1
+    } else {
+        0
+    }
 }
 
 #[no_mangle]
 pub extern "C" fn bolide_decimal_ge(a: *const BolideDecimal, b: *const BolideDecimal) -> i64 {
-    if a.is_null() || b.is_null() { return 0; }
+    if a.is_null() || b.is_null() {
+        return 0;
+    }
     let (a, b) = unsafe { (&*a, &*b) };
-    if a.inner >= b.inner { 1 } else { 0 }
+    if a.inner >= b.inner {
+        1
+    } else {
+        0
+    }
 }
 
 // ==================== 数学函数 ====================
 
 #[no_mangle]
 pub extern "C" fn bolide_decimal_abs(a: *const BolideDecimal) -> *mut BolideDecimal {
-    if a.is_null() { return std::ptr::null_mut(); }
+    if a.is_null() {
+        return std::ptr::null_mut();
+    }
     let a = unsafe { &*a };
     BolideDecimal::from_decimal(a.inner.abs())
 }
 
 #[no_mangle]
 pub extern "C" fn bolide_decimal_floor(a: *const BolideDecimal) -> *mut BolideDecimal {
-    if a.is_null() { return std::ptr::null_mut(); }
+    if a.is_null() {
+        return std::ptr::null_mut();
+    }
     let a = unsafe { &*a };
     BolideDecimal::from_decimal(a.inner.floor())
 }
 
 #[no_mangle]
 pub extern "C" fn bolide_decimal_ceil(a: *const BolideDecimal) -> *mut BolideDecimal {
-    if a.is_null() { return std::ptr::null_mut(); }
+    if a.is_null() {
+        return std::ptr::null_mut();
+    }
     let a = unsafe { &*a };
     BolideDecimal::from_decimal(a.inner.ceil())
 }
 
 #[no_mangle]
 pub extern "C" fn bolide_decimal_round(a: *const BolideDecimal) -> *mut BolideDecimal {
-    if a.is_null() { return std::ptr::null_mut(); }
+    if a.is_null() {
+        return std::ptr::null_mut();
+    }
     let a = unsafe { &*a };
     BolideDecimal::from_decimal(a.inner.round())
 }
 
 #[no_mangle]
 pub extern "C" fn bolide_decimal_round_dp(a: *const BolideDecimal, dp: u32) -> *mut BolideDecimal {
-    if a.is_null() { return std::ptr::null_mut(); }
+    if a.is_null() {
+        return std::ptr::null_mut();
+    }
     let a = unsafe { &*a };
     BolideDecimal::from_decimal(a.inner.round_dp(dp))
 }

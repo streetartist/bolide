@@ -2,8 +2,8 @@
 //!
 //! 提供线程安全的通道实现，用于线程间通信
 
-use std::sync::{Arc, Mutex, Condvar};
 use std::collections::VecDeque;
+use std::sync::{Arc, Condvar, Mutex};
 
 /// 通道内部状态（单个 Mutex 保护，保证原子性）
 struct ChannelInner {
@@ -109,7 +109,7 @@ impl BolideChannel {
 
         inner.queue.push_back(value);
         self.condvar.notify_one();
-        self.select_notifier.notify();  // 通知 select
+        self.select_notifier.notify(); // 通知 select
         true
     }
 
@@ -184,7 +184,11 @@ pub extern "C" fn bolide_channel_send(channel: *mut BolideChannel, value: i64) -
     }
 
     let channel = unsafe { &*channel };
-    if channel.send(value) { 1 } else { 0 }
+    if channel.send(value) {
+        1
+    } else {
+        0
+    }
 }
 
 /// 从通道接收消息（阻塞）
@@ -202,13 +206,12 @@ pub extern "C" fn bolide_channel_recv(channel: *mut BolideChannel) -> i64 {
 /// 尝试从通道接收消息（非阻塞）
 /// 成功时 *success = 1，失败时 *success = 0
 #[no_mangle]
-pub extern "C" fn bolide_channel_try_recv(
-    channel: *mut BolideChannel,
-    success: *mut i64,
-) -> i64 {
+pub extern "C" fn bolide_channel_try_recv(channel: *mut BolideChannel, success: *mut i64) -> i64 {
     if channel.is_null() {
         if !success.is_null() {
-            unsafe { *success = 0; }
+            unsafe {
+                *success = 0;
+            }
         }
         return 0;
     }
@@ -217,13 +220,17 @@ pub extern "C" fn bolide_channel_try_recv(
     match channel.try_recv() {
         Some(value) => {
             if !success.is_null() {
-                unsafe { *success = 1; }
+                unsafe {
+                    *success = 1;
+                }
             }
             value
         }
         None => {
             if !success.is_null() {
-                unsafe { *success = 0; }
+                unsafe {
+                    *success = 0;
+                }
             }
             0
         }
@@ -247,7 +254,11 @@ pub extern "C" fn bolide_channel_is_closed(channel: *mut BolideChannel) -> i64 {
     }
 
     let channel = unsafe { &*channel };
-    if channel.is_closed() { 1 } else { 0 }
+    if channel.is_closed() {
+        1
+    } else {
+        0
+    }
 }
 
 /// 释放通道
@@ -281,15 +292,17 @@ pub extern "C" fn bolide_channel_select(
         return -1;
     }
 
-    let channel_slice = unsafe {
-        std::slice::from_raw_parts(channels, count as usize)
-    };
+    let channel_slice = unsafe { std::slice::from_raw_parts(channels, count as usize) };
 
     // 收集有效的 channel 引用
     let channel_refs: Vec<&BolideChannel> = channel_slice
         .iter()
         .filter_map(|&ptr| {
-            if ptr.is_null() { None } else { Some(unsafe { &*ptr }) }
+            if ptr.is_null() {
+                None
+            } else {
+                Some(unsafe { &*ptr })
+            }
         })
         .collect();
 
@@ -310,7 +323,9 @@ pub extern "C" fn bolide_channel_select(
         for (idx, ch) in channel_refs.iter().enumerate() {
             if let Some(val) = ch.try_recv() {
                 if !value.is_null() {
-                    unsafe { *value = val; }
+                    unsafe {
+                        *value = val;
+                    }
                 }
                 return idx as i64;
             }
@@ -324,7 +339,7 @@ pub extern "C" fn bolide_channel_select(
         // 检查超时
         if let Some(dl) = deadline {
             if Instant::now() >= dl {
-                return -1;  // 超时
+                return -1; // 超时
             }
         }
 
@@ -338,11 +353,11 @@ pub extern "C" fn bolide_channel_select(
         let wait_duration = if let Some(dl) = deadline {
             let remaining = dl.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
-                return -1;  // 超时
+                return -1; // 超时
             }
             remaining
         } else {
-            Duration::from_millis(100)  // 无超时时，最多等待 100ms 后重新检查
+            Duration::from_millis(100) // 无超时时，最多等待 100ms 后重新检查
         };
 
         GLOBAL_SELECT_NOTIFIER.wait_timeout(wait_duration);

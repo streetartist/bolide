@@ -2,14 +2,17 @@
 //!
 //! 使用 Cranelift 实现的提前编译器，生成目标文件
 
+use bolide_parser::{
+    BinOp, CType, Expr, ExternBlock, ExternDecl, FuncDef, Param, ParamMode, Program, Statement,
+    Type as BolideType, UnaryOp,
+};
+use cranelift::prelude::isa::{CallConv, TargetIsa};
 use cranelift::prelude::*;
-use cranelift::prelude::isa::{TargetIsa, CallConv};
+use cranelift_codegen::ir::{FuncRef, StackSlotData, StackSlotKind, TrapCode};
+use cranelift_module::{DataDescription, DataId, FuncId, Linkage, Module};
 use cranelift_object::{ObjectBuilder, ObjectModule};
-use cranelift_module::{DataDescription, Linkage, Module, FuncId, DataId};
-use cranelift_codegen::ir::{FuncRef, StackSlotData, StackSlotKind};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
-use bolide_parser::{Program, Statement, Expr, Type as BolideType, FuncDef, Param, ParamMode, ExternBlock, ExternDecl, CType, BinOp, UnaryOp};
 
 /// AOT 编译结果
 #[derive(Debug)]
@@ -81,76 +84,217 @@ pub struct AotCompiler {
 /// 运行时符号列表
 pub const RUNTIME_SYMBOLS: &[&str] = &[
     // 基本类型打印
-    "print_int", "print_float", "print_bool", "print_bigint",
-    "print_decimal", "print_string", "print_dynamic",
+    "print_int",
+    "print_float",
+    "print_bool",
+    "print_bigint",
+    "print_decimal",
+    "print_string",
+    "print_dynamic",
+    "print_int_inline",
+    "print_float_inline",
+    "print_bool_inline",
+    "print_bigint_inline",
+    "print_decimal_inline",
+    "print_string_inline",
+    "print_dynamic_inline",
+    "print_tuple_start",
+    "print_tuple_separator",
+    "print_tuple_end_inline",
+    "println",
     // 用户输入
-    "input", "input_prompt",
+    "input",
+    "input_prompt",
     // BigInt
-    "bigint_from_i64", "bigint_from_str", "bigint_add", "bigint_sub",
-    "bigint_mul", "bigint_div", "bigint_rem", "bigint_neg",
-    "bigint_eq", "bigint_lt", "bigint_le", "bigint_gt", "bigint_ge",
-    "bigint_to_i64", "bigint_clone", "bigint_debug_stats",
+    "bigint_from_i64",
+    "bigint_from_str",
+    "bigint_add",
+    "bigint_sub",
+    "bigint_mul",
+    "bigint_div",
+    "bigint_rem",
+    "bigint_neg",
+    "bigint_eq",
+    "bigint_lt",
+    "bigint_le",
+    "bigint_gt",
+    "bigint_ge",
+    "bigint_to_i64",
+    "bigint_clone",
+    "bigint_debug_stats",
     // Decimal
-    "decimal_from_i64", "decimal_from_f64", "decimal_from_str",
-    "decimal_add", "decimal_sub", "decimal_mul", "decimal_div",
-    "decimal_neg", "decimal_eq", "decimal_lt", "decimal_to_i64",
-    "decimal_to_f64", "decimal_clone",
+    "decimal_from_i64",
+    "decimal_from_f64",
+    "decimal_from_str",
+    "decimal_add",
+    "decimal_sub",
+    "decimal_mul",
+    "decimal_div",
+    "decimal_neg",
+    "decimal_eq",
+    "decimal_lt",
+    "decimal_to_i64",
+    "decimal_to_f64",
+    "decimal_clone",
     // Dynamic
-    "dynamic_from_int", "dynamic_from_float", "dynamic_from_bool",
-    "dynamic_from_string", "dynamic_from_list", "dynamic_from_bigint",
-    "dynamic_from_decimal", "dynamic_add", "dynamic_sub", "dynamic_mul",
-    "dynamic_div", "dynamic_neg", "dynamic_eq", "dynamic_lt", "dynamic_clone",
+    "dynamic_from_int",
+    "dynamic_from_float",
+    "dynamic_from_bool",
+    "dynamic_from_string",
+    "dynamic_from_list",
+    "dynamic_from_bigint",
+    "dynamic_from_decimal",
+    "dynamic_add",
+    "dynamic_sub",
+    "dynamic_mul",
+    "dynamic_div",
+    "dynamic_neg",
+    "dynamic_eq",
+    "dynamic_lt",
+    "dynamic_clone",
     // String
-    "string_from_slice", "string_literal", "string_as_cstr", "string_concat",
-    "string_eq", "string_from_int", "string_from_float", "string_from_bool",
-    "string_from_bigint", "string_from_decimal", "string_to_int", "string_to_float",
+    "string_from_slice",
+    "string_literal",
+    "string_as_cstr",
+    "string_concat",
+    "string_eq",
+    "string_from_int",
+    "string_from_float",
+    "string_from_bool",
+    "string_from_bigint",
+    "string_from_decimal",
+    "string_to_int",
+    "string_to_float",
     // Memory
-    "bolide_alloc", "bolide_free",
+    "bolide_alloc",
+    "bolide_free",
     // Object
-    "object_alloc", "object_retain", "object_release", "object_clone",
-    "object_weak_retain", "object_weak_release", "object_weak_clone",
-    "object_assert_alive", "object_is_alive", "object_ref_count",
+    "object_alloc",
+    "object_retain",
+    "object_release",
+    "object_clone",
+    "object_weak_retain",
+    "object_weak_release",
+    "object_weak_clone",
+    "object_assert_alive",
+    "object_is_alive",
+    "object_ref_count",
     // Thread
-    "thread_spawn_int", "thread_spawn_float", "thread_spawn_ptr",
-    "thread_spawn_int_with_env", "thread_spawn_float_with_env", "thread_spawn_ptr_with_env",
-    "thread_join_int", "thread_join_float", "thread_join_ptr",
-    "thread_handle_free", "thread_cancel", "thread_is_cancelled",
+    "thread_spawn_int",
+    "thread_spawn_float",
+    "thread_spawn_ptr",
+    "thread_spawn_int_with_env",
+    "thread_spawn_float_with_env",
+    "thread_spawn_ptr_with_env",
+    "thread_join_int",
+    "thread_join_float",
+    "thread_join_ptr",
+    "thread_handle_free",
+    "thread_cancel",
+    "thread_is_cancelled",
     // Pool
-    "pool_create", "pool_enter", "pool_exit", "pool_is_active",
-    "pool_spawn_int", "pool_spawn_float", "pool_spawn_ptr",
-    "pool_spawn_int_with_env", "pool_spawn_float_with_env", "pool_spawn_ptr_with_env",
-    "pool_join_int", "pool_join_float", "pool_join_ptr",
-    "pool_handle_free", "pool_destroy",
+    "pool_create",
+    "pool_enter",
+    "pool_exit",
+    "pool_is_active",
+    "pool_spawn_int",
+    "pool_spawn_float",
+    "pool_spawn_ptr",
+    "pool_spawn_int_with_env",
+    "pool_spawn_float_with_env",
+    "pool_spawn_ptr_with_env",
+    "pool_join_int",
+    "pool_join_float",
+    "pool_join_ptr",
+    "pool_handle_free",
+    "pool_destroy",
     // Channel
-    "channel_create", "channel_create_buffered", "channel_send",
-    "channel_recv", "channel_close", "channel_free", "channel_select",
+    "channel_create",
+    "channel_create_buffered",
+    "channel_send",
+    "channel_recv",
+    "channel_close",
+    "channel_free",
+    "channel_select",
     // Coroutine
-    "coroutine_spawn_int", "coroutine_spawn_float", "coroutine_spawn_ptr",
-    "coroutine_await_int", "coroutine_await_float", "coroutine_await_ptr",
-    "coroutine_cancel", "coroutine_free",
-    "coroutine_spawn_int_with_env", "coroutine_spawn_float_with_env", "coroutine_spawn_ptr_with_env",
-    "scope_enter", "scope_register", "scope_exit",
+    "coroutine_spawn_int",
+    "coroutine_spawn_float",
+    "coroutine_spawn_ptr",
+    "coroutine_await_int",
+    "coroutine_await_float",
+    "coroutine_await_ptr",
+    "coroutine_cancel",
+    "coroutine_free",
+    "coroutine_spawn_int_with_env",
+    "coroutine_spawn_float_with_env",
+    "coroutine_spawn_ptr_with_env",
+    "scope_enter",
+    "scope_register",
+    "scope_exit",
     // Select
     "select_wait_first",
     // Tuple
-    "tuple_new", "tuple_free", "tuple_set", "tuple_get", "tuple_len", "print_tuple",
+    "tuple_new",
+    "tuple_free",
+    "tuple_set",
+    "tuple_get",
+    "tuple_len",
+    "print_tuple",
     // FFI
-    "ffi_load_library", "ffi_get_symbol", "ffi_cleanup", "test_callback", "map_int",
+    "ffi_load_library",
+    "ffi_get_symbol",
+    "ffi_cleanup",
+    "test_callback",
+    "map_int",
     // RC
-    "string_retain", "string_release", "string_clone",
-    "bigint_retain", "bigint_release",
-    "decimal_retain", "decimal_release",
-    "list_retain", "list_release", "list_clone",
-    "list_new", "list_push", "list_pop", "list_len", "list_get", "list_set",
-    "list_insert", "list_remove", "list_clear", "list_reverse", "list_extend",
-    "list_contains", "list_index_of", "list_count", "list_sort", "list_slice",
-    "list_is_empty", "list_first", "list_last", "print_list",
+    "string_retain",
+    "string_release",
+    "string_clone",
+    "bigint_retain",
+    "bigint_release",
+    "decimal_retain",
+    "decimal_release",
+    "list_retain",
+    "list_release",
+    "list_clone",
+    "list_new",
+    "list_push",
+    "list_pop",
+    "list_len",
+    "list_get",
+    "list_set",
+    "list_insert",
+    "list_remove",
+    "list_clear",
+    "list_reverse",
+    "list_extend",
+    "list_contains",
+    "list_index_of",
+    "list_count",
+    "list_sort",
+    "list_slice",
+    "list_is_empty",
+    "list_first",
+    "list_last",
+    "print_list",
     // Dict
-    "dict_new", "dict_retain", "dict_release", "dict_clone",
-    "dict_set", "dict_get", "dict_contains", "dict_remove",
-    "dict_len", "dict_is_empty", "dict_clear", "dict_keys", "dict_values",
-    "dict_iter", "print_dict",
-    "dynamic_retain", "dynamic_release",
+    "dict_new",
+    "dict_retain",
+    "dict_release",
+    "dict_clone",
+    "dict_set",
+    "dict_get",
+    "dict_contains",
+    "dict_remove",
+    "dict_len",
+    "dict_is_empty",
+    "dict_clear",
+    "dict_keys",
+    "dict_values",
+    "dict_iter",
+    "print_dict",
+    "dynamic_retain",
+    "dynamic_release",
 ];
 
 impl AotCompiler {
@@ -161,17 +305,20 @@ impl AotCompiler {
 
         // 开启 Cranelift 优化（默认 opt_level=none 不做任何优化）
         let mut flag_builder = settings::builder();
-        flag_builder.set("opt_level", "speed")
+        flag_builder
+            .set("opt_level", "speed")
             .map_err(|e| format!("Failed to set opt_level: {}", e))?;
         let flags = settings::Flags::new(flag_builder);
-        let isa = isa_builder.finish(flags)
+        let isa = isa_builder
+            .finish(flags)
             .map_err(|e| format!("Failed to create ISA: {}", e))?;
 
         let builder = ObjectBuilder::new(
             isa,
             "bolide_program",
             cranelift_module::default_libcall_names(),
-        ).map_err(|e| format!("Failed to create object builder: {}", e))?;
+        )
+        .map_err(|e| format!("Failed to create object builder: {}", e))?;
 
         let module = ObjectModule::new(builder);
         let ptr_type = module.target_config().pointer_type();
@@ -213,14 +360,18 @@ impl AotCompiler {
         let name = format!("str_{}", self.string_data.len());
 
         // Declare the data object
-        let data_id = self.module.declare_data(&name, Linkage::Local, false, false)
+        let data_id = self
+            .module
+            .declare_data(&name, Linkage::Local, false, false)
             .map_err(|e| format!("Failed to declare string data: {}", e))?;
 
         // Define the data with the string bytes
         self.data_desc.clear();
-        self.data_desc.define(s.as_bytes().to_vec().into_boxed_slice());
+        self.data_desc
+            .define(s.as_bytes().to_vec().into_boxed_slice());
 
-        self.module.define_data(data_id, &self.data_desc)
+        self.module
+            .define_data(data_id, &self.data_desc)
             .map_err(|e| format!("Failed to define string data: {}", e))?;
 
         self.string_data.insert(s.to_string(), data_id);
@@ -250,36 +401,68 @@ impl AotCompiler {
             }
             Statement::If(if_stmt) => {
                 self.collect_strings_from_expr(&if_stmt.condition, strings);
-                for s in &if_stmt.then_body { self.collect_strings_from_stmt(s, strings); }
+                for s in &if_stmt.then_body {
+                    self.collect_strings_from_stmt(s, strings);
+                }
                 for (cond, body) in &if_stmt.elif_branches {
                     self.collect_strings_from_expr(cond, strings);
-                    for s in body { self.collect_strings_from_stmt(s, strings); }
+                    for s in body {
+                        self.collect_strings_from_stmt(s, strings);
+                    }
                 }
                 if let Some(ref eb) = if_stmt.else_body {
-                    for s in eb { self.collect_strings_from_stmt(s, strings); }
+                    for s in eb {
+                        self.collect_strings_from_stmt(s, strings);
+                    }
                 }
             }
             Statement::While(while_stmt) => {
                 self.collect_strings_from_expr(&while_stmt.condition, strings);
-                for s in &while_stmt.body { self.collect_strings_from_stmt(s, strings); }
+                for s in &while_stmt.body {
+                    self.collect_strings_from_stmt(s, strings);
+                }
             }
             Statement::For(for_stmt) => {
                 self.collect_strings_from_expr(&for_stmt.iter, strings);
-                for s in &for_stmt.body { self.collect_strings_from_stmt(s, strings); }
+                for s in &for_stmt.body {
+                    self.collect_strings_from_stmt(s, strings);
+                }
             }
             Statement::Return(Some(e)) => self.collect_strings_from_expr(e, strings),
+            Statement::Throw(e) => self.collect_strings_from_expr(e, strings),
+            Statement::Try(try_stmt) => {
+                for s in &try_stmt.try_body {
+                    self.collect_strings_from_stmt(s, strings);
+                }
+                for clause in &try_stmt.catch_clauses {
+                    for s in &clause.body {
+                        self.collect_strings_from_stmt(s, strings);
+                    }
+                }
+                if let Some(ref fin) = try_stmt.finally {
+                    for s in fin {
+                        self.collect_strings_from_stmt(s, strings);
+                    }
+                }
+            }
             _ => {}
         }
     }
 
     fn collect_strings_from_expr(&self, expr: &Expr, strings: &mut HashSet<String>) {
         match expr {
-            Expr::String(s) => { strings.insert(s.clone()); }
+            Expr::String(s) => {
+                strings.insert(s.clone());
+            }
             // bigint/decimal 大字面量需经 *_from_str 构造，数字串必须进数据段
-            Expr::BigInt(s) | Expr::Decimal(s) => { strings.insert(s.clone()); }
+            Expr::BigInt(s) | Expr::Decimal(s) => {
+                strings.insert(s.clone());
+            }
             Expr::Call(callee, args) => {
                 self.collect_strings_from_expr(callee, strings);
-                for a in args { self.collect_strings_from_expr(a, strings); }
+                for a in args {
+                    self.collect_strings_from_expr(a, strings);
+                }
             }
             Expr::BinOp(l, _, r) => {
                 self.collect_strings_from_expr(l, strings);
@@ -292,10 +475,14 @@ impl AotCompiler {
             }
             Expr::Member(b, _) => self.collect_strings_from_expr(b, strings),
             Expr::List(items) => {
-                for i in items { self.collect_strings_from_expr(i, strings); }
+                for i in items {
+                    self.collect_strings_from_expr(i, strings);
+                }
             }
             Expr::Tuple(items) => {
-                for i in items { self.collect_strings_from_expr(i, strings); }
+                for i in items {
+                    self.collect_strings_from_expr(i, strings);
+                }
             }
             Expr::Dict(entries) => {
                 for (k, v) in entries {
@@ -378,7 +565,9 @@ impl AotCompiler {
         self.compile_function(&main_func)?;
 
         // 收集外部库列表 (去重)
-        let extern_libs: Vec<String> = self.extern_funcs.values()
+        let extern_libs: Vec<String> = self
+            .extern_funcs
+            .values()
             .map(|(lib_path, _)| lib_path.clone())
             .collect::<HashSet<_>>()
             .into_iter()
@@ -432,7 +621,9 @@ impl AotCompiler {
                     imported_files.insert(file_path.clone());
 
                     // 有别名时用别名作为模块命名空间（如 `import "x.bl" as mu` → mu.f）
-                    let module_name = import.alias.clone()
+                    let module_name = import
+                        .alias
+                        .clone()
                         .unwrap_or_else(|| Self::extract_module_name(file_path));
                     self.modules.insert(module_name.clone(), file_path.clone());
 
@@ -462,7 +653,9 @@ impl AotCompiler {
             merged_statements.push(stmt.clone());
         }
 
-        Ok(Program { statements: merged_statements })
+        Ok(Program {
+            statements: merged_statements,
+        })
     }
 
     fn extract_module_name(file_path: &str) -> String {
@@ -540,30 +733,155 @@ impl AotCompiler {
             ("@_print_dict", "bolide_print_dict", vec![p], None),
             ("@_print_tuple", "bolide_print_tuple", vec![p], None),
             ("@_println", "bolide_println", vec![], None),
+            (
+                "@_print_int_inline",
+                "bolide_print_int_inline",
+                vec![i64t],
+                None,
+            ),
+            (
+                "@_print_float_inline",
+                "bolide_print_float_inline",
+                vec![f64t],
+                None,
+            ),
+            (
+                "@_print_bool_inline",
+                "bolide_print_bool_inline",
+                vec![i64t],
+                None,
+            ),
+            (
+                "@_print_bigint_inline",
+                "bolide_print_bigint_inline",
+                vec![p],
+                None,
+            ),
+            (
+                "@_print_decimal_inline",
+                "bolide_print_decimal_inline",
+                vec![p],
+                None,
+            ),
+            (
+                "@_print_string_inline",
+                "bolide_print_string_inline",
+                vec![p],
+                None,
+            ),
+            (
+                "@_print_dynamic_inline",
+                "bolide_print_dynamic_inline",
+                vec![p],
+                None,
+            ),
+            (
+                "@_print_tuple_start",
+                "bolide_print_tuple_start",
+                vec![],
+                None,
+            ),
+            (
+                "@_print_tuple_separator",
+                "bolide_print_tuple_separator",
+                vec![],
+                None,
+            ),
+            (
+                "@_print_tuple_end_inline",
+                "bolide_print_tuple_end_inline",
+                vec![],
+                None,
+            ),
             // ---- 用户输入 ----
             ("@_input", "bolide_input", vec![], Some(p)),
             ("@_input_prompt", "bolide_input_prompt", vec![p], Some(p)),
             // ---- 字符串 ----
-            ("@_string_from_slice", "bolide_string_from_slice", vec![p, i64t], Some(p)),
-            ("@_string_literal", "bolide_string_literal", vec![p, i64t], Some(p)),
+            (
+                "@_string_from_slice",
+                "bolide_string_from_slice",
+                vec![p, i64t],
+                Some(p),
+            ),
+            (
+                "@_string_literal",
+                "bolide_string_literal",
+                vec![p, i64t],
+                Some(p),
+            ),
             ("@_string_new", "bolide_string_new", vec![p], Some(p)),
-            ("@_string_as_cstr", "bolide_string_as_cstr", vec![p], Some(p)),
-            ("@_string_concat", "bolide_string_concat", vec![p, p], Some(p)),
+            (
+                "@_string_as_cstr",
+                "bolide_string_as_cstr",
+                vec![p],
+                Some(p),
+            ),
+            (
+                "@_string_concat",
+                "bolide_string_concat",
+                vec![p, p],
+                Some(p),
+            ),
             ("@_string_eq", "bolide_string_eq", vec![p, p], Some(i64t)),
-            ("@_string_from_int", "bolide_string_from_int", vec![i64t], Some(p)),
-            ("@_string_from_float", "bolide_string_from_float", vec![f64t], Some(p)),
-            ("@_string_from_bool", "bolide_string_from_bool", vec![i64t], Some(p)),
-            ("@_string_from_bigint", "bolide_string_from_bigint", vec![p], Some(p)),
-            ("@_string_from_decimal", "bolide_string_from_decimal", vec![p], Some(p)),
-            ("@_string_to_int", "bolide_string_to_int", vec![p], Some(i64t)),
-            ("@_string_to_float", "bolide_string_to_float", vec![p], Some(f64t)),
+            (
+                "@_string_from_int",
+                "bolide_string_from_int",
+                vec![i64t],
+                Some(p),
+            ),
+            (
+                "@_string_from_float",
+                "bolide_string_from_float",
+                vec![f64t],
+                Some(p),
+            ),
+            (
+                "@_string_from_bool",
+                "bolide_string_from_bool",
+                vec![i64t],
+                Some(p),
+            ),
+            (
+                "@_string_from_bigint",
+                "bolide_string_from_bigint",
+                vec![p],
+                Some(p),
+            ),
+            (
+                "@_string_from_decimal",
+                "bolide_string_from_decimal",
+                vec![p],
+                Some(p),
+            ),
+            (
+                "@_string_to_int",
+                "bolide_string_to_int",
+                vec![p],
+                Some(i64t),
+            ),
+            (
+                "@_string_to_float",
+                "bolide_string_to_float",
+                vec![p],
+                Some(f64t),
+            ),
             ("@_string_len", "bolide_string_len", vec![p], Some(i64t)),
             ("@_string_retain", "bolide_string_retain", vec![p], Some(p)),
             ("@_string_release", "bolide_string_release", vec![p], None),
             ("@_string_clone", "bolide_string_clone", vec![p], Some(p)),
             // ---- BigInt ----
-            ("@_bigint_from_i64", "bolide_bigint_from_i64", vec![i64t], Some(p)),
-            ("@_bigint_from_str", "bolide_bigint_from_str", vec![p, i64t], Some(p)),
+            (
+                "@_bigint_from_i64",
+                "bolide_bigint_from_i64",
+                vec![i64t],
+                Some(p),
+            ),
+            (
+                "@_bigint_from_str",
+                "bolide_bigint_from_str",
+                vec![p, i64t],
+                Some(p),
+            ),
             ("@_bigint_add", "bolide_bigint_add", vec![p, p], Some(p)),
             ("@_bigint_sub", "bolide_bigint_sub", vec![p, p], Some(p)),
             ("@_bigint_mul", "bolide_bigint_mul", vec![p, p], Some(p)),
@@ -576,16 +894,46 @@ impl AotCompiler {
             ("@_bigint_le", "bolide_bigint_le", vec![p, p], Some(i64t)),
             ("@_bigint_gt", "bolide_bigint_gt", vec![p, p], Some(i64t)),
             ("@_bigint_ge", "bolide_bigint_ge", vec![p, p], Some(i64t)),
-            ("@_bigint_to_i64", "bolide_bigint_to_i64", vec![p], Some(i64t)),
-            ("@_bigint_to_f64", "bolide_bigint_to_f64", vec![p], Some(f64t)),
+            (
+                "@_bigint_to_i64",
+                "bolide_bigint_to_i64",
+                vec![p],
+                Some(i64t),
+            ),
+            (
+                "@_bigint_to_f64",
+                "bolide_bigint_to_f64",
+                vec![p],
+                Some(f64t),
+            ),
             ("@_bigint_clone", "bolide_bigint_clone", vec![p], Some(p)),
             ("@_bigint_retain", "bolide_bigint_retain", vec![p], Some(p)),
             ("@_bigint_release", "bolide_bigint_release", vec![p], None),
-            ("@_bigint_debug_stats", "bolide_bigint_debug_stats", vec![], None),
+            (
+                "@_bigint_debug_stats",
+                "bolide_bigint_debug_stats",
+                vec![],
+                None,
+            ),
             // ---- Decimal ----
-            ("@_decimal_from_i64", "bolide_decimal_from_i64", vec![i64t], Some(p)),
-            ("@_decimal_from_f64", "bolide_decimal_from_f64", vec![f64t], Some(p)),
-            ("@_decimal_from_str", "bolide_decimal_from_str", vec![p, i64t], Some(p)),
+            (
+                "@_decimal_from_i64",
+                "bolide_decimal_from_i64",
+                vec![i64t],
+                Some(p),
+            ),
+            (
+                "@_decimal_from_f64",
+                "bolide_decimal_from_f64",
+                vec![f64t],
+                Some(p),
+            ),
+            (
+                "@_decimal_from_str",
+                "bolide_decimal_from_str",
+                vec![p, i64t],
+                Some(p),
+            ),
             ("@_decimal_add", "bolide_decimal_add", vec![p, p], Some(p)),
             ("@_decimal_sub", "bolide_decimal_sub", vec![p, p], Some(p)),
             ("@_decimal_mul", "bolide_decimal_mul", vec![p, p], Some(p)),
@@ -598,24 +946,79 @@ impl AotCompiler {
             ("@_decimal_le", "bolide_decimal_le", vec![p, p], Some(i64t)),
             ("@_decimal_gt", "bolide_decimal_gt", vec![p, p], Some(i64t)),
             ("@_decimal_ge", "bolide_decimal_ge", vec![p, p], Some(i64t)),
-            ("@_decimal_to_i64", "bolide_decimal_to_i64", vec![p], Some(i64t)),
-            ("@_decimal_to_f64", "bolide_decimal_to_f64", vec![p], Some(f64t)),
+            (
+                "@_decimal_to_i64",
+                "bolide_decimal_to_i64",
+                vec![p],
+                Some(i64t),
+            ),
+            (
+                "@_decimal_to_f64",
+                "bolide_decimal_to_f64",
+                vec![p],
+                Some(f64t),
+            ),
             ("@_decimal_clone", "bolide_decimal_clone", vec![p], Some(p)),
-            ("@_decimal_retain", "bolide_decimal_retain", vec![p], Some(p)),
+            (
+                "@_decimal_retain",
+                "bolide_decimal_retain",
+                vec![p],
+                Some(p),
+            ),
             ("@_decimal_release", "bolide_decimal_release", vec![p], None),
             ("@_decimal_abs", "bolide_decimal_abs", vec![p], Some(p)),
             ("@_decimal_ceil", "bolide_decimal_ceil", vec![p], Some(p)),
             ("@_decimal_floor", "bolide_decimal_floor", vec![p], Some(p)),
             ("@_decimal_round", "bolide_decimal_round", vec![p], Some(p)),
-            ("@_decimal_round_dp", "bolide_decimal_round_dp", vec![p, i32t], Some(p)),
+            (
+                "@_decimal_round_dp",
+                "bolide_decimal_round_dp",
+                vec![p, i32t],
+                Some(p),
+            ),
             // ---- Dynamic ----
-            ("@_dynamic_from_int", "bolide_dynamic_from_int", vec![i64t], Some(p)),
-            ("@_dynamic_from_float", "bolide_dynamic_from_float", vec![f64t], Some(p)),
-            ("@_dynamic_from_bool", "bolide_dynamic_from_bool", vec![i64t], Some(p)),
-            ("@_dynamic_from_string", "bolide_dynamic_from_string", vec![p], Some(p)),
-            ("@_dynamic_from_list", "bolide_dynamic_from_list", vec![p], Some(p)),
-            ("@_dynamic_from_bigint", "bolide_dynamic_from_bigint", vec![p], Some(p)),
-            ("@_dynamic_from_decimal", "bolide_dynamic_from_decimal", vec![p], Some(p)),
+            (
+                "@_dynamic_from_int",
+                "bolide_dynamic_from_int",
+                vec![i64t],
+                Some(p),
+            ),
+            (
+                "@_dynamic_from_float",
+                "bolide_dynamic_from_float",
+                vec![f64t],
+                Some(p),
+            ),
+            (
+                "@_dynamic_from_bool",
+                "bolide_dynamic_from_bool",
+                vec![i64t],
+                Some(p),
+            ),
+            (
+                "@_dynamic_from_string",
+                "bolide_dynamic_from_string",
+                vec![p],
+                Some(p),
+            ),
+            (
+                "@_dynamic_from_list",
+                "bolide_dynamic_from_list",
+                vec![p],
+                Some(p),
+            ),
+            (
+                "@_dynamic_from_bigint",
+                "bolide_dynamic_from_bigint",
+                vec![p],
+                Some(p),
+            ),
+            (
+                "@_dynamic_from_decimal",
+                "bolide_dynamic_from_decimal",
+                vec![p],
+                Some(p),
+            ),
             ("@_dynamic_add", "bolide_dynamic_add", vec![p, p], Some(p)),
             ("@_dynamic_sub", "bolide_dynamic_sub", vec![p, p], Some(p)),
             ("@_dynamic_mul", "bolide_dynamic_mul", vec![p, p], Some(p)),
@@ -627,35 +1030,113 @@ impl AotCompiler {
             ("@_dynamic_gt", "bolide_dynamic_gt", vec![p, p], Some(i64t)),
             ("@_dynamic_ge", "bolide_dynamic_ge", vec![p, p], Some(i64t)),
             ("@_dynamic_clone", "bolide_dynamic_clone", vec![p], Some(p)),
-            ("@_dynamic_retain", "bolide_dynamic_retain", vec![p], Some(p)),
+            (
+                "@_dynamic_retain",
+                "bolide_dynamic_retain",
+                vec![p],
+                Some(p),
+            ),
             ("@_dynamic_release", "bolide_dynamic_release", vec![p], None),
-            ("@_dynamic_get_type", "bolide_dynamic_get_type", vec![p], Some(i64t)),
-            ("@_dynamic_to_int", "bolide_dynamic_to_int", vec![p], Some(i64t)),
-            ("@_dynamic_to_float", "bolide_dynamic_to_float", vec![p], Some(f64t)),
-            ("@_dynamic_is_truthy", "bolide_dynamic_is_truthy", vec![p], Some(i64t)),
+            ("@_exception_set", "bolide_exception_set", vec![p], None),
+            ("@_exception_get", "bolide_exception_get", vec![], Some(p)),
+            ("@_throw_uncaught", "bolide_throw_uncaught", vec![p], None),
+            (
+                "@_dynamic_get_type",
+                "bolide_dynamic_get_type",
+                vec![p],
+                Some(i64t),
+            ),
+            (
+                "@_dynamic_to_int",
+                "bolide_dynamic_to_int",
+                vec![p],
+                Some(i64t),
+            ),
+            (
+                "@_dynamic_to_float",
+                "bolide_dynamic_to_float",
+                vec![p],
+                Some(f64t),
+            ),
+            (
+                "@_dynamic_is_truthy",
+                "bolide_dynamic_is_truthy",
+                vec![p],
+                Some(i64t),
+            ),
             ("@_dynamic_none", "bolide_dynamic_none", vec![], Some(p)),
             // ---- List ----
             ("@_list_new", "bolide_list_new", vec![i8t], Some(p)),
-            ("@_list_with_capacity", "bolide_list_with_capacity", vec![i8t, i64t], Some(p)),
+            (
+                "@_list_with_capacity",
+                "bolide_list_with_capacity",
+                vec![i8t, i64t],
+                Some(p),
+            ),
             ("@_list_push", "bolide_list_push", vec![p, i64t], None),
             ("@_list_pop", "bolide_list_pop", vec![p], Some(i64t)),
             ("@_list_len", "bolide_list_len", vec![p], Some(i64t)),
             ("@_list_get", "bolide_list_get", vec![p, i64t], Some(i64t)),
-            ("@_list_set", "bolide_list_set", vec![p, i64t, i64t], Some(i64t)),
-            ("@_list_insert", "bolide_list_insert", vec![p, i64t, i64t], None),
-            ("@_list_remove", "bolide_list_remove", vec![p, i64t], Some(i64t)),
+            (
+                "@_list_set",
+                "bolide_list_set",
+                vec![p, i64t, i64t],
+                Some(i64t),
+            ),
+            (
+                "@_list_insert",
+                "bolide_list_insert",
+                vec![p, i64t, i64t],
+                None,
+            ),
+            (
+                "@_list_remove",
+                "bolide_list_remove",
+                vec![p, i64t],
+                Some(i64t),
+            ),
             ("@_list_clear", "bolide_list_clear", vec![p], None),
             ("@_list_reverse", "bolide_list_reverse", vec![p], None),
             ("@_list_extend", "bolide_list_extend", vec![p, p], None),
-            ("@_list_contains", "bolide_list_contains", vec![p, i64t], Some(i64t)),
-            ("@_list_index_of", "bolide_list_index_of", vec![p, i64t], Some(i64t)),
-            ("@_list_count", "bolide_list_count", vec![p, i64t], Some(i64t)),
+            (
+                "@_list_contains",
+                "bolide_list_contains",
+                vec![p, i64t],
+                Some(i64t),
+            ),
+            (
+                "@_list_index_of",
+                "bolide_list_index_of",
+                vec![p, i64t],
+                Some(i64t),
+            ),
+            (
+                "@_list_count",
+                "bolide_list_count",
+                vec![p, i64t],
+                Some(i64t),
+            ),
             ("@_list_sort", "bolide_list_sort", vec![p], None),
-            ("@_list_slice", "bolide_list_slice", vec![p, i64t, i64t], Some(p)),
-            ("@_list_is_empty", "bolide_list_is_empty", vec![p], Some(i64t)),
+            (
+                "@_list_slice",
+                "bolide_list_slice",
+                vec![p, i64t, i64t],
+                Some(p),
+            ),
+            (
+                "@_list_is_empty",
+                "bolide_list_is_empty",
+                vec![p],
+                Some(i64t),
+            ),
             ("@_list_first", "bolide_list_first", vec![p], Some(i64t)),
             ("@_list_last", "bolide_list_last", vec![p], Some(i64t)),
-            ("@_list_elem_type", "bolide_list_elem_type", vec![p], Some(i8t)),
+            (
+                "@_list_elem_type",
+                "bolide_list_elem_type",
+                vec![p],
+                Some(i8t),
+            ),
             ("@_list_retain", "bolide_list_retain", vec![p], Some(p)),
             ("@_list_release", "bolide_list_release", vec![p], None),
             ("@_list_clone", "bolide_list_clone", vec![p], Some(p)),
@@ -664,10 +1145,25 @@ impl AotCompiler {
             ("@_dict_new", "bolide_dict_new", vec![i8t, i8t], Some(p)),
             ("@_dict_set", "bolide_dict_set", vec![p, i64t, i64t], None),
             ("@_dict_get", "bolide_dict_get", vec![p, i64t], Some(i64t)),
-            ("@_dict_contains", "bolide_dict_contains", vec![p, i64t], Some(i64t)),
-            ("@_dict_remove", "bolide_dict_remove", vec![p, i64t], Some(i64t)),
+            (
+                "@_dict_contains",
+                "bolide_dict_contains",
+                vec![p, i64t],
+                Some(i64t),
+            ),
+            (
+                "@_dict_remove",
+                "bolide_dict_remove",
+                vec![p, i64t],
+                Some(i64t),
+            ),
             ("@_dict_len", "bolide_dict_len", vec![p], Some(i64t)),
-            ("@_dict_is_empty", "bolide_dict_is_empty", vec![p], Some(i64t)),
+            (
+                "@_dict_is_empty",
+                "bolide_dict_is_empty",
+                vec![p],
+                Some(i64t),
+            ),
             ("@_dict_clear", "bolide_dict_clear", vec![p], None),
             ("@_dict_keys", "bolide_dict_keys", vec![p], Some(p)),
             ("@_dict_values", "bolide_dict_values", vec![p], Some(p)),
@@ -675,15 +1171,30 @@ impl AotCompiler {
             ("@_dict_retain", "bolide_dict_retain", vec![p], None),
             ("@_dict_release", "bolide_dict_release", vec![p], None),
             ("@_dict_clone", "bolide_dict_clone", vec![p], Some(p)),
-            ("@_dict_key_type", "bolide_dict_key_type", vec![p], Some(i8t)),
-            ("@_dict_value_type", "bolide_dict_value_type", vec![p], Some(i8t)),
+            (
+                "@_dict_key_type",
+                "bolide_dict_key_type",
+                vec![p],
+                Some(i8t),
+            ),
+            (
+                "@_dict_value_type",
+                "bolide_dict_value_type",
+                vec![p],
+                Some(i8t),
+            ),
             // ---- Tuple ----
             ("@_tuple_new", "bolide_tuple_new", vec![i64t], Some(p)),
             ("@_tuple_set", "bolide_tuple_set", vec![p, i64t, i64t], None),
             ("@_tuple_get", "bolide_tuple_get", vec![p, i64t], Some(i64t)),
             ("@_tuple_len", "bolide_tuple_len", vec![p], Some(i64t)),
             ("@_tuple_free", "bolide_tuple_free", vec![p], None),
-            ("@_tuple_debug_stats", "bolide_tuple_debug_stats", vec![], None),
+            (
+                "@_tuple_debug_stats",
+                "bolide_tuple_debug_stats",
+                vec![],
+                None,
+            ),
             // ---- 内存 ----
             ("@_bolide_alloc", "bolide_alloc", vec![i64t], Some(p)),
             ("@_bolide_free", "bolide_free", vec![p, i64t], None),
@@ -693,72 +1204,287 @@ impl AotCompiler {
             ("@_object_retain", "object_retain", vec![p], None),
             ("@_object_clone", "object_clone", vec![p], Some(p)),
             ("@_object_weak_retain", "object_weak_retain", vec![p], None),
-            ("@_object_weak_release", "object_weak_release", vec![p], None),
+            (
+                "@_object_weak_release",
+                "object_weak_release",
+                vec![p],
+                None,
+            ),
             ("@_object_weak_clone", "object_weak_clone", vec![p], Some(p)),
-            ("@_object_assert_alive", "object_assert_alive", vec![p], None),
+            (
+                "@_object_assert_alive",
+                "object_assert_alive",
+                vec![p],
+                None,
+            ),
             ("@_object_is_alive", "object_is_alive", vec![p], Some(i64t)),
-            ("@_object_ref_count", "object_ref_count", vec![p], Some(i64t)),
+            (
+                "@_object_ref_count",
+                "object_ref_count",
+                vec![p],
+                Some(i64t),
+            ),
             // ---- 线程 ----
-            ("@_thread_spawn_int", "bolide_thread_spawn_int", vec![p], Some(p)),
-            ("@_thread_spawn_float", "bolide_thread_spawn_float", vec![p], Some(p)),
-            ("@_thread_spawn_ptr", "bolide_thread_spawn_ptr", vec![p], Some(p)),
-            ("@_thread_spawn_int_with_env", "bolide_thread_spawn_int_with_env", vec![p, p], Some(p)),
-            ("@_thread_spawn_float_with_env", "bolide_thread_spawn_float_with_env", vec![p, p], Some(p)),
-            ("@_thread_spawn_ptr_with_env", "bolide_thread_spawn_ptr_with_env", vec![p, p], Some(p)),
-            ("@_thread_join_int", "bolide_thread_join_int", vec![p], Some(i64t)),
-            ("@_thread_join_float", "bolide_thread_join_float", vec![p], Some(f64t)),
-            ("@_thread_join_ptr", "bolide_thread_join_ptr", vec![p], Some(p)),
-            ("@_thread_handle_free", "bolide_thread_handle_free", vec![p], None),
+            (
+                "@_thread_spawn_int",
+                "bolide_thread_spawn_int",
+                vec![p],
+                Some(p),
+            ),
+            (
+                "@_thread_spawn_float",
+                "bolide_thread_spawn_float",
+                vec![p],
+                Some(p),
+            ),
+            (
+                "@_thread_spawn_ptr",
+                "bolide_thread_spawn_ptr",
+                vec![p],
+                Some(p),
+            ),
+            (
+                "@_thread_spawn_int_with_env",
+                "bolide_thread_spawn_int_with_env",
+                vec![p, p],
+                Some(p),
+            ),
+            (
+                "@_thread_spawn_float_with_env",
+                "bolide_thread_spawn_float_with_env",
+                vec![p, p],
+                Some(p),
+            ),
+            (
+                "@_thread_spawn_ptr_with_env",
+                "bolide_thread_spawn_ptr_with_env",
+                vec![p, p],
+                Some(p),
+            ),
+            (
+                "@_thread_join_int",
+                "bolide_thread_join_int",
+                vec![p],
+                Some(i64t),
+            ),
+            (
+                "@_thread_join_float",
+                "bolide_thread_join_float",
+                vec![p],
+                Some(f64t),
+            ),
+            (
+                "@_thread_join_ptr",
+                "bolide_thread_join_ptr",
+                vec![p],
+                Some(p),
+            ),
+            (
+                "@_thread_handle_free",
+                "bolide_thread_handle_free",
+                vec![p],
+                None,
+            ),
             ("@_thread_cancel", "bolide_thread_cancel", vec![p], None),
-            ("@_thread_is_cancelled", "bolide_thread_is_cancelled", vec![p], Some(i64t)),
+            (
+                "@_thread_is_cancelled",
+                "bolide_thread_is_cancelled",
+                vec![p],
+                Some(i64t),
+            ),
             // ---- 线程池 ----
             ("@_pool_create", "bolide_pool_create", vec![i64t], Some(p)),
             ("@_pool_enter", "bolide_pool_enter", vec![p], None),
             ("@_pool_exit", "bolide_pool_exit", vec![], None),
-            ("@_pool_is_active", "bolide_pool_is_active", vec![], Some(i64t)),
-            ("@_pool_spawn_int", "bolide_pool_spawn_int", vec![p], Some(p)),
-            ("@_pool_spawn_float", "bolide_pool_spawn_float", vec![p], Some(p)),
-            ("@_pool_spawn_ptr", "bolide_pool_spawn_ptr", vec![p], Some(p)),
-            ("@_pool_spawn_int_with_env", "bolide_pool_spawn_int_with_env", vec![p, p], Some(p)),
-            ("@_pool_spawn_float_with_env", "bolide_pool_spawn_float_with_env", vec![p, p], Some(p)),
-            ("@_pool_spawn_ptr_with_env", "bolide_pool_spawn_ptr_with_env", vec![p, p], Some(p)),
-            ("@_pool_join_int", "bolide_pool_join_int", vec![p], Some(i64t)),
-            ("@_pool_join_float", "bolide_pool_join_float", vec![p], Some(f64t)),
+            (
+                "@_pool_is_active",
+                "bolide_pool_is_active",
+                vec![],
+                Some(i64t),
+            ),
+            (
+                "@_pool_spawn_int",
+                "bolide_pool_spawn_int",
+                vec![p],
+                Some(p),
+            ),
+            (
+                "@_pool_spawn_float",
+                "bolide_pool_spawn_float",
+                vec![p],
+                Some(p),
+            ),
+            (
+                "@_pool_spawn_ptr",
+                "bolide_pool_spawn_ptr",
+                vec![p],
+                Some(p),
+            ),
+            (
+                "@_pool_spawn_int_with_env",
+                "bolide_pool_spawn_int_with_env",
+                vec![p, p],
+                Some(p),
+            ),
+            (
+                "@_pool_spawn_float_with_env",
+                "bolide_pool_spawn_float_with_env",
+                vec![p, p],
+                Some(p),
+            ),
+            (
+                "@_pool_spawn_ptr_with_env",
+                "bolide_pool_spawn_ptr_with_env",
+                vec![p, p],
+                Some(p),
+            ),
+            (
+                "@_pool_join_int",
+                "bolide_pool_join_int",
+                vec![p],
+                Some(i64t),
+            ),
+            (
+                "@_pool_join_float",
+                "bolide_pool_join_float",
+                vec![p],
+                Some(f64t),
+            ),
             ("@_pool_join_ptr", "bolide_pool_join_ptr", vec![p], Some(p)),
-            ("@_pool_handle_free", "bolide_pool_handle_free", vec![p], None),
+            (
+                "@_pool_handle_free",
+                "bolide_pool_handle_free",
+                vec![p],
+                None,
+            ),
             ("@_pool_destroy", "bolide_pool_destroy", vec![p], None),
             // ---- 通道 ----
             ("@_channel_create", "bolide_channel_create", vec![], Some(p)),
-            ("@_channel_create_buffered", "bolide_channel_create_buffered", vec![i64t], Some(p)),
-            ("@_channel_send", "bolide_channel_send", vec![p, i64t], Some(i64t)),
+            (
+                "@_channel_create_buffered",
+                "bolide_channel_create_buffered",
+                vec![i64t],
+                Some(p),
+            ),
+            (
+                "@_channel_send",
+                "bolide_channel_send",
+                vec![p, i64t],
+                Some(i64t),
+            ),
             ("@_channel_recv", "bolide_channel_recv", vec![p], Some(i64t)),
-            ("@_channel_try_recv", "bolide_channel_try_recv", vec![p, p], Some(i64t)),
+            (
+                "@_channel_try_recv",
+                "bolide_channel_try_recv",
+                vec![p, p],
+                Some(i64t),
+            ),
             ("@_channel_close", "bolide_channel_close", vec![p], None),
             ("@_channel_free", "bolide_channel_free", vec![p], None),
-            ("@_channel_is_closed", "bolide_channel_is_closed", vec![p], Some(i64t)),
-            ("@_channel_select", "bolide_channel_select", vec![p, i64t, i64t, p], Some(i64t)),
+            (
+                "@_channel_is_closed",
+                "bolide_channel_is_closed",
+                vec![p],
+                Some(i64t),
+            ),
+            (
+                "@_channel_select",
+                "bolide_channel_select",
+                vec![p, i64t, i64t, p],
+                Some(i64t),
+            ),
             // ---- 协程 ----
-            ("@_coroutine_spawn_int", "bolide_coroutine_spawn_int", vec![p], Some(p)),
-            ("@_coroutine_spawn_float", "bolide_coroutine_spawn_float", vec![p], Some(p)),
-            ("@_coroutine_spawn_ptr", "bolide_coroutine_spawn_ptr", vec![p], Some(p)),
-            ("@_coroutine_spawn_int_with_env", "bolide_coroutine_spawn_int_with_env", vec![p, p], Some(p)),
-            ("@_coroutine_spawn_float_with_env", "bolide_coroutine_spawn_float_with_env", vec![p, p], Some(p)),
-            ("@_coroutine_spawn_ptr_with_env", "bolide_coroutine_spawn_ptr_with_env", vec![p, p], Some(p)),
-            ("@_coroutine_await_int", "bolide_coroutine_await_int", vec![p], Some(i64t)),
-            ("@_coroutine_await_float", "bolide_coroutine_await_float", vec![p], Some(f64t)),
-            ("@_coroutine_await_ptr", "bolide_coroutine_await_ptr", vec![p], Some(p)),
-            ("@_coroutine_cancel", "bolide_coroutine_cancel", vec![p], None),
+            (
+                "@_coroutine_spawn_int",
+                "bolide_coroutine_spawn_int",
+                vec![p],
+                Some(p),
+            ),
+            (
+                "@_coroutine_spawn_float",
+                "bolide_coroutine_spawn_float",
+                vec![p],
+                Some(p),
+            ),
+            (
+                "@_coroutine_spawn_ptr",
+                "bolide_coroutine_spawn_ptr",
+                vec![p],
+                Some(p),
+            ),
+            (
+                "@_coroutine_spawn_int_with_env",
+                "bolide_coroutine_spawn_int_with_env",
+                vec![p, p],
+                Some(p),
+            ),
+            (
+                "@_coroutine_spawn_float_with_env",
+                "bolide_coroutine_spawn_float_with_env",
+                vec![p, p],
+                Some(p),
+            ),
+            (
+                "@_coroutine_spawn_ptr_with_env",
+                "bolide_coroutine_spawn_ptr_with_env",
+                vec![p, p],
+                Some(p),
+            ),
+            (
+                "@_coroutine_await_int",
+                "bolide_coroutine_await_int",
+                vec![p],
+                Some(i64t),
+            ),
+            (
+                "@_coroutine_await_float",
+                "bolide_coroutine_await_float",
+                vec![p],
+                Some(f64t),
+            ),
+            (
+                "@_coroutine_await_ptr",
+                "bolide_coroutine_await_ptr",
+                vec![p],
+                Some(p),
+            ),
+            (
+                "@_coroutine_cancel",
+                "bolide_coroutine_cancel",
+                vec![p],
+                None,
+            ),
             ("@_coroutine_free", "bolide_coroutine_free", vec![p], None),
             // ---- 作用域 / select ----
             ("@_scope_enter", "bolide_scope_enter", vec![], None),
             ("@_scope_exit", "bolide_scope_exit", vec![], None),
             ("@_scope_register", "bolide_scope_register", vec![p], None),
-            ("@_select_wait_first", "bolide_select_wait_first", vec![p, i64t], Some(i64t)),
+            (
+                "@_select_wait_first",
+                "bolide_select_wait_first",
+                vec![p, i64t],
+                Some(i64t),
+            ),
             // ---- FFI ----
-            ("@_ffi_load_library", "bolide_ffi_load_library", vec![p], Some(i64t)),
-            ("@_ffi_get_symbol", "bolide_ffi_get_symbol", vec![p, p], Some(p)),
+            (
+                "@_ffi_load_library",
+                "bolide_ffi_load_library",
+                vec![p],
+                Some(i64t),
+            ),
+            (
+                "@_ffi_get_symbol",
+                "bolide_ffi_get_symbol",
+                vec![p, p],
+                Some(p),
+            ),
             ("@_ffi_cleanup", "bolide_ffi_cleanup", vec![], None),
-            ("@_test_callback", "bolide_test_callback", vec![p, i64t, i64t], Some(i64t)),
+            (
+                "@_test_callback",
+                "bolide_test_callback",
+                vec![p, i64t, i64t],
+                Some(i64t),
+            ),
             ("@_map_int", "bolide_map_int", vec![p, i64t], Some(i64t)),
         ];
 
@@ -770,7 +1496,9 @@ impl AotCompiler {
             if let Some(r) = ret {
                 sig.returns.push(AbiParam::new(*r));
             }
-            let id = self.module.declare_function(linker, Linkage::Import, &sig)
+            let id = self
+                .module
+                .declare_function(linker, Linkage::Import, &sig)
                 .map_err(|e| format!("declare runtime {} ({}): {}", internal, linker, e))?;
             self.functions.insert(internal.to_string(), id);
         }
@@ -784,15 +1512,20 @@ impl AotCompiler {
             if let ExternDecl::Function(func) = decl {
                 let mut sig = self.module.make_signature();
                 for param in &func.params {
-                    sig.params.push(AbiParam::new(self.ctype_to_cranelift(&param.ty)));
+                    sig.params
+                        .push(AbiParam::new(self.ctype_to_cranelift(&param.ty)));
                 }
                 if let Some(ref ret_ty) = func.return_type {
-                    sig.returns.push(AbiParam::new(self.ctype_to_cranelift(ret_ty)));
+                    sig.returns
+                        .push(AbiParam::new(self.ctype_to_cranelift(ret_ty)));
                 }
-                let id = self.module.declare_function(&func.name, Linkage::Import, &sig)
+                let id = self
+                    .module
+                    .declare_function(&func.name, Linkage::Import, &sig)
                     .map_err(|e| format!("{}", e))?;
                 self.functions.insert(func.name.clone(), id);
-                self.extern_funcs.insert(func.name.clone(), (eb.lib_path.clone(), func.clone()));
+                self.extern_funcs
+                    .insert(func.name.clone(), (eb.lib_path.clone(), func.clone()));
             }
         }
         Ok(())
@@ -805,8 +1538,14 @@ impl AotCompiler {
             CType::Char | CType::UChar | CType::I8 | CType::U8 => types::I8,
             CType::Short | CType::UShort | CType::I16 | CType::U16 => types::I16,
             CType::Int | CType::UInt | CType::I32 | CType::U32 => types::I32,
-            CType::Long | CType::ULong | CType::LongLong | CType::ULongLong
-            | CType::I64 | CType::U64 | CType::SizeT | CType::PtrDiffT => types::I64,
+            CType::Long
+            | CType::ULong
+            | CType::LongLong
+            | CType::ULongLong
+            | CType::I64
+            | CType::U64
+            | CType::SizeT
+            | CType::PtrDiffT => types::I64,
             CType::Float => types::F32,
             CType::Double => types::F64,
             CType::Bool => types::I8,
@@ -841,17 +1580,18 @@ impl AotCompiler {
                     offset += size;
                 }
 
-                let methods: Vec<String> = class.methods.iter()
-                    .map(|m| m.name.clone())
-                    .collect();
+                let methods: Vec<String> = class.methods.iter().map(|m| m.name.clone()).collect();
 
-                self.classes.insert(class.name.clone(), ClassInfo {
-                    name: class.name.clone(),
-                    parent: class.parent.clone(),
-                    fields,
-                    methods,
-                    size: offset,
-                });
+                self.classes.insert(
+                    class.name.clone(),
+                    ClassInfo {
+                        name: class.name.clone(),
+                        parent: class.parent.clone(),
+                        fields,
+                        methods,
+                        size: offset,
+                    },
+                );
             }
         }
         Ok(())
@@ -878,17 +1618,21 @@ impl AotCompiler {
         }
 
         if let Some(ref ret_ty) = func.return_type {
-            sig.returns.push(AbiParam::new(self.bolide_type_to_cranelift(ret_ty)));
+            sig.returns
+                .push(AbiParam::new(self.bolide_type_to_cranelift(ret_ty)));
         }
 
         let link_name = Self::user_link_name(&func.name);
-        let func_id = self.module
+        let func_id = self
+            .module
             .declare_function(&link_name, Linkage::Export, &sig)
             .map_err(|e| format!("Declare function error: {}", e))?;
 
         self.functions.insert(func.name.clone(), func_id);
-        self.func_return_types.insert(func.name.clone(), func.return_type.clone());
-        self.func_params.insert(func.name.clone(), func.params.clone());
+        self.func_return_types
+            .insert(func.name.clone(), func.return_type.clone());
+        self.func_params
+            .insert(func.name.clone(), func.params.clone());
 
         if func.lifetime_deps.is_some() {
             self.lifetime_funcs.insert(func.name.clone());
@@ -898,25 +1642,32 @@ impl AotCompiler {
 
     /// 声明类构造函数
     fn declare_class_constructor(&mut self, class_name: &str) -> Result<(), String> {
-        let class_info = self.classes.get(class_name)
+        let class_info = self
+            .classes
+            .get(class_name)
             .ok_or_else(|| format!("Class {} not found", class_name))?
             .clone();
 
         let mut sig = self.module.make_signature();
         // 构造函数参数：每个字段一个参数
         for field in &class_info.fields {
-            sig.params.push(AbiParam::new(self.bolide_type_to_cranelift(&field.ty)));
+            sig.params
+                .push(AbiParam::new(self.bolide_type_to_cranelift(&field.ty)));
         }
         // 返回对象指针
         sig.returns.push(AbiParam::new(self.ptr_type));
 
         let link_name = Self::user_link_name(class_name);
-        let func_id = self.module
+        let func_id = self
+            .module
             .declare_function(&link_name, Linkage::Export, &sig)
             .map_err(|e| format!("Declare constructor error: {}", e))?;
 
         self.functions.insert(class_name.to_string(), func_id);
-        self.func_return_types.insert(class_name.to_string(), Some(BolideType::Custom(class_name.to_string())));
+        self.func_return_types.insert(
+            class_name.to_string(),
+            Some(BolideType::Custom(class_name.to_string())),
+        );
         Ok(())
     }
 
@@ -930,19 +1681,23 @@ impl AotCompiler {
                     // self 参数
                     sig.params.push(AbiParam::new(self.ptr_type));
                     for param in &method.params {
-                        sig.params.push(AbiParam::new(self.bolide_type_to_cranelift(&param.ty)));
+                        sig.params
+                            .push(AbiParam::new(self.bolide_type_to_cranelift(&param.ty)));
                     }
                     if let Some(ref ret_ty) = method.return_type {
-                        sig.returns.push(AbiParam::new(self.bolide_type_to_cranelift(ret_ty)));
+                        sig.returns
+                            .push(AbiParam::new(self.bolide_type_to_cranelift(ret_ty)));
                     }
 
                     let link_name = Self::user_link_name(&method_name);
-                    let func_id = self.module
+                    let func_id = self
+                        .module
                         .declare_function(&link_name, Linkage::Export, &sig)
                         .map_err(|e| format!("Declare method error: {}", e))?;
 
                     self.functions.insert(method_name.clone(), func_id);
-                    self.func_return_types.insert(method_name.clone(), method.return_type.clone());
+                    self.func_return_types
+                        .insert(method_name.clone(), method.return_type.clone());
                 }
             }
         }
@@ -1045,19 +1800,24 @@ impl AotCompiler {
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(self.ptr_type));
         if let Some(Some(ret_ty)) = self.func_return_types.get(func_name) {
-            sig.returns.push(AbiParam::new(self.bolide_type_to_cranelift(ret_ty)));
+            sig.returns
+                .push(AbiParam::new(self.bolide_type_to_cranelift(ret_ty)));
         }
 
-        let trampoline_id = self.module
+        let trampoline_id = self
+            .module
             .declare_function(&trampoline_name, Linkage::Export, &sig)
             .map_err(|e| format!("{}", e))?;
 
         // 获取目标函数 ID
-        let target_func_id = *self.functions.get(func_name)
+        let target_func_id = *self
+            .functions
+            .get(func_name)
             .ok_or_else(|| format!("Target function {} not declared", func_name))?;
 
         // 预计算参数类型
-        let cranelift_types: Vec<types::Type> = params.iter()
+        let cranelift_types: Vec<types::Type> = params
+            .iter()
             .map(|p| self.bolide_type_to_cranelift(&p.ty))
             .collect();
 
@@ -1072,13 +1832,17 @@ impl AotCompiler {
         builder.seal_block(entry);
 
         let env_ptr = builder.block_params(entry)[0];
-        let target_ref = self.module.declare_func_in_func(target_func_id, builder.func);
+        let target_ref = self
+            .module
+            .declare_func_in_func(target_func_id, builder.func);
 
         // 从 env 加载参数
         let mut call_args = Vec::new();
         for (i, ty) in cranelift_types.iter().enumerate() {
             let offset = (i * 8) as i32;
-            let val = builder.ins().load(*ty, MemFlags::trusted(), env_ptr, offset);
+            let val = builder
+                .ins()
+                .load(*ty, MemFlags::trusted(), env_ptr, offset);
             call_args.push(val);
         }
 
@@ -1086,7 +1850,11 @@ impl AotCompiler {
         let call = builder.ins().call(target_ref, &call_args);
         let result_val = {
             let results = builder.inst_results(call);
-            if results.is_empty() { None } else { Some(results[0]) }
+            if results.is_empty() {
+                None
+            } else {
+                Some(results[0])
+            }
         };
 
         // 释放 RC 类型参数（spawn/async 时 clone 的副本）
@@ -1115,15 +1883,19 @@ impl AotCompiler {
 
         builder.finalize();
 
-        self.module.define_function(trampoline_id, &mut self.ctx)
+        self.module
+            .define_function(trampoline_id, &mut self.ctx)
             .map_err(|e| format!("Define trampoline error: {}", e))?;
         self.module.clear_context(&mut self.ctx);
 
-        self.trampolines.insert(func_name.to_string(), TrampolineInfo {
-            func_id: trampoline_id,
-            param_types,
-            env_size,
-        });
+        self.trampolines.insert(
+            func_name.to_string(),
+            TrampolineInfo {
+                func_id: trampoline_id,
+                param_types,
+                env_size,
+            },
+        );
         self.functions.insert(trampoline_name, trampoline_id);
 
         Ok(())
@@ -1131,16 +1903,21 @@ impl AotCompiler {
 
     /// 编译类构造函数
     fn compile_class_constructor(&mut self, class_name: &str) -> Result<(), String> {
-        let class_info = self.classes.get(class_name)
+        let class_info = self
+            .classes
+            .get(class_name)
             .ok_or_else(|| format!("Class {} not found", class_name))?
             .clone();
 
-        let func_id = *self.functions.get(class_name)
+        let func_id = *self
+            .functions
+            .get(class_name)
             .ok_or_else(|| format!("Constructor {} not declared", class_name))?;
 
         let mut sig = self.module.make_signature();
         for field in &class_info.fields {
-            sig.params.push(AbiParam::new(self.bolide_type_to_cranelift(&field.ty)));
+            sig.params
+                .push(AbiParam::new(self.bolide_type_to_cranelift(&field.ty)));
         }
         sig.returns.push(AbiParam::new(self.ptr_type));
 
@@ -1153,7 +1930,9 @@ impl AotCompiler {
         builder.seal_block(entry);
 
         // 分配对象内存
-        let alloc_id = *self.functions.get("@_object_alloc")
+        let alloc_id = *self
+            .functions
+            .get("@_object_alloc")
             .ok_or("object_alloc not found")?;
         let alloc_ref = self.module.declare_func_in_func(alloc_id, builder.func);
         let size = builder.ins().iconst(types::I64, class_info.size as i64);
@@ -1170,7 +1949,8 @@ impl AotCompiler {
         builder.ins().return_(&[obj_ptr]);
         builder.finalize();
 
-        self.module.define_function(func_id, &mut self.ctx)
+        self.module
+            .define_function(func_id, &mut self.ctx)
             .map_err(|e| format!("Define constructor error: {}", e))?;
         self.module.clear_context(&mut self.ctx);
         Ok(())
@@ -1190,7 +1970,9 @@ impl AotCompiler {
 
     fn compile_class_method(&mut self, class_name: &str, method: &FuncDef) -> Result<(), String> {
         let method_name = format!("{}_{}", class_name, method.name);
-        let func_id = *self.functions.get(&method_name)
+        let func_id = *self
+            .functions
+            .get(&method_name)
             .ok_or_else(|| format!("Method {} not declared", method_name))?;
 
         // Collect string literals and create data objects
@@ -1204,10 +1986,12 @@ impl AotCompiler {
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(self.ptr_type)); // self
         for param in &method.params {
-            sig.params.push(AbiParam::new(self.bolide_type_to_cranelift(&param.ty)));
+            sig.params
+                .push(AbiParam::new(self.bolide_type_to_cranelift(&param.ty)));
         }
         if let Some(ref ret_ty) = method.return_type {
-            sig.returns.push(AbiParam::new(self.bolide_type_to_cranelift(ret_ty)));
+            sig.returns
+                .push(AbiParam::new(self.bolide_type_to_cranelift(ret_ty)));
         }
 
         self.ctx.func.signature = sig;
@@ -1252,7 +2036,10 @@ impl AotCompiler {
             let params: Vec<_> = ctx.builder.block_params(entry).to_vec();
             let self_var = ctx.declare_variable("self", self.ptr_type);
             ctx.builder.def_var(self_var, params[0]);
-            ctx.var_types.insert("self".to_string(), BolideType::Custom(class_name.to_string()));
+            ctx.var_types.insert(
+                "self".to_string(),
+                BolideType::Custom(class_name.to_string()),
+            );
 
             // 设置其他参数变量
             for (i, param) in method.params.iter().enumerate() {
@@ -1290,7 +2077,8 @@ impl AotCompiler {
         }
 
         builder.finalize();
-        self.module.define_function(func_id, &mut self.ctx)
+        self.module
+            .define_function(func_id, &mut self.ctx)
             .map_err(|e| format!("Define method error: {}", e))?;
         self.module.clear_context(&mut self.ctx);
         Ok(())
@@ -1298,7 +2086,9 @@ impl AotCompiler {
 
     /// 编译函数
     fn compile_function(&mut self, func: &FuncDef) -> Result<(), String> {
-        let func_id = *self.functions.get(&func.name)
+        let func_id = *self
+            .functions
+            .get(&func.name)
             .ok_or_else(|| format!("Function {} not declared", func.name))?;
 
         // Collect string literals and create data objects
@@ -1311,10 +2101,12 @@ impl AotCompiler {
 
         let mut sig = self.module.make_signature();
         for param in &func.params {
-            sig.params.push(AbiParam::new(self.bolide_type_to_cranelift(&param.ty)));
+            sig.params
+                .push(AbiParam::new(self.bolide_type_to_cranelift(&param.ty)));
         }
         if let Some(ref ret_ty) = func.return_type {
-            sig.returns.push(AbiParam::new(self.bolide_type_to_cranelift(ret_ty)));
+            sig.returns
+                .push(AbiParam::new(self.bolide_type_to_cranelift(ret_ty)));
         }
 
         self.ctx.func.signature = sig;
@@ -1411,7 +2203,8 @@ impl AotCompiler {
             println!("{}", self.ctx.func.display());
         }
 
-        self.module.define_function(func_id, &mut self.ctx)
+        self.module
+            .define_function(func_id, &mut self.ctx)
             .map_err(|e| format!("Define function error in {}: {}", func.name, e))?;
         self.module.clear_context(&mut self.ctx);
         Ok(())
@@ -1439,6 +2232,8 @@ struct AotCompileContext<'a, 'b> {
     temp_rc_values: Vec<(Value, BolideType)>,
     /// 循环块栈：(continue 目标块, break 目标块, 循环作用域基索引)
     loop_stack: Vec<(Block, Block, usize)>,
+    /// catch 落点栈：每个 try 块的 catch_block，用于编译 throw（同函数内直接跳转）
+    catch_stack: Vec<Block>,
     /// weak/unowned 引用变量集合（访问时需要检查对象是否存活）
     weak_variables: HashSet<String>,
     /// spawn/async 句柄变量 -> 目标函数名（join 时据此推断返回类型后缀）
@@ -1485,6 +2280,7 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             rc_variables: Vec::new(),
             temp_rc_values: Vec::new(),
             loop_stack: Vec::new(),
+            catch_stack: Vec::new(),
             weak_variables: HashSet::new(),
             spawn_func_map: HashMap::new(),
             moved_variables: HashSet::new(),
@@ -1500,7 +2296,9 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
     fn write_back_ref_params(&mut self) {
         for (_, var, ptr_addr) in self.ref_params.clone() {
             let current = self.builder.use_var(var);
-            self.builder.ins().store(MemFlags::new(), current, ptr_addr, 0);
+            self.builder
+                .ins()
+                .store(MemFlags::new(), current, ptr_addr, 0);
         }
     }
 
@@ -1511,9 +2309,9 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
     fn leave_scope(&mut self, start_index: usize) {
         // Release vars declared in this scope (stack-like)
         for i in (start_index..self.rc_variables.len()).rev() {
-             let (var, ty) = self.rc_variables[i].clone();
-             let val = self.builder.use_var(var);
-             self.emit_release(val, &ty);
+            let (var, ty) = self.rc_variables[i].clone();
+            let val = self.builder.use_var(var);
+            self.emit_release(val, &ty);
         }
         // Truncate
         self.rc_variables.truncate(start_index);
@@ -1565,18 +2363,20 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
     fn is_rc_type(ty: &BolideType) -> bool {
         match ty {
             // weak/unowned 类引用需要弱引用计数管理（保住对象头以便存活检查）
-            BolideType::Weak(inner) | BolideType::Unowned(inner) =>
-                matches!(inner.as_ref(), BolideType::Custom(_)),
-            _ => matches!(ty,
-                BolideType::Str |
-                BolideType::BigInt |
-                BolideType::Decimal |
-                BolideType::List(_) |
-                BolideType::Dict(_, _) |
-                BolideType::Dynamic |
-                BolideType::Custom(_) |
-                BolideType::Tuple(_)
-            )
+            BolideType::Weak(inner) | BolideType::Unowned(inner) => {
+                matches!(inner.as_ref(), BolideType::Custom(_))
+            }
+            _ => matches!(
+                ty,
+                BolideType::Str
+                    | BolideType::BigInt
+                    | BolideType::Decimal
+                    | BolideType::List(_)
+                    | BolideType::Dict(_, _)
+                    | BolideType::Dynamic
+                    | BolideType::Custom(_)
+                    | BolideType::Tuple(_)
+            ),
         }
     }
 
@@ -1601,7 +2401,9 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             // weak/unowned 释放的是弱引用计数
             BolideType::Weak(inner) | BolideType::Unowned(inner)
                 if matches!(inner.as_ref(), BolideType::Custom(_)) =>
-                Some("@_object_weak_release"),
+            {
+                Some("@_object_weak_release")
+            }
             _ => None,
         }
     }
@@ -1666,7 +2468,9 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             let release_block = self.builder.create_block();
             let continue_block = self.builder.create_block();
 
-            self.builder.ins().brif(is_null, continue_block, &[], check_block, &[]);
+            self.builder
+                .ins()
+                .brif(is_null, continue_block, &[], check_block, &[]);
 
             // check_block: 仅当 strong_count == 1 时清理字段
             self.builder.switch_to_block(check_block);
@@ -1676,7 +2480,9 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
                 let count = self.builder.inst_results(call)[0];
                 let one = self.builder.ins().iconst(types::I64, 1);
                 let is_last = self.builder.ins().icmp(IntCC::Equal, count, one);
-                self.builder.ins().brif(is_last, fields_block, &[], release_block, &[]);
+                self.builder
+                    .ins()
+                    .brif(is_last, fields_block, &[], release_block, &[]);
             } else {
                 self.builder.ins().jump(release_block, &[]);
             }
@@ -1714,8 +2520,12 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
                 if Self::is_rc_type(&field.ty) {
                     if let Some(func_name) = Self::get_release_func_name(&field.ty) {
                         if let Some(&func_ref) = self.func_refs.get(func_name) {
-                            let field_ptr = self.builder.ins().iadd_imm(obj_ptr, field.offset as i64);
-                            let field_val = self.builder.ins().load(types::I64, MemFlags::new(), field_ptr, 0);
+                            let field_ptr =
+                                self.builder.ins().iadd_imm(obj_ptr, field.offset as i64);
+                            let field_val =
+                                self.builder
+                                    .ins()
+                                    .load(types::I64, MemFlags::new(), field_ptr, 0);
                             self.builder.ins().call(func_ref, &[field_val]);
                         }
                     }
@@ -1729,7 +2539,10 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         match expr {
             Expr::Int(n) => Ok(self.builder.ins().iconst(types::I64, *n)),
             Expr::Float(f) => Ok(self.builder.ins().f64const(*f)),
-            Expr::Bool(b) => Ok(self.builder.ins().iconst(types::I64, if *b { 1 } else { 0 })),
+            Expr::Bool(b) => Ok(self
+                .builder
+                .ins()
+                .iconst(types::I64, if *b { 1 } else { 0 })),
             Expr::String(s) => self.compile_string_literal(s),
             Expr::BigInt(s) => self.compile_bigint_literal(s),
             Expr::Decimal(s) => self.compile_decimal_literal(s),
@@ -1752,11 +2565,15 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
 
     /// 编译字符串字面量
     fn compile_string_literal(&mut self, s: &str) -> Result<Value, String> {
-        let func_ref = *self.func_refs.get("@_string_literal")
+        let func_ref = *self
+            .func_refs
+            .get("@_string_literal")
             .ok_or("string_literal not found")?;
 
         // Get the GlobalValue for this string from string_globals
-        let (gv, len) = *self.string_globals.get(s)
+        let (gv, len) = *self
+            .string_globals
+            .get(s)
             .ok_or_else(|| format!("String data not found for: {}", s))?;
 
         // Get the address of the data at runtime
@@ -1773,16 +2590,22 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
     fn compile_bigint_literal(&mut self, s: &str) -> Result<Value, String> {
         let val;
         if let Ok(n) = s.parse::<i64>() {
-            let func_ref = *self.func_refs.get("@_bigint_from_i64")
+            let func_ref = *self
+                .func_refs
+                .get("@_bigint_from_i64")
                 .ok_or("bigint_from_i64 not found")?;
             let arg = self.builder.ins().iconst(types::I64, n);
             let call = self.builder.ins().call(func_ref, &[arg]);
             val = self.builder.inst_results(call)[0];
         } else {
-            let func_ref = *self.func_refs.get("@_bigint_from_str")
+            let func_ref = *self
+                .func_refs
+                .get("@_bigint_from_str")
                 .ok_or("bigint_from_str not found")?;
             // 数字串作为数据段发射（AOT 产物是独立进程，不能嵌入编译期主机指针）
-            let (gv, len) = *self.string_globals.get(s)
+            let (gv, len) = *self
+                .string_globals
+                .get(s)
                 .ok_or_else(|| format!("BigInt literal data not found for: {}", s))?;
             let ptr_val = self.builder.ins().global_value(self.ptr_type, gv);
             let len_val = self.builder.ins().iconst(types::I64, len as i64);
@@ -1797,16 +2620,22 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
     fn compile_decimal_literal(&mut self, s: &str) -> Result<Value, String> {
         let val;
         if let Ok(f) = s.parse::<f64>() {
-            let func_ref = *self.func_refs.get("@_decimal_from_f64")
+            let func_ref = *self
+                .func_refs
+                .get("@_decimal_from_f64")
                 .ok_or("decimal_from_f64 not found")?;
             let arg = self.builder.ins().f64const(f);
             let call = self.builder.ins().call(func_ref, &[arg]);
             val = self.builder.inst_results(call)[0];
         } else {
             // 经 decimal_from_str 构造：数字串作为数据段发射，避免嵌入编译期主机指针
-            let func_ref = *self.func_refs.get("@_decimal_from_str")
-                 .ok_or("decimal_from_str not found")?;
-            let (gv, len) = *self.string_globals.get(s)
+            let func_ref = *self
+                .func_refs
+                .get("@_decimal_from_str")
+                .ok_or("decimal_from_str not found")?;
+            let (gv, len) = *self
+                .string_globals
+                .get(s)
                 .ok_or_else(|| format!("Decimal literal data not found for: {}", s))?;
             let ptr_val = self.builder.ins().global_value(self.ptr_type, gv);
             let len_val = self.builder.ins().iconst(types::I64, len as i64);
@@ -1816,7 +2645,6 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         self.track_temp_rc_value(val, &BolideType::Decimal);
         Ok(val)
     }
-
 
     /// 记录临时 RC 值（表达式中间结果）
     fn track_temp_rc_value(&mut self, val: Value, ty: &BolideType) {
@@ -1853,44 +2681,51 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             // weak/unowned 克隆只增加弱引用计数
             BolideType::Weak(inner) | BolideType::Unowned(inner)
                 if matches!(inner.as_ref(), BolideType::Custom(_)) =>
-                Some("@_object_weak_clone"),
-             _ => None,
+            {
+                Some("@_object_weak_clone")
+            }
+            _ => None,
         }
     }
 
     /// 统一的 retain (clone) 辅助函数
     fn emit_retain(&mut self, val: Value, ty: &BolideType) -> Value {
         if let BolideType::Tuple(inner_types) = ty {
-             // Tuple Deep Copy: create new tuple and clone elements
-             if let Some(&new_func) = self.func_refs.get("@_tuple_new") {
-                 let len = self.builder.ins().iconst(types::I64, inner_types.len() as i64);
-                 let call = self.builder.ins().call(new_func, &[len]);
-                 let new_tuple = self.builder.inst_results(call)[0];
+            // Tuple Deep Copy: create new tuple and clone elements
+            if let Some(&new_func) = self.func_refs.get("@_tuple_new") {
+                let len = self
+                    .builder
+                    .ins()
+                    .iconst(types::I64, inner_types.len() as i64);
+                let call = self.builder.ins().call(new_func, &[len]);
+                let new_tuple = self.builder.inst_results(call)[0];
 
-                 if let Some(&get_func) = self.func_refs.get("@_tuple_get") {
-                     if let Some(&set_func) = self.func_refs.get("@_tuple_set") {
-                         for (i, elem_ty) in inner_types.iter().enumerate() {
-                             let idx_val = self.builder.ins().iconst(types::I64, i as i64);
-                             // Get from old tuple
-                             let call_get = self.builder.ins().call(get_func, &[val, idx_val]);
-                             let elem_val = self.builder.inst_results(call_get)[0];
-                             
-                             // Retain element
-                             let new_elem_val = if Self::is_rc_type(elem_ty) {
-                                 self.emit_retain(elem_val, elem_ty)
-                             } else {
-                                 elem_val
-                             };
+                if let Some(&get_func) = self.func_refs.get("@_tuple_get") {
+                    if let Some(&set_func) = self.func_refs.get("@_tuple_set") {
+                        for (i, elem_ty) in inner_types.iter().enumerate() {
+                            let idx_val = self.builder.ins().iconst(types::I64, i as i64);
+                            // Get from old tuple
+                            let call_get = self.builder.ins().call(get_func, &[val, idx_val]);
+                            let elem_val = self.builder.inst_results(call_get)[0];
 
-                             // Set to new tuple
-                             self.builder.ins().call(set_func, &[new_tuple, idx_val, new_elem_val]);
-                         }
-                     }
-                 }
-                 return new_tuple;
-             }
-             // Fallback if functions missing (should not happen)
-             return val; 
+                            // Retain element
+                            let new_elem_val = if Self::is_rc_type(elem_ty) {
+                                self.emit_retain(elem_val, elem_ty)
+                            } else {
+                                elem_val
+                            };
+
+                            // Set to new tuple
+                            self.builder
+                                .ins()
+                                .call(set_func, &[new_tuple, idx_val, new_elem_val]);
+                        }
+                    }
+                }
+                return new_tuple;
+            }
+            // Fallback if functions missing (should not happen)
+            return val;
         } else {
             if let Some(func_name) = Self::get_clone_func_name(ty) {
                 if let Some(&func_ref) = self.func_refs.get(func_name) {
@@ -2001,7 +2836,10 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
                     Ok(self.builder.ins().uextend(types::I64, cmp))
                 }
                 BinOp::Ge => {
-                    let cmp = self.builder.ins().fcmp(FloatCC::GreaterThanOrEqual, lhs, rhs);
+                    let cmp = self
+                        .builder
+                        .ins()
+                        .fcmp(FloatCC::GreaterThanOrEqual, lhs, rhs);
                     Ok(self.builder.ins().uextend(types::I64, cmp))
                 }
                 BinOp::And | BinOp::Or => {
@@ -2029,7 +2867,10 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
                     Ok(self.builder.ins().uextend(types::I64, cmp))
                 }
                 BinOp::Le => {
-                    let cmp = self.builder.ins().icmp(IntCC::SignedLessThanOrEqual, lhs, rhs);
+                    let cmp = self
+                        .builder
+                        .ins()
+                        .icmp(IntCC::SignedLessThanOrEqual, lhs, rhs);
                     Ok(self.builder.ins().uextend(types::I64, cmp))
                 }
                 BinOp::Gt => {
@@ -2037,7 +2878,10 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
                     Ok(self.builder.ins().uextend(types::I64, cmp))
                 }
                 BinOp::Ge => {
-                    let cmp = self.builder.ins().icmp(IntCC::SignedGreaterThanOrEqual, lhs, rhs);
+                    let cmp = self
+                        .builder
+                        .ins()
+                        .icmp(IntCC::SignedGreaterThanOrEqual, lhs, rhs);
                     Ok(self.builder.ins().uextend(types::I64, cmp))
                 }
                 BinOp::And => Ok(self.builder.ins().band(lhs, rhs)),
@@ -2046,7 +2890,13 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         }
     }
 
-    fn try_operator_overload(&mut self, left: &Expr, op: &BinOp, right: &Expr, class_name: &str) -> Result<Option<Value>, String> {
+    fn try_operator_overload(
+        &mut self,
+        left: &Expr,
+        op: &BinOp,
+        right: &Expr,
+        class_name: &str,
+    ) -> Result<Option<Value>, String> {
         let method_name = match op {
             BinOp::Add => "__add__",
             BinOp::Sub => "__sub__",
@@ -2070,14 +2920,21 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
     }
 
     /// 编译字符串二元运算
-    fn compile_string_binop(&mut self, left: &Expr, op: &BinOp, right: &Expr) -> Result<Value, String> {
+    fn compile_string_binop(
+        &mut self,
+        left: &Expr,
+        op: &BinOp,
+        right: &Expr,
+    ) -> Result<Value, String> {
         let lhs = self.compile_expr(left)?;
         let rhs = self.compile_expr(right)?;
 
         match op {
             BinOp::Add => {
                 // 字符串连接
-                let func_ref = *self.func_refs.get("@_string_concat")
+                let func_ref = *self
+                    .func_refs
+                    .get("@_string_concat")
                     .ok_or("string_concat not found")?;
                 let call = self.builder.ins().call(func_ref, &[lhs, rhs]);
                 let result = self.builder.inst_results(call)[0];
@@ -2086,14 +2943,18 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             }
             BinOp::Eq => {
                 // 字符串相等比较
-                let func_ref = *self.func_refs.get("@_string_eq")
+                let func_ref = *self
+                    .func_refs
+                    .get("@_string_eq")
                     .ok_or("string_eq not found")?;
                 let call = self.builder.ins().call(func_ref, &[lhs, rhs]);
                 Ok(self.builder.inst_results(call)[0])
             }
             BinOp::Ne => {
                 // 字符串不等比较
-                let func_ref = *self.func_refs.get("@_string_eq")
+                let func_ref = *self
+                    .func_refs
+                    .get("@_string_eq")
                     .ok_or("string_eq not found")?;
                 let call = self.builder.ins().call(func_ref, &[lhs, rhs]);
                 let eq_result = self.builder.inst_results(call)[0];
@@ -2107,7 +2968,12 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
     }
 
     /// 编译 BigInt 二元运算
-    fn compile_bigint_binop(&mut self, lhs: Value, op: &BinOp, rhs: Value) -> Result<Value, String> {
+    fn compile_bigint_binop(
+        &mut self,
+        lhs: Value,
+        op: &BinOp,
+        rhs: Value,
+    ) -> Result<Value, String> {
         let func_name = match op {
             BinOp::Add => "@_bigint_add",
             BinOp::Sub => "@_bigint_sub",
@@ -2117,7 +2983,9 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             BinOp::Eq => "@_bigint_eq",
             BinOp::Ne => {
                 // ne = !eq
-                let eq_ref = *self.func_refs.get("@_bigint_eq")
+                let eq_ref = *self
+                    .func_refs
+                    .get("@_bigint_eq")
                     .ok_or("bigint_eq not found")?;
                 let call = self.builder.ins().call(eq_ref, &[lhs, rhs]);
                 let eq_result = self.builder.inst_results(call)[0];
@@ -2133,21 +3001,31 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             }
         };
 
-        let func_ref = *self.func_refs.get(func_name)
+        let func_ref = *self
+            .func_refs
+            .get(func_name)
             .ok_or_else(|| format!("{} not found", func_name))?;
         let call = self.builder.ins().call(func_ref, &[lhs, rhs]);
         let result = self.builder.inst_results(call)[0];
-        
+
         // Track arithmetic results as temps
-        if matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod) {
-             self.track_temp_rc_value(result, &BolideType::BigInt);
+        if matches!(
+            op,
+            BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod
+        ) {
+            self.track_temp_rc_value(result, &BolideType::BigInt);
         }
-        
+
         Ok(result)
     }
 
     /// 编译 Decimal 二元运算
-    fn compile_decimal_binop(&mut self, lhs: Value, op: &BinOp, rhs: Value) -> Result<Value, String> {
+    fn compile_decimal_binop(
+        &mut self,
+        lhs: Value,
+        op: &BinOp,
+        rhs: Value,
+    ) -> Result<Value, String> {
         let func_name = match op {
             BinOp::Add => "@_decimal_add",
             BinOp::Sub => "@_decimal_sub",
@@ -2157,7 +3035,9 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             BinOp::Eq => "@_decimal_eq",
             BinOp::Ne => {
                 // ne = !eq
-                let eq_ref = *self.func_refs.get("@_decimal_eq")
+                let eq_ref = *self
+                    .func_refs
+                    .get("@_decimal_eq")
                     .ok_or("decimal_eq not found")?;
                 let call = self.builder.ins().call(eq_ref, &[lhs, rhs]);
                 let eq_result = self.builder.inst_results(call)[0];
@@ -2173,14 +3053,19 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             }
         };
 
-        let func_ref = *self.func_refs.get(func_name)
+        let func_ref = *self
+            .func_refs
+            .get(func_name)
             .ok_or_else(|| format!("{} not found", func_name))?;
         let call = self.builder.ins().call(func_ref, &[lhs, rhs]);
         let result = self.builder.inst_results(call)[0];
 
         // Track arithmetic results as temps
-        if matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod) {
-             self.track_temp_rc_value(result, &BolideType::Decimal);
+        if matches!(
+            op,
+            BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod
+        ) {
+            self.track_temp_rc_value(result, &BolideType::Decimal);
         }
 
         Ok(result)
@@ -2192,28 +3077,30 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         let val = self.compile_expr(operand)?;
 
         match op {
-            UnaryOp::Neg => {
-                match operand_type {
-                    Some(BolideType::Float) => Ok(self.builder.ins().fneg(val)),
-                    Some(BolideType::BigInt) => {
-                        let func_ref = *self.func_refs.get("@_bigint_neg")
-                            .ok_or("bigint_neg not found")?;
-                        let call = self.builder.ins().call(func_ref, &[val]);
-                        let result = self.builder.inst_results(call)[0];
-                        self.track_temp_rc_value(result, &BolideType::BigInt);
-                        Ok(result)
-                    },
-                    Some(BolideType::Decimal) => {
-                        let func_ref = *self.func_refs.get("@_decimal_neg")
-                            .ok_or("decimal_neg not found")?;
-                        let call = self.builder.ins().call(func_ref, &[val]);
-                        let result = self.builder.inst_results(call)[0];
-                        self.track_temp_rc_value(result, &BolideType::Decimal);
-                        Ok(result)
-                    },
-                    _ => Ok(self.builder.ins().ineg(val)),
+            UnaryOp::Neg => match operand_type {
+                Some(BolideType::Float) => Ok(self.builder.ins().fneg(val)),
+                Some(BolideType::BigInt) => {
+                    let func_ref = *self
+                        .func_refs
+                        .get("@_bigint_neg")
+                        .ok_or("bigint_neg not found")?;
+                    let call = self.builder.ins().call(func_ref, &[val]);
+                    let result = self.builder.inst_results(call)[0];
+                    self.track_temp_rc_value(result, &BolideType::BigInt);
+                    Ok(result)
                 }
-            }
+                Some(BolideType::Decimal) => {
+                    let func_ref = *self
+                        .func_refs
+                        .get("@_decimal_neg")
+                        .ok_or("decimal_neg not found")?;
+                    let call = self.builder.ins().call(func_ref, &[val]);
+                    let result = self.builder.inst_results(call)[0];
+                    self.track_temp_rc_value(result, &BolideType::Decimal);
+                    Ok(result)
+                }
+                _ => Ok(self.builder.ins().ineg(val)),
+            },
             UnaryOp::Not => {
                 let zero = self.builder.ins().iconst(types::I64, 0);
                 let cmp = self.builder.ins().icmp(IntCC::Equal, val, zero);
@@ -2243,7 +3130,12 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
     }
 
     /// 编译方法调用
-    fn compile_method_call(&mut self, base: &Expr, method_name: &str, args: &[Expr]) -> Result<Value, String> {
+    fn compile_method_call(
+        &mut self,
+        base: &Expr,
+        method_name: &str,
+        args: &[Expr],
+    ) -> Result<Value, String> {
         let base_type = self.infer_expr_type(base);
 
         // 处理列表方法
@@ -2264,7 +3156,8 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         // 处理类方法（沿继承链查找）
         if let Some(BolideType::Custom(class_name)) = base_type {
             let base_val = self.compile_expr(base)?;
-            let method_full_name = self.find_class_method(&class_name, method_name)
+            let method_full_name = self
+                .find_class_method(&class_name, method_name)
                 .unwrap_or_else(|| format!("{}_{}", class_name, method_name));
 
             if let Some(&func_ref) = self.func_refs.get(&method_full_name) {
@@ -2280,7 +3173,11 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
                     return Ok(self.builder.ins().iconst(types::I64, 0));
                 }
                 let result = results[0];
-                let ret_ty_opt = self.func_return_types.get(&method_full_name).cloned().flatten();
+                let ret_ty_opt = self
+                    .func_return_types
+                    .get(&method_full_name)
+                    .cloned()
+                    .flatten();
                 if let Some(ret_ty) = ret_ty_opt {
                     if Self::is_rc_type(&ret_ty) {
                         self.track_temp_rc_value(result, &ret_ty);
@@ -2294,13 +3191,21 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
     }
 
     /// 编译列表方法
-    fn compile_list_method(&mut self, base: &Expr, method_name: &str, args: &[Expr]) -> Result<Value, String> {
+    fn compile_list_method(
+        &mut self,
+        base: &Expr,
+        method_name: &str,
+        args: &[Expr],
+    ) -> Result<Value, String> {
         let list_val = self.compile_expr(base)?;
 
         // 直接调用单参/无参运行时函数返回 i64 的小工具
         macro_rules! call0 {
             ($key:expr) => {{
-                let f = *self.func_refs.get($key).ok_or(concat!($key, " not found"))?;
+                let f = *self
+                    .func_refs
+                    .get($key)
+                    .ok_or(concat!($key, " not found"))?;
                 let call = self.builder.ins().call(f, &[list_val]);
                 Ok(self.builder.inst_results(call)[0])
             }};
@@ -2313,40 +3218,61 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             "first" => call0!("@_list_first"),
             "last" => call0!("@_list_last"),
             "sort" => {
-                let f = *self.func_refs.get("@_list_sort").ok_or("list_sort not found")?;
+                let f = *self
+                    .func_refs
+                    .get("@_list_sort")
+                    .ok_or("list_sort not found")?;
                 self.builder.ins().call(f, &[list_val]);
                 Ok(self.builder.ins().iconst(types::I64, 0))
             }
             "reverse" => {
-                let f = *self.func_refs.get("@_list_reverse").ok_or("list_reverse not found")?;
+                let f = *self
+                    .func_refs
+                    .get("@_list_reverse")
+                    .ok_or("list_reverse not found")?;
                 self.builder.ins().call(f, &[list_val]);
                 Ok(self.builder.ins().iconst(types::I64, 0))
             }
             "clear" => {
-                let f = *self.func_refs.get("@_list_clear").ok_or("list_clear not found")?;
+                let f = *self
+                    .func_refs
+                    .get("@_list_clear")
+                    .ok_or("list_clear not found")?;
                 self.builder.ins().call(f, &[list_val]);
                 Ok(self.builder.ins().iconst(types::I64, 0))
             }
             "copy" | "clone" => {
-                let f = *self.func_refs.get("@_list_clone").ok_or("list_clone not found")?;
+                let f = *self
+                    .func_refs
+                    .get("@_list_clone")
+                    .ok_or("list_clone not found")?;
                 let call = self.builder.ins().call(f, &[list_val]);
                 Ok(self.builder.inst_results(call)[0])
             }
             "push" | "append" => {
-                let f = *self.func_refs.get("@_list_push").ok_or("list_push not found")?;
+                let f = *self
+                    .func_refs
+                    .get("@_list_push")
+                    .ok_or("list_push not found")?;
                 let val = self.compile_expr(&args[0])?;
                 self.remove_temp_rc_value(val); // 容器接管所有权
                 self.builder.ins().call(f, &[list_val, val]);
                 Ok(self.builder.ins().iconst(types::I64, 0))
             }
             "get" => {
-                let f = *self.func_refs.get("@_list_get").ok_or("list_get not found")?;
+                let f = *self
+                    .func_refs
+                    .get("@_list_get")
+                    .ok_or("list_get not found")?;
                 let idx = self.compile_expr(&args[0])?;
                 let call = self.builder.ins().call(f, &[list_val, idx]);
                 Ok(self.builder.inst_results(call)[0])
             }
             "set" => {
-                let f = *self.func_refs.get("@_list_set").ok_or("list_set not found")?;
+                let f = *self
+                    .func_refs
+                    .get("@_list_set")
+                    .ok_or("list_set not found")?;
                 let idx = self.compile_expr(&args[0])?;
                 let val = self.compile_expr(&args[1])?;
                 self.remove_temp_rc_value(val);
@@ -2354,7 +3280,10 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
                 Ok(self.builder.inst_results(call)[0])
             }
             "insert" => {
-                let f = *self.func_refs.get("@_list_insert").ok_or("list_insert not found")?;
+                let f = *self
+                    .func_refs
+                    .get("@_list_insert")
+                    .ok_or("list_insert not found")?;
                 let idx = self.compile_expr(&args[0])?;
                 let val = self.compile_expr(&args[1])?;
                 self.remove_temp_rc_value(val);
@@ -2362,37 +3291,55 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
                 Ok(self.builder.ins().iconst(types::I64, 0))
             }
             "remove" => {
-                let f = *self.func_refs.get("@_list_remove").ok_or("list_remove not found")?;
+                let f = *self
+                    .func_refs
+                    .get("@_list_remove")
+                    .ok_or("list_remove not found")?;
                 let idx = self.compile_expr(&args[0])?;
                 let call = self.builder.ins().call(f, &[list_val, idx]);
                 Ok(self.builder.inst_results(call)[0])
             }
             "extend" => {
-                let f = *self.func_refs.get("@_list_extend").ok_or("list_extend not found")?;
+                let f = *self
+                    .func_refs
+                    .get("@_list_extend")
+                    .ok_or("list_extend not found")?;
                 let other = self.compile_expr(&args[0])?;
                 self.builder.ins().call(f, &[list_val, other]);
                 Ok(self.builder.ins().iconst(types::I64, 0))
             }
             "contains" | "includes" => {
-                let f = *self.func_refs.get("@_list_contains").ok_or("list_contains not found")?;
+                let f = *self
+                    .func_refs
+                    .get("@_list_contains")
+                    .ok_or("list_contains not found")?;
                 let val = self.compile_expr(&args[0])?;
                 let call = self.builder.ins().call(f, &[list_val, val]);
                 Ok(self.builder.inst_results(call)[0])
             }
             "index_of" | "index" | "find" => {
-                let f = *self.func_refs.get("@_list_index_of").ok_or("list_index_of not found")?;
+                let f = *self
+                    .func_refs
+                    .get("@_list_index_of")
+                    .ok_or("list_index_of not found")?;
                 let val = self.compile_expr(&args[0])?;
                 let call = self.builder.ins().call(f, &[list_val, val]);
                 Ok(self.builder.inst_results(call)[0])
             }
             "count" => {
-                let f = *self.func_refs.get("@_list_count").ok_or("list_count not found")?;
+                let f = *self
+                    .func_refs
+                    .get("@_list_count")
+                    .ok_or("list_count not found")?;
                 let val = self.compile_expr(&args[0])?;
                 let call = self.builder.ins().call(f, &[list_val, val]);
                 Ok(self.builder.inst_results(call)[0])
             }
             "slice" => {
-                let f = *self.func_refs.get("@_list_slice").ok_or("list_slice not found")?;
+                let f = *self
+                    .func_refs
+                    .get("@_list_slice")
+                    .ok_or("list_slice not found")?;
                 let start = self.compile_expr(&args[0])?;
                 let end = self.compile_expr(&args[1])?;
                 let call = self.builder.ins().call(f, &[list_val, start, end]);
@@ -2403,7 +3350,12 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
     }
 
     /// 编译字符串方法
-    fn compile_string_method(&mut self, base: &Expr, method_name: &str, _args: &[Expr]) -> Result<Value, String> {
+    fn compile_string_method(
+        &mut self,
+        base: &Expr,
+        method_name: &str,
+        _args: &[Expr],
+    ) -> Result<Value, String> {
         let _str_val = self.compile_expr(base)?;
 
         match method_name {
@@ -2428,11 +3380,19 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
     }
 
     /// 编译字典方法
-    fn compile_dict_method(&mut self, base: &Expr, method_name: &str, args: &[Expr]) -> Result<Value, String> {
+    fn compile_dict_method(
+        &mut self,
+        base: &Expr,
+        method_name: &str,
+        args: &[Expr],
+    ) -> Result<Value, String> {
         let dict_val = self.compile_expr(base)?;
         match method_name {
             "set" => {
-                let f = *self.func_refs.get("@_dict_set").ok_or("dict_set not found")?;
+                let f = *self
+                    .func_refs
+                    .get("@_dict_set")
+                    .ok_or("dict_set not found")?;
                 let k = self.compile_expr(&args[0])?;
                 let v = self.compile_expr(&args[1])?;
                 self.remove_temp_rc_value(v); // 容器接管 value 所有权
@@ -2440,50 +3400,77 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
                 Ok(self.builder.ins().iconst(types::I64, 0))
             }
             "get" => {
-                let f = *self.func_refs.get("@_dict_get").ok_or("dict_get not found")?;
+                let f = *self
+                    .func_refs
+                    .get("@_dict_get")
+                    .ok_or("dict_get not found")?;
                 let k = self.compile_expr(&args[0])?;
                 let call = self.builder.ins().call(f, &[dict_val, k]);
                 Ok(self.builder.inst_results(call)[0])
             }
             "contains" => {
-                let f = *self.func_refs.get("@_dict_contains").ok_or("dict_contains not found")?;
+                let f = *self
+                    .func_refs
+                    .get("@_dict_contains")
+                    .ok_or("dict_contains not found")?;
                 let k = self.compile_expr(&args[0])?;
                 let call = self.builder.ins().call(f, &[dict_val, k]);
                 Ok(self.builder.inst_results(call)[0])
             }
             "remove" => {
-                let f = *self.func_refs.get("@_dict_remove").ok_or("dict_remove not found")?;
+                let f = *self
+                    .func_refs
+                    .get("@_dict_remove")
+                    .ok_or("dict_remove not found")?;
                 let k = self.compile_expr(&args[0])?;
                 let call = self.builder.ins().call(f, &[dict_val, k]);
                 Ok(self.builder.inst_results(call)[0])
             }
             "len" | "size" => {
-                let f = *self.func_refs.get("@_dict_len").ok_or("dict_len not found")?;
+                let f = *self
+                    .func_refs
+                    .get("@_dict_len")
+                    .ok_or("dict_len not found")?;
                 let call = self.builder.ins().call(f, &[dict_val]);
                 Ok(self.builder.inst_results(call)[0])
             }
             "is_empty" => {
-                let f = *self.func_refs.get("@_dict_is_empty").ok_or("dict_is_empty not found")?;
+                let f = *self
+                    .func_refs
+                    .get("@_dict_is_empty")
+                    .ok_or("dict_is_empty not found")?;
                 let call = self.builder.ins().call(f, &[dict_val]);
                 Ok(self.builder.inst_results(call)[0])
             }
             "clear" => {
-                let f = *self.func_refs.get("@_dict_clear").ok_or("dict_clear not found")?;
+                let f = *self
+                    .func_refs
+                    .get("@_dict_clear")
+                    .ok_or("dict_clear not found")?;
                 self.builder.ins().call(f, &[dict_val]);
                 Ok(self.builder.ins().iconst(types::I64, 0))
             }
             "keys" => {
-                let f = *self.func_refs.get("@_dict_keys").ok_or("dict_keys not found")?;
+                let f = *self
+                    .func_refs
+                    .get("@_dict_keys")
+                    .ok_or("dict_keys not found")?;
                 let call = self.builder.ins().call(f, &[dict_val]);
                 Ok(self.builder.inst_results(call)[0])
             }
             "values" => {
-                let f = *self.func_refs.get("@_dict_values").ok_or("dict_values not found")?;
+                let f = *self
+                    .func_refs
+                    .get("@_dict_values")
+                    .ok_or("dict_values not found")?;
                 let call = self.builder.ins().call(f, &[dict_val]);
                 Ok(self.builder.inst_results(call)[0])
             }
             "clone" => {
-                let f = *self.func_refs.get("@_dict_clone").ok_or("dict_clone not found")?;
+                let f = *self
+                    .func_refs
+                    .get("@_dict_clone")
+                    .ok_or("dict_clone not found")?;
                 let call = self.builder.ins().call(f, &[dict_val]);
                 Ok(self.builder.inst_results(call)[0])
             }
@@ -2510,13 +3497,17 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             "channel" => return self.compile_channel_create(args),
             // 调试用内置自由函数（运行时符号经 @_ 隔离，需显式分发）
             "bigint_debug_stats" => {
-                let func_ref = *self.func_refs.get("@_bigint_debug_stats")
+                let func_ref = *self
+                    .func_refs
+                    .get("@_bigint_debug_stats")
                     .ok_or("bigint_debug_stats not found")?;
                 self.builder.ins().call(func_ref, &[]);
                 return Ok(self.builder.ins().iconst(types::I64, 0));
             }
             "tuple_debug_stats" => {
-                let func_ref = *self.func_refs.get("@_tuple_debug_stats")
+                let func_ref = *self
+                    .func_refs
+                    .get("@_tuple_debug_stats")
                     .ok_or("tuple_debug_stats not found")?;
                 self.builder.ins().call(func_ref, &[]);
                 return Ok(self.builder.ins().iconst(types::I64, 0));
@@ -2545,11 +3536,15 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         }
 
         // 查找函数引用
-        let func_ref = *self.func_refs.get(name)
+        let func_ref = *self
+            .func_refs
+            .get(name)
             .ok_or_else(|| format!("Function not found: {}", name))?;
 
         // 按参数模式处理实参（与 JIT 一致：borrow 借用 / owned 移动 / ref 传址）
-        let param_modes: Vec<ParamMode> = self.func_params.get(name)
+        let param_modes: Vec<ParamMode> = self
+            .func_params
+            .get(name)
             .map(|ps| ps.iter().map(|p| p.mode).collect())
             .unwrap_or_else(|| vec![ParamMode::Borrow; args.len()]);
 
@@ -2583,10 +3578,15 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
                     if let Expr::Ident(var_name) = arg {
                         if let Some(&var) = self.variables.get(var_name) {
                             let current = self.builder.use_var(var);
-                            let slot = self.builder.create_sized_stack_slot(
-                                StackSlotData::new(StackSlotKind::ExplicitSlot, 8, 0));
+                            let slot = self.builder.create_sized_stack_slot(StackSlotData::new(
+                                StackSlotKind::ExplicitSlot,
+                                8,
+                                0,
+                            ));
                             let slot_addr = self.builder.ins().stack_addr(self.ptr_type, slot, 0);
-                            self.builder.ins().store(MemFlags::new(), current, slot_addr, 0);
+                            self.builder
+                                .ins()
+                                .store(MemFlags::new(), current, slot_addr, 0);
                             arg_vals.push(slot_addr);
                             ref_slots.push((var_name.clone(), slot_addr));
                         } else {
@@ -2604,7 +3604,10 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
 
         // ref 参数：从栈槽读回新值写回变量
         for (var_name, slot_addr) in &ref_slots {
-            let new_val = self.builder.ins().load(self.ptr_type, MemFlags::new(), *slot_addr, 0);
+            let new_val = self
+                .builder
+                .ins()
+                .load(self.ptr_type, MemFlags::new(), *slot_addr, 0);
             if let Some(&var) = self.variables.get(var_name) {
                 // 释放调用前的旧值（对齐 JIT 的 global 路径）
                 let var_ty = self.var_types.get(var_name).cloned();
@@ -2640,7 +3643,9 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         args: &[Expr],
         func_sig: Option<(Vec<BolideType>, Option<Box<BolideType>>)>,
     ) -> Result<Value, String> {
-        let var = *self.variables.get(var_name)
+        let var = *self
+            .variables
+            .get(var_name)
             .ok_or_else(|| format!("Undefined function variable: {}", var_name))?;
         let func_ptr = self.builder.use_var(var);
 
@@ -2653,23 +3658,29 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         let mut sig = Signature::new(call_conv);
         if let Some((ref param_types, _)) = func_sig {
             for ty in param_types {
-                sig.params.push(AbiParam::new(self.bolide_type_to_cranelift(ty)));
+                sig.params
+                    .push(AbiParam::new(self.bolide_type_to_cranelift(ty)));
             }
         } else {
             for arg in args {
                 let ty = self.infer_expr_type(arg).unwrap_or(BolideType::Int);
-                sig.params.push(AbiParam::new(self.bolide_type_to_cranelift(&ty)));
+                sig.params
+                    .push(AbiParam::new(self.bolide_type_to_cranelift(&ty)));
             }
         }
         let ret_ty = func_sig.as_ref().and_then(|(_, r)| r.clone());
         if let Some(ref rt) = ret_ty {
-            sig.returns.push(AbiParam::new(self.bolide_type_to_cranelift(rt)));
+            sig.returns
+                .push(AbiParam::new(self.bolide_type_to_cranelift(rt)));
         } else {
             sig.returns.push(AbiParam::new(types::I64));
         }
 
         let sig_ref = self.builder.import_signature(sig);
-        let call = self.builder.ins().call_indirect(sig_ref, func_ptr, &arg_values);
+        let call = self
+            .builder
+            .ins()
+            .call_indirect(sig_ref, func_ptr, &arg_values);
         let result = self.builder.inst_results(call)[0];
 
         if let Some(rt) = ret_ty {
@@ -2683,12 +3694,18 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
     /// 编译 async 函数调用 - 启动协程并返回 Future
     fn compile_async_call(&mut self, func_name: &str, args: &[Expr]) -> Result<Value, String> {
         // 获取返回类型确定 spawn 函数后缀
-        let return_type = self.func_return_types.get(func_name).cloned().unwrap_or(None);
+        let return_type = self
+            .func_return_types
+            .get(func_name)
+            .cloned()
+            .unwrap_or(None);
         let type_suffix = Self::spawn_type_suffix(&return_type);
 
         // 计算函数地址与 env 指针
         let (func_addr, env_ptr) = if args.is_empty() {
-            let target_func_ref = *self.func_refs.get(func_name)
+            let target_func_ref = *self
+                .func_refs
+                .get(func_name)
                 .ok_or_else(|| format!("Undefined async function: {}", func_name))?;
             let func_addr = self.builder.ins().func_addr(self.ptr_type, target_func_ref);
             let null_env = self.builder.ins().iconst(self.ptr_type, 0);
@@ -2696,7 +3713,9 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         } else {
             // 有参数：分配 env，存入参数，使用 trampoline
             let env_size = (args.len() * 8) as i64;
-            let alloc_ref = *self.func_refs.get("@_bolide_alloc")
+            let alloc_ref = *self
+                .func_refs
+                .get("@_bolide_alloc")
                 .ok_or("bolide_alloc not found")?;
             let size_val = self.builder.ins().iconst(types::I64, env_size);
             let alloc_call = self.builder.ins().call(alloc_ref, &[size_val]);
@@ -2718,11 +3737,15 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
                     }
                     None => val,
                 };
-                self.builder.ins().store(MemFlags::trusted(), val_to_store, env_ptr, offset);
+                self.builder
+                    .ins()
+                    .store(MemFlags::trusted(), val_to_store, env_ptr, offset);
             }
 
             let trampoline_name = self.get_trampoline_name(func_name);
-            let trampoline_ref = *self.func_refs.get(&trampoline_name)
+            let trampoline_ref = *self
+                .func_refs
+                .get(&trampoline_name)
                 .ok_or_else(|| format!("Trampoline not found: {}", trampoline_name))?;
             let func_addr = self.builder.ins().func_addr(self.ptr_type, trampoline_ref);
             (func_addr, env_ptr)
@@ -2734,7 +3757,9 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         } else {
             format!("@_coroutine_spawn{}_with_env", type_suffix)
         };
-        let spawn_ref = *self.func_refs.get(&spawn_func_name)
+        let spawn_ref = *self
+            .func_refs
+            .get(&spawn_func_name)
             .ok_or_else(|| format!("{} not found", spawn_func_name))?;
         let call = if args.is_empty() {
             self.builder.ins().call(spawn_ref, &[func_addr])
@@ -2758,8 +3783,14 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             CType::Char | CType::UChar | CType::I8 | CType::U8 => types::I8,
             CType::Short | CType::UShort | CType::I16 | CType::U16 => types::I16,
             CType::Int | CType::UInt | CType::I32 | CType::U32 => types::I32,
-            CType::Long | CType::ULong | CType::LongLong | CType::ULongLong
-            | CType::I64 | CType::U64 | CType::SizeT | CType::PtrDiffT => types::I64,
+            CType::Long
+            | CType::ULong
+            | CType::LongLong
+            | CType::ULongLong
+            | CType::I64
+            | CType::U64
+            | CType::SizeT
+            | CType::PtrDiffT => types::I64,
             CType::Float => types::F32,
             CType::Double => types::F64,
             CType::Bool => types::I8,
@@ -2774,7 +3805,9 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         extern_func: &bolide_parser::ExternFunc,
         args: &[Expr],
     ) -> Result<Value, String> {
-        let func_ref = *self.func_refs.get(&extern_func.name)
+        let func_ref = *self
+            .func_refs
+            .get(&extern_func.name)
             .ok_or_else(|| format!("Extern function not declared: {}", extern_func.name))?;
 
         // 编译参数并按 C 签名转换
@@ -2799,7 +3832,9 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             if let Some(param) = extern_func.params.get(i) {
                 if let CType::Ptr(inner) = &param.ty {
                     if matches!(inner.as_ref(), CType::Char) {
-                        let as_cstr_ref = *self.func_refs.get("@_string_as_cstr")
+                        let as_cstr_ref = *self
+                            .func_refs
+                            .get("@_string_as_cstr")
                             .ok_or("string_as_cstr not found")?;
                         let call = self.builder.ins().call(as_cstr_ref, &[val]);
                         arg_values.push(self.builder.inst_results(call)[0]);
@@ -2842,7 +3877,9 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         if let Some(ref ret_ty) = extern_func.return_type {
             if let CType::Ptr(inner) = ret_ty {
                 if matches!(inner.as_ref(), CType::Char) {
-                    let string_new_ref = *self.func_refs.get("@_string_new")
+                    let string_new_ref = *self
+                        .func_refs
+                        .get("@_string_new")
                         .ok_or("string_new not found")?;
                     let call = self.builder.ins().call(string_new_ref, &[result]);
                     let bolide_string = self.builder.inst_results(call)[0];
@@ -2868,12 +3905,84 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         let val = self.compile_expr(arg)?;
 
         let inferred_type = self.infer_expr_type(arg);
+        if let Some(BolideType::Tuple(elem_types)) = &inferred_type {
+            self.compile_print_tuple_inline(val, elem_types)?;
+            let println_ref = *self.func_refs.get("@_println").ok_or("println not found")?;
+            self.builder.ins().call(println_ref, &[]);
+            return Ok(self.builder.ins().iconst(types::I64, 0));
+        }
+
         let func_name = self.get_print_func_name(&inferred_type);
 
-        let func_ref = *self.func_refs.get(func_name)
+        let func_ref = *self
+            .func_refs
+            .get(func_name)
             .ok_or_else(|| format!("{} not found", func_name))?;
         self.builder.ins().call(func_ref, &[val]);
         Ok(self.builder.ins().iconst(types::I64, 0))
+    }
+
+    fn compile_print_tuple_inline(
+        &mut self,
+        tuple_val: Value,
+        elem_types: &[BolideType],
+    ) -> Result<(), String> {
+        let start_ref = *self
+            .func_refs
+            .get("@_print_tuple_start")
+            .ok_or("print_tuple_start not found")?;
+        self.builder.ins().call(start_ref, &[]);
+
+        let tuple_get = *self
+            .func_refs
+            .get("@_tuple_get")
+            .ok_or("tuple_get not found")?;
+        let separator_ref = *self
+            .func_refs
+            .get("@_print_tuple_separator")
+            .ok_or("print_tuple_separator not found")?;
+
+        for (i, elem_ty) in elem_types.iter().enumerate() {
+            if i > 0 {
+                self.builder.ins().call(separator_ref, &[]);
+            }
+            let idx = self.builder.ins().iconst(types::I64, i as i64);
+            let call = self.builder.ins().call(tuple_get, &[tuple_val, idx]);
+            let elem_val = self.builder.inst_results(call)[0];
+            self.compile_print_value_inline(elem_val, elem_ty)?;
+        }
+
+        let end_ref = *self
+            .func_refs
+            .get("@_print_tuple_end_inline")
+            .ok_or("print_tuple_end_inline not found")?;
+        self.builder.ins().call(end_ref, &[]);
+        Ok(())
+    }
+
+    fn compile_print_value_inline(&mut self, val: Value, ty: &BolideType) -> Result<(), String> {
+        if let BolideType::Tuple(elem_types) = ty {
+            return self.compile_print_tuple_inline(val, elem_types);
+        }
+
+        let func_name = match ty {
+            BolideType::Int => "@_print_int_inline",
+            BolideType::Float => "@_print_float_inline",
+            BolideType::Bool => "@_print_bool_inline",
+            BolideType::BigInt => "@_print_bigint_inline",
+            BolideType::Decimal => "@_print_decimal_inline",
+            BolideType::Str => "@_print_string_inline",
+            BolideType::Dynamic => "@_print_dynamic_inline",
+            BolideType::List(_) => "@_print_list",
+            BolideType::Dict(_, _) => "@_print_dict",
+            _ => "@_print_int_inline",
+        };
+        let func_ref = *self
+            .func_refs
+            .get(func_name)
+            .ok_or_else(|| format!("{} not found", func_name))?;
+        self.builder.ins().call(func_ref, &[val]);
+        Ok(())
     }
 
     /// 根据类型获取打印函数名
@@ -2903,23 +4012,27 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
 
         match arg_type {
             Some(BolideType::Int) => Ok(val),
-            Some(BolideType::Float) => {
-                Ok(self.builder.ins().fcvt_to_sint(types::I64, val))
-            }
+            Some(BolideType::Float) => Ok(self.builder.ins().fcvt_to_sint(types::I64, val)),
             Some(BolideType::Str) => {
-                let func_ref = *self.func_refs.get("@_string_to_int")
+                let func_ref = *self
+                    .func_refs
+                    .get("@_string_to_int")
                     .ok_or("string_to_int not found")?;
                 let call = self.builder.ins().call(func_ref, &[val]);
                 Ok(self.builder.inst_results(call)[0])
             }
             Some(BolideType::BigInt) => {
-                let func_ref = *self.func_refs.get("@_bigint_to_i64")
+                let func_ref = *self
+                    .func_refs
+                    .get("@_bigint_to_i64")
                     .ok_or("bigint_to_i64 not found")?;
                 let call = self.builder.ins().call(func_ref, &[val]);
                 Ok(self.builder.inst_results(call)[0])
             }
             Some(BolideType::Decimal) => {
-                let func_ref = *self.func_refs.get("@_decimal_to_i64")
+                let func_ref = *self
+                    .func_refs
+                    .get("@_decimal_to_i64")
                     .ok_or("decimal_to_i64 not found")?;
                 let call = self.builder.ins().call(func_ref, &[val]);
                 Ok(self.builder.inst_results(call)[0])
@@ -2938,17 +4051,19 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
 
         match arg_type {
             Some(BolideType::Float) => Ok(val),
-            Some(BolideType::Int) => {
-                Ok(self.builder.ins().fcvt_from_sint(types::F64, val))
-            }
+            Some(BolideType::Int) => Ok(self.builder.ins().fcvt_from_sint(types::F64, val)),
             Some(BolideType::Str) => {
-                let func_ref = *self.func_refs.get("@_string_to_float")
+                let func_ref = *self
+                    .func_refs
+                    .get("@_string_to_float")
                     .ok_or("string_to_float not found")?;
                 let call = self.builder.ins().call(func_ref, &[val]);
                 Ok(self.builder.inst_results(call)[0])
             }
             Some(BolideType::Decimal) => {
-                let func_ref = *self.func_refs.get("@_decimal_to_f64")
+                let func_ref = *self
+                    .func_refs
+                    .get("@_decimal_to_f64")
                     .ok_or("decimal_to_f64 not found")?;
                 let call = self.builder.ins().call(func_ref, &[val]);
                 Ok(self.builder.inst_results(call)[0])
@@ -2968,48 +4083,60 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         let val = match arg_type {
             Some(BolideType::Str) => Ok::<Value, String>(val),
             Some(BolideType::Int) => {
-                let func_ref = *self.func_refs.get("@_string_from_int")
+                let func_ref = *self
+                    .func_refs
+                    .get("@_string_from_int")
                     .ok_or("string_from_int not found")?;
                 let call = self.builder.ins().call(func_ref, &[val]);
                 Ok(self.builder.inst_results(call)[0])
             }
             Some(BolideType::Float) => {
-                let func_ref = *self.func_refs.get("@_string_from_float")
+                let func_ref = *self
+                    .func_refs
+                    .get("@_string_from_float")
                     .ok_or("string_from_float not found")?;
                 let call = self.builder.ins().call(func_ref, &[val]);
                 Ok(self.builder.inst_results(call)[0])
             }
             Some(BolideType::Bool) => {
-                let func_ref = *self.func_refs.get("@_string_from_bool")
+                let func_ref = *self
+                    .func_refs
+                    .get("@_string_from_bool")
                     .ok_or("string_from_bool not found")?;
                 let call = self.builder.ins().call(func_ref, &[val]);
                 Ok(self.builder.inst_results(call)[0])
             }
             Some(BolideType::BigInt) => {
-                let func_ref = *self.func_refs.get("@_string_from_bigint")
+                let func_ref = *self
+                    .func_refs
+                    .get("@_string_from_bigint")
                     .ok_or("string_from_bigint not found")?;
                 let call = self.builder.ins().call(func_ref, &[val]);
                 Ok(self.builder.inst_results(call)[0])
             }
             Some(BolideType::Decimal) => {
-                let func_ref = *self.func_refs.get("@_string_from_decimal")
+                let func_ref = *self
+                    .func_refs
+                    .get("@_string_from_decimal")
                     .ok_or("string_from_decimal not found")?;
                 let call = self.builder.ins().call(func_ref, &[val]);
                 Ok(self.builder.inst_results(call)[0])
             }
             _ => {
-                let func_ref = *self.func_refs.get("@_string_from_int")
+                let func_ref = *self
+                    .func_refs
+                    .get("@_string_from_int")
                     .ok_or("string_from_int not found")?;
                 let call = self.builder.ins().call(func_ref, &[val]);
                 Ok(self.builder.inst_results(call)[0])
             }
         }?;
-        
+
         // Track the new string if it's not the original string (which is borrowed/moved but not created new here, wait)
-        // If arg was Str, we returned val. val is borrowed/owned. 
+        // If arg was Str, we returned val. val is borrowed/owned.
         // str("abc") -> "abc" (no new string).
         // str(1) -> new string.
-        
+
         if !matches!(arg_type, Some(BolideType::Str)) {
             self.track_temp_rc_value(val, &BolideType::Str);
         }
@@ -3027,25 +4154,31 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         let val = match arg_type {
             Some(BolideType::BigInt) => Ok::<Value, String>(val),
             Some(BolideType::Int) => {
-                let func_ref = *self.func_refs.get("@_bigint_from_i64")
+                let func_ref = *self
+                    .func_refs
+                    .get("@_bigint_from_i64")
                     .ok_or("bigint_from_i64 not found")?;
                 let call = self.builder.ins().call(func_ref, &[val]);
                 Ok(self.builder.inst_results(call)[0])
             }
             Some(BolideType::Str) => {
-                let func_ref = *self.func_refs.get("@_bigint_from_str")
+                let func_ref = *self
+                    .func_refs
+                    .get("@_bigint_from_str")
                     .ok_or("bigint_from_str not found")?;
                 let call = self.builder.ins().call(func_ref, &[val]);
                 Ok(self.builder.inst_results(call)[0])
             }
             _ => {
-                let func_ref = *self.func_refs.get("@_bigint_from_i64")
+                let func_ref = *self
+                    .func_refs
+                    .get("@_bigint_from_i64")
                     .ok_or("bigint_from_i64 not found")?;
                 let call = self.builder.ins().call(func_ref, &[val]);
                 Ok(self.builder.inst_results(call)[0])
             }
         }?;
-        
+
         if !matches!(arg_type, Some(BolideType::BigInt)) {
             self.track_temp_rc_value(val, &BolideType::BigInt);
         }
@@ -3063,31 +4196,39 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         let val = match arg_type {
             Some(BolideType::Decimal) => Ok::<Value, String>(val),
             Some(BolideType::Int) => {
-                let func_ref = *self.func_refs.get("@_decimal_from_i64")
+                let func_ref = *self
+                    .func_refs
+                    .get("@_decimal_from_i64")
                     .ok_or("decimal_from_i64 not found")?;
                 let call = self.builder.ins().call(func_ref, &[val]);
                 Ok(self.builder.inst_results(call)[0])
             }
             Some(BolideType::Float) => {
-                let func_ref = *self.func_refs.get("@_decimal_from_f64")
+                let func_ref = *self
+                    .func_refs
+                    .get("@_decimal_from_f64")
                     .ok_or("decimal_from_f64 not found")?;
                 let call = self.builder.ins().call(func_ref, &[val]);
                 Ok(self.builder.inst_results(call)[0])
             }
             Some(BolideType::Str) => {
-                let func_ref = *self.func_refs.get("@_decimal_from_str")
+                let func_ref = *self
+                    .func_refs
+                    .get("@_decimal_from_str")
                     .ok_or("decimal_from_str not found")?;
                 let call = self.builder.ins().call(func_ref, &[val]);
                 Ok(self.builder.inst_results(call)[0])
             }
             _ => {
-                let func_ref = *self.func_refs.get("@_decimal_from_f64")
+                let func_ref = *self
+                    .func_refs
+                    .get("@_decimal_from_f64")
                     .ok_or("decimal_from_f64 not found")?;
                 let call = self.builder.ins().call(func_ref, &[val]);
                 Ok(self.builder.inst_results(call)[0])
             }
         }?;
-        
+
         if !matches!(arg_type, Some(BolideType::Decimal)) {
             self.track_temp_rc_value(val, &BolideType::Decimal);
         }
@@ -3097,15 +4238,16 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
     /// 编译 input() 函数
     fn compile_input(&mut self, args: &[Expr]) -> Result<Value, String> {
         if args.is_empty() {
-            let func_ref = *self.func_refs.get("@_input")
-                .ok_or("input not found")?;
+            let func_ref = *self.func_refs.get("@_input").ok_or("input not found")?;
             let call = self.builder.ins().call(func_ref, &[]);
             let result = self.builder.inst_results(call)[0];
             self.track_temp_rc_value(result, &BolideType::Str);
             Ok(result)
         } else if args.len() == 1 {
             let prompt = self.compile_expr(&args[0])?;
-            let func_ref = *self.func_refs.get("@_input_prompt")
+            let func_ref = *self
+                .func_refs
+                .get("@_input_prompt")
                 .ok_or("input_prompt not found")?;
             let call = self.builder.ins().call(func_ref, &[prompt]);
             let result = self.builder.inst_results(call)[0];
@@ -3137,14 +4279,20 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         let type_suffix = Self::spawn_type_suffix(&return_type);
         let result_type = match &return_type {
             Some(BolideType::Float) => types::F64,
-            Some(BolideType::Str) | Some(BolideType::BigInt) | Some(BolideType::Decimal)
-            | Some(BolideType::Dynamic) | Some(BolideType::Ptr)
-            | Some(BolideType::List(_)) | Some(BolideType::Custom(_)) => self.ptr_type,
+            Some(BolideType::Str)
+            | Some(BolideType::BigInt)
+            | Some(BolideType::Decimal)
+            | Some(BolideType::Dynamic)
+            | Some(BolideType::Ptr)
+            | Some(BolideType::List(_))
+            | Some(BolideType::Custom(_)) => self.ptr_type,
             _ => types::I64,
         };
 
         // 运行时判断 pool/thread 分支
-        let pool_is_active_ref = *self.func_refs.get("@_pool_is_active")
+        let pool_is_active_ref = *self
+            .func_refs
+            .get("@_pool_is_active")
             .ok_or("pool_is_active not found")?;
         let is_active_call = self.builder.ins().call(pool_is_active_ref, &[]);
         let is_active = self.builder.inst_results(is_active_call)[0];
@@ -3154,13 +4302,17 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         let merge_block = self.builder.create_block();
         self.builder.append_block_param(merge_block, result_type);
 
-        self.builder.ins().brif(is_active, pool_block, &[], thread_block, &[]);
+        self.builder
+            .ins()
+            .brif(is_active, pool_block, &[], thread_block, &[]);
 
         // 线程池分支
         self.builder.switch_to_block(pool_block);
         self.builder.seal_block(pool_block);
         let pool_join_name = format!("@_pool_join{}", type_suffix);
-        let pool_join_ref = *self.func_refs.get(&pool_join_name)
+        let pool_join_ref = *self
+            .func_refs
+            .get(&pool_join_name)
             .ok_or_else(|| format!("{} not found", pool_join_name))?;
         let pool_call = self.builder.ins().call(pool_join_ref, &[handle]);
         let pool_result = self.builder.inst_results(pool_call)[0];
@@ -3170,7 +4322,9 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         self.builder.switch_to_block(thread_block);
         self.builder.seal_block(thread_block);
         let thread_join_name = format!("@_thread_join{}", type_suffix);
-        let thread_join_ref = *self.func_refs.get(&thread_join_name)
+        let thread_join_ref = *self
+            .func_refs
+            .get(&thread_join_name)
             .ok_or_else(|| format!("{} not found", thread_join_name))?;
         let thread_call = self.builder.ins().call(thread_join_ref, &[handle]);
         let thread_result = self.builder.inst_results(thread_call)[0];
@@ -3193,14 +4347,18 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
 
     /// 编译 channel() 函数
     fn compile_channel_create(&mut self, args: &[Expr]) -> Result<Value, String> {
-        let func_ref = *self.func_refs.get("@_channel_create")
+        let func_ref = *self
+            .func_refs
+            .get("@_channel_create")
             .ok_or("channel_create not found")?;
         if args.is_empty() {
             let call = self.builder.ins().call(func_ref, &[]);
             Ok(self.builder.inst_results(call)[0])
         } else if args.len() == 1 {
             let size = self.compile_expr(&args[0])?;
-            let buffered_ref = *self.func_refs.get("@_channel_create_buffered")
+            let buffered_ref = *self
+                .func_refs
+                .get("@_channel_create_buffered")
                 .ok_or("channel_create_buffered not found")?;
             let call = self.builder.ins().call(buffered_ref, &[size]);
             Ok(self.builder.inst_results(call)[0])
@@ -3212,6 +4370,7 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
     /// 编译索引访问
     fn compile_index(&mut self, base: &Expr, index: &Expr) -> Result<Value, String> {
         let base_type = self.infer_expr_type(base);
+        let index_type = self.infer_expr_type(index);
         let base_val = self.compile_expr(base)?;
         let index_val = self.compile_expr(index)?;
 
@@ -3219,10 +4378,15 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         // 根据类型选择不同的索引函数
         match base_type {
             Some(BolideType::List(ref elem_ty)) => {
-                if matches!(elem_ty.as_ref(), BolideType::Int | BolideType::Float | BolideType::Bool) {
+                if matches!(
+                    elem_ty.as_ref(),
+                    BolideType::Int | BolideType::Float | BolideType::Bool
+                ) {
                     return self.emit_list_get_inline(base_val, index_val, elem_ty.as_ref());
                 }
-                let func_ref = *self.func_refs.get("@_list_get")
+                let func_ref = *self
+                    .func_refs
+                    .get("@_list_get")
                     .ok_or("list_get not found")?;
                 let call = self.builder.ins().call(func_ref, &[base_val, index_val]);
                 let val = self.builder.inst_results(call)[0];
@@ -3230,15 +4394,25 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
                 // 调用方若需要独立所有权，compile_var_decl 会 clone
                 Ok(val)
             }
-            Some(BolideType::Dict(_, _)) => {
+            Some(BolideType::Dict(key_ty, _)) => {
+                if !Self::dict_key_type_accepts(key_ty.as_ref(), index_type.as_ref()) {
+                    return Err(format!(
+                        "Dict key type mismatch: expected {:?}, got {:?}",
+                        key_ty, index_type
+                    ));
+                }
                 // dict_get 返回 i64 标签值（可能是整数或指针），与 JIT 一致，不 retain
-                let func_ref = *self.func_refs.get("@_dict_get")
+                let func_ref = *self
+                    .func_refs
+                    .get("@_dict_get")
                     .ok_or("dict_get not found")?;
                 let call = self.builder.ins().call(func_ref, &[base_val, index_val]);
                 Ok(self.builder.inst_results(call)[0])
             }
             Some(BolideType::Tuple(_inner_types)) => {
-                let func_ref = *self.func_refs.get("@_tuple_get")
+                let func_ref = *self
+                    .func_refs
+                    .get("@_tuple_get")
                     .ok_or("tuple_get not found")?;
                 let call = self.builder.ins().call(func_ref, &[base_val, index_val]);
                 let val = self.builder.inst_results(call)[0];
@@ -3247,11 +4421,13 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             }
             _ => {
                 // If type unknown, assume tuple or dynamic
-                let func_ref = *self.func_refs.get("@_tuple_get")
+                let func_ref = *self
+                    .func_refs
+                    .get("@_tuple_get")
                     .ok_or("tuple_get not found")?;
                 let call = self.builder.ins().call(func_ref, &[base_val, index_val]);
                 let val = self.builder.inst_results(call)[0];
-                
+
                 // Without type info, we can't safely retain.
                 // This might be a limitation for untyped/dynamic code.
                 Ok(val)
@@ -3259,24 +4435,45 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         }
     }
 
+    fn dict_key_type_accepts(expected: &BolideType, actual: Option<&BolideType>) -> bool {
+        matches!(expected, BolideType::Dynamic) || actual.is_some_and(|actual| expected == actual)
+    }
+
     // ==================== List 内联索引（Int/Float/Bool） ====================
     const LIST_DATA_OFFSET: i64 = 16;
     const LIST_LEN_OFFSET: i64 = 24;
 
-    fn emit_list_get_inline(&mut self, list_ptr: Value, index: Value, elem_ty: &BolideType) -> Result<Value, String> {
+    fn emit_list_get_inline(
+        &mut self,
+        list_ptr: Value,
+        index: Value,
+        elem_ty: &BolideType,
+    ) -> Result<Value, String> {
         let (elem_byte_width, load_ty) = if matches!(elem_ty, BolideType::Bool) {
             (1, types::I8)
         } else {
             (8, types::I64)
         };
         let len_ptr = self.builder.ins().iadd_imm(list_ptr, Self::LIST_LEN_OFFSET);
-        let len = self.builder.ins().load(types::I64, MemFlags::new(), len_ptr, 0);
+        let len = self
+            .builder
+            .ins()
+            .load(types::I64, MemFlags::new(), len_ptr, 0);
         let in_bounds = self.builder.ins().icmp(IntCC::UnsignedLessThan, index, len);
-        let data_ptr_addr = self.builder.ins().iadd_imm(list_ptr, Self::LIST_DATA_OFFSET);
-        let data_ptr = self.builder.ins().load(self.ptr_type, MemFlags::new(), data_ptr_addr, 0);
+        let data_ptr_addr = self
+            .builder
+            .ins()
+            .iadd_imm(list_ptr, Self::LIST_DATA_OFFSET);
+        let data_ptr = self
+            .builder
+            .ins()
+            .load(self.ptr_type, MemFlags::new(), data_ptr_addr, 0);
         let offset = self.builder.ins().imul_imm(index, elem_byte_width);
         let elem_addr = self.builder.ins().iadd(data_ptr, offset);
-        let loaded = self.builder.ins().load(load_ty, MemFlags::new(), elem_addr, 0);
+        let loaded = self
+            .builder
+            .ins()
+            .load(load_ty, MemFlags::new(), elem_addr, 0);
         let value = if load_ty == types::I8 {
             self.builder.ins().uextend(types::I64, loaded)
         } else {
@@ -3287,7 +4484,11 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
     }
 
     fn emit_list_set_inline(
-        &mut self, list_ptr: Value, index: Value, value: Value, elem_ty: &BolideType,
+        &mut self,
+        list_ptr: Value,
+        index: Value,
+        value: Value,
+        elem_ty: &BolideType,
     ) -> Result<(), String> {
         let (elem_byte_width, store_ty) = if matches!(elem_ty, BolideType::Bool) {
             (1, types::I8)
@@ -3295,9 +4496,18 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             (8, types::I64)
         };
         let len_ptr = self.builder.ins().iadd_imm(list_ptr, Self::LIST_LEN_OFFSET);
-        let _len = self.builder.ins().load(types::I64, MemFlags::new(), len_ptr, 0);
-        let data_ptr_addr = self.builder.ins().iadd_imm(list_ptr, Self::LIST_DATA_OFFSET);
-        let data_ptr = self.builder.ins().load(self.ptr_type, MemFlags::new(), data_ptr_addr, 0);
+        let _len = self
+            .builder
+            .ins()
+            .load(types::I64, MemFlags::new(), len_ptr, 0);
+        let data_ptr_addr = self
+            .builder
+            .ins()
+            .iadd_imm(list_ptr, Self::LIST_DATA_OFFSET);
+        let data_ptr = self
+            .builder
+            .ins()
+            .load(self.ptr_type, MemFlags::new(), data_ptr_addr, 0);
         let offset = self.builder.ins().imul_imm(index, elem_byte_width);
         let elem_addr = self.builder.ins().iadd(data_ptr, offset);
         // 窄存储时必须 ireduce，否则 store 按 value 类型宽度写出
@@ -3306,7 +4516,9 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         } else {
             value
         };
-        self.builder.ins().store(MemFlags::new(), store_val, elem_addr, 0);
+        self.builder
+            .ins()
+            .store(MemFlags::new(), store_val, elem_addr, 0);
         Ok(())
     }
 
@@ -3336,7 +4548,7 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             }
             _ => None,
         };
-        
+
         if let Some(class_name) = class_name {
             // 类成员访问
             if let Some(class_info) = self.classes.get(&class_name).cloned() {
@@ -3344,18 +4556,19 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
                     if field.name == member {
                         let offset = field.offset as i32;
                         let field_ty = self.bolide_type_to_cranelift(&field.ty);
-                        let val = self.builder.ins().load(
-                            field_ty,
-                            MemFlags::new(),
-                            base_val,
-                            offset,
-                        );
+                        let val =
+                            self.builder
+                                .ins()
+                                .load(field_ty, MemFlags::new(), base_val, offset);
                         // 返回借用引用，不 clone（对齐 JIT）
                         // 调用方若需要独立所有权，compile_var_decl 会 clone
                         return Ok(val);
                     }
                 }
-                return Err(format!("Field '{}' not found in class '{}'", member, class_name));
+                return Err(format!(
+                    "Field '{}' not found in class '{}'",
+                    member, class_name
+                ));
             }
         }
 
@@ -3385,20 +4598,29 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
                 let (k_type, v_type) = if entries.is_empty() {
                     (BolideType::Dynamic, BolideType::Dynamic)
                 } else {
-                    let mut k_ty = self.infer_expr_type(&entries[0].0).unwrap_or(BolideType::Dynamic);
-                    let mut v_ty = self.infer_expr_type(&entries[0].1).unwrap_or(BolideType::Dynamic);
+                    let mut k_ty = self
+                        .infer_expr_type(&entries[0].0)
+                        .unwrap_or(BolideType::Dynamic);
+                    let mut v_ty = self
+                        .infer_expr_type(&entries[0].1)
+                        .unwrap_or(BolideType::Dynamic);
                     for (k, v) in entries.iter().skip(1) {
                         let next_k = self.infer_expr_type(k).unwrap_or(BolideType::Dynamic);
-                        if k_ty != next_k { k_ty = BolideType::Dynamic; }
+                        if k_ty != next_k {
+                            k_ty = BolideType::Dynamic;
+                        }
                         let next_v = self.infer_expr_type(v).unwrap_or(BolideType::Dynamic);
-                        if v_ty != next_v { v_ty = BolideType::Dynamic; }
+                        if v_ty != next_v {
+                            v_ty = BolideType::Dynamic;
+                        }
                     }
                     (k_ty, v_ty)
                 };
                 Some(BolideType::Dict(Box::new(k_type), Box::new(v_type)))
             }
             Expr::Tuple(exprs) => {
-                let elem_types: Vec<BolideType> = exprs.iter()
+                let elem_types: Vec<BolideType> = exprs
+                    .iter()
                     .map(|e| self.infer_expr_type(e).unwrap_or(BolideType::Dynamic))
                     .collect();
                 Some(BolideType::Tuple(elem_types))
@@ -3430,14 +4652,15 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
                         "input" => Some(BolideType::Str),
                         _ => {
                             // Check user-defined function return types
-                            self.func_return_types.get(name.as_str()).cloned().flatten()
+                            self.func_return_types
+                                .get(name.as_str())
+                                .cloned()
+                                .flatten()
                                 .or_else(|| {
                                     // Check function variables with FuncSig type (indirect calls)
-                                    self.var_types.get(name.as_str()).and_then(|vt| {
-                                        match vt {
-                                            BolideType::FuncSig(_, ret) => ret.clone().map(|b| *b),
-                                            _ => None,
-                                        }
+                                    self.var_types.get(name.as_str()).and_then(|vt| match vt {
+                                        BolideType::FuncSig(_, ret) => ret.clone().map(|b| *b),
+                                        _ => None,
                                     })
                                 })
                                 .or_else(|| {
@@ -3445,7 +4668,11 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
                                     self.extern_funcs.get(name.as_str()).and_then(|(_, ef)| {
                                         ef.return_type.as_ref().map(|ct| match ct {
                                             CType::Float | CType::Double => BolideType::Float,
-                                            CType::Ptr(inner) if matches!(inner.as_ref(), CType::Char) => BolideType::Str,
+                                            CType::Ptr(inner)
+                                                if matches!(inner.as_ref(), CType::Char) =>
+                                            {
+                                                BolideType::Str
+                                            }
                                             _ => BolideType::Int,
                                         })
                                     })
@@ -3460,31 +4687,37 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
                 let left_ty = self.infer_expr_type(left);
                 let right_ty = self.infer_expr_type(right);
                 match (&left_ty, &right_ty) {
-                    (Some(BolideType::Str), Some(BolideType::Str)) => {
-                        match op {
-                            BinOp::Add => Some(BolideType::Str),
-                            BinOp::Eq | BinOp::Ne => Some(BolideType::Bool),
-                            _ => Some(BolideType::Int),
-                        }
-                    }
-                    (Some(BolideType::BigInt), _) | (_, Some(BolideType::BigInt)) => {
-                        match op {
-                            BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => Some(BolideType::Bool),
-                            _ => Some(BolideType::BigInt),
-                        }
-                    }
-                    (Some(BolideType::Decimal), _) | (_, Some(BolideType::Decimal)) => {
-                        match op {
-                            BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => Some(BolideType::Bool),
-                            _ => Some(BolideType::Decimal),
-                        }
-                    }
-                    (Some(BolideType::Float), _) | (_, Some(BolideType::Float)) => Some(BolideType::Float),
-                    _ => match op {
-                        BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge
-                        | BinOp::And | BinOp::Or => Some(BolideType::Bool),
+                    (Some(BolideType::Str), Some(BolideType::Str)) => match op {
+                        BinOp::Add => Some(BolideType::Str),
+                        BinOp::Eq | BinOp::Ne => Some(BolideType::Bool),
                         _ => Some(BolideType::Int),
+                    },
+                    (Some(BolideType::BigInt), _) | (_, Some(BolideType::BigInt)) => match op {
+                        BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
+                            Some(BolideType::Bool)
+                        }
+                        _ => Some(BolideType::BigInt),
+                    },
+                    (Some(BolideType::Decimal), _) | (_, Some(BolideType::Decimal)) => match op {
+                        BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
+                            Some(BolideType::Bool)
+                        }
+                        _ => Some(BolideType::Decimal),
+                    },
+                    (Some(BolideType::Float), _) | (_, Some(BolideType::Float)) => {
+                        Some(BolideType::Float)
                     }
+                    _ => match op {
+                        BinOp::Eq
+                        | BinOp::Ne
+                        | BinOp::Lt
+                        | BinOp::Le
+                        | BinOp::Gt
+                        | BinOp::Ge
+                        | BinOp::And
+                        | BinOp::Or => Some(BolideType::Bool),
+                        _ => Some(BolideType::Int),
+                    },
                 }
             }
             Expr::None => None,
@@ -3521,9 +4754,8 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             }
             Expr::Await(inner) => Some(self.infer_awaited_type(inner)),
             Expr::AwaitAll(exprs) => {
-                let elem_types: Vec<BolideType> = exprs.iter()
-                    .map(|e| self.infer_awaited_type(e))
-                    .collect();
+                let elem_types: Vec<BolideType> =
+                    exprs.iter().map(|e| self.infer_awaited_type(e)).collect();
                 Some(BolideType::Tuple(elem_types))
             }
             _ => None,
@@ -3535,7 +4767,9 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         match expr {
             Expr::Call(callee, _) => {
                 if let Expr::Ident(func_name) = callee.as_ref() {
-                    return self.func_return_types.get(func_name)
+                    return self
+                        .func_return_types
+                        .get(func_name)
                         .cloned()
                         .flatten()
                         .unwrap_or(BolideType::Int);
@@ -3544,19 +4778,21 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             }
             Expr::Ident(var_name) => {
                 if let Some(func_name) = self.spawn_func_map.get(var_name) {
-                    return self.func_return_types.get(func_name)
+                    return self
+                        .func_return_types
+                        .get(func_name)
                         .cloned()
                         .flatten()
                         .unwrap_or(BolideType::Int);
                 }
                 BolideType::Int
             }
-            Expr::Spawn(func_name, _) => {
-                self.func_return_types.get(func_name)
-                    .cloned()
-                    .flatten()
-                    .unwrap_or(BolideType::Int)
-            }
+            Expr::Spawn(func_name, _) => self
+                .func_return_types
+                .get(func_name)
+                .cloned()
+                .flatten()
+                .unwrap_or(BolideType::Int),
             _ => BolideType::Int,
         }
     }
@@ -3566,7 +4802,11 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         self.compile_list_with_hint(items, None)
     }
 
-    fn compile_list_with_hint(&mut self, items: &[Expr], hint: Option<&BolideType>) -> Result<Value, String> {
+    fn compile_list_with_hint(
+        &mut self,
+        items: &[Expr],
+        hint: Option<&BolideType>,
+    ) -> Result<Value, String> {
         // 确定元素类型：优先用标注，否则从元素推断（空列表默认 int）
         let elem_tag: u8 = if let Some(BolideType::List(inner)) = hint {
             match inner.as_ref() {
@@ -3595,13 +4835,17 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             }
         };
 
-        let func_ref = *self.func_refs.get("@_list_new")
+        let func_ref = *self
+            .func_refs
+            .get("@_list_new")
             .ok_or("list_new not found")?;
         let elem_type = self.builder.ins().iconst(types::I8, elem_tag as i64);
         let call = self.builder.ins().call(func_ref, &[elem_type]);
         let list_ptr = self.builder.inst_results(call)[0];
 
-        let push_ref = *self.func_refs.get("@_list_push")
+        let push_ref = *self
+            .func_refs
+            .get("@_list_push")
             .ok_or("list_push not found")?;
         for item in items {
             let val = self.compile_expr(item)?;
@@ -3621,13 +4865,17 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         }
         let tuple_type = BolideType::Tuple(elem_types);
 
-        let func_ref = *self.func_refs.get("@_tuple_new")
+        let func_ref = *self
+            .func_refs
+            .get("@_tuple_new")
             .ok_or("tuple_new not found")?;
         let len = self.builder.ins().iconst(types::I64, items.len() as i64);
         let call = self.builder.ins().call(func_ref, &[len]);
         let tuple_ptr = self.builder.inst_results(call)[0];
 
-        let set_ref = *self.func_refs.get("@_tuple_set")
+        let set_ref = *self
+            .func_refs
+            .get("@_tuple_set")
             .ok_or("tuple_set not found")?;
         for (i, item) in items.iter().enumerate() {
             let val = self.compile_expr(item)?;
@@ -3645,7 +4893,9 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
                 val
             };
             let idx = self.builder.ins().iconst(types::I64, i as i64);
-            self.builder.ins().call(set_ref, &[tuple_ptr, idx, val_to_store]);
+            self.builder
+                .ins()
+                .call(set_ref, &[tuple_ptr, idx, val_to_store]);
         }
 
         // 标记 Tuple 本身为临时 RC 值（对齐 JIT）
@@ -3658,25 +4908,40 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         let (key_type_tag, val_type_tag) = if entries.is_empty() {
             (0u8, 0u8)
         } else {
-            let mut k_final_ty = self.infer_expr_type(&entries[0].0).unwrap_or(BolideType::Dynamic);
-            let mut v_final_ty = self.infer_expr_type(&entries[0].1).unwrap_or(BolideType::Dynamic);
+            let mut k_final_ty = self
+                .infer_expr_type(&entries[0].0)
+                .unwrap_or(BolideType::Dynamic);
+            let mut v_final_ty = self
+                .infer_expr_type(&entries[0].1)
+                .unwrap_or(BolideType::Dynamic);
             for (k, v) in entries.iter().skip(1) {
                 let next_k = self.infer_expr_type(k).unwrap_or(BolideType::Dynamic);
-                if k_final_ty != next_k { k_final_ty = BolideType::Dynamic; }
+                if k_final_ty != next_k {
+                    k_final_ty = BolideType::Dynamic;
+                }
                 let next_v = self.infer_expr_type(v).unwrap_or(BolideType::Dynamic);
-                if v_final_ty != next_v { v_final_ty = BolideType::Dynamic; }
+                if v_final_ty != next_v {
+                    v_final_ty = BolideType::Dynamic;
+                }
             }
-            (Self::bolide_type_to_element_tag(&k_final_ty), Self::bolide_type_to_element_tag(&v_final_ty))
+            (
+                Self::bolide_type_to_element_tag(&k_final_ty),
+                Self::bolide_type_to_element_tag(&v_final_ty),
+            )
         };
 
-        let func_ref = *self.func_refs.get("@_dict_new")
+        let func_ref = *self
+            .func_refs
+            .get("@_dict_new")
             .ok_or("dict_new not found")?;
         let key_type = self.builder.ins().iconst(types::I8, key_type_tag as i64);
         let val_type = self.builder.ins().iconst(types::I8, val_type_tag as i64);
         let call = self.builder.ins().call(func_ref, &[key_type, val_type]);
         let dict_ptr = self.builder.inst_results(call)[0];
 
-        let set_ref = *self.func_refs.get("@_dict_set")
+        let set_ref = *self
+            .func_refs
+            .get("@_dict_set")
             .ok_or("dict_set not found")?;
         for (key, value) in entries {
             let mut k = self.compile_expr(key)?;
@@ -3730,7 +4995,9 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             BolideType::Dynamic => return Ok(val),
             _ => return Err(format!("Cannot convert {:?} to dynamic", ty)),
         };
-        let func = *self.func_refs.get(func_name)
+        let func = *self
+            .func_refs
+            .get(func_name)
             .ok_or_else(|| format!("{} not found", func_name))?;
         let call = self.builder.ins().call(func, &[val]);
         let res = self.builder.inst_results(call)[0];
@@ -3742,9 +5009,13 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
     fn spawn_type_suffix(ret: &Option<BolideType>) -> &'static str {
         match ret {
             Some(BolideType::Float) => "_float",
-            Some(BolideType::Str) | Some(BolideType::BigInt) | Some(BolideType::Decimal)
-            | Some(BolideType::Dynamic) | Some(BolideType::Ptr)
-            | Some(BolideType::List(_)) | Some(BolideType::Custom(_)) => "_ptr",
+            Some(BolideType::Str)
+            | Some(BolideType::BigInt)
+            | Some(BolideType::Decimal)
+            | Some(BolideType::Dynamic)
+            | Some(BolideType::Ptr)
+            | Some(BolideType::List(_))
+            | Some(BolideType::Custom(_)) => "_ptr",
             _ => "_int",
         }
     }
@@ -3756,7 +5027,9 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
 
         // 计算函数地址与 env 指针
         let (func_addr, env_ptr) = if args.is_empty() {
-            let target_ref = *self.func_refs.get(name)
+            let target_ref = *self
+                .func_refs
+                .get(name)
                 .ok_or_else(|| format!("Undefined function: {}", name))?;
             let func_addr = self.builder.ins().func_addr(self.ptr_type, target_ref);
             let null_env = self.builder.ins().iconst(self.ptr_type, 0);
@@ -3764,7 +5037,9 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         } else {
             // 有参数：分配 env，存入参数，使用 trampoline
             let env_size = (args.len() * 8) as i64;
-            let alloc_ref = *self.func_refs.get("@_bolide_alloc")
+            let alloc_ref = *self
+                .func_refs
+                .get("@_bolide_alloc")
                 .ok_or("bolide_alloc not found")?;
             let size_val = self.builder.ins().iconst(types::I64, env_size);
             let call = self.builder.ins().call(alloc_ref, &[size_val]);
@@ -3786,18 +5061,24 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
                     }
                     None => val,
                 };
-                self.builder.ins().store(MemFlags::trusted(), val_to_store, env_ptr, offset);
+                self.builder
+                    .ins()
+                    .store(MemFlags::trusted(), val_to_store, env_ptr, offset);
             }
 
             let trampoline_name = self.get_trampoline_name(name);
-            let trampoline_ref = *self.func_refs.get(&trampoline_name)
+            let trampoline_ref = *self
+                .func_refs
+                .get(&trampoline_name)
                 .ok_or_else(|| format!("Trampoline not found: {}", trampoline_name))?;
             let func_addr = self.builder.ins().func_addr(self.ptr_type, trampoline_ref);
             (func_addr, env_ptr)
         };
 
         // 运行时判断是否处于线程池上下文
-        let pool_is_active_ref = *self.func_refs.get("@_pool_is_active")
+        let pool_is_active_ref = *self
+            .func_refs
+            .get("@_pool_is_active")
             .ok_or("pool_is_active not found")?;
         let is_active_call = self.builder.ins().call(pool_is_active_ref, &[]);
         let is_active = self.builder.inst_results(is_active_call)[0];
@@ -3807,7 +5088,9 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         let merge_block = self.builder.create_block();
         self.builder.append_block_param(merge_block, self.ptr_type);
 
-        self.builder.ins().brif(is_active, pool_block, &[], thread_block, &[]);
+        self.builder
+            .ins()
+            .brif(is_active, pool_block, &[], thread_block, &[]);
 
         let spawn_suffix = if args.is_empty() {
             type_suffix.to_string()
@@ -3819,12 +5102,16 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         self.builder.switch_to_block(pool_block);
         self.builder.seal_block(pool_block);
         let pool_spawn_name = format!("@_pool_spawn{}", spawn_suffix);
-        let pool_spawn_ref = *self.func_refs.get(&pool_spawn_name)
+        let pool_spawn_ref = *self
+            .func_refs
+            .get(&pool_spawn_name)
             .ok_or_else(|| format!("{} not found", pool_spawn_name))?;
         let pool_call = if args.is_empty() {
             self.builder.ins().call(pool_spawn_ref, &[func_addr])
         } else {
-            self.builder.ins().call(pool_spawn_ref, &[func_addr, env_ptr])
+            self.builder
+                .ins()
+                .call(pool_spawn_ref, &[func_addr, env_ptr])
         };
         let pool_handle = self.builder.inst_results(pool_call)[0];
         self.builder.ins().jump(merge_block, &[pool_handle]);
@@ -3833,12 +5120,16 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         self.builder.switch_to_block(thread_block);
         self.builder.seal_block(thread_block);
         let thread_spawn_name = format!("@_thread_spawn{}", spawn_suffix);
-        let thread_spawn_ref = *self.func_refs.get(&thread_spawn_name)
+        let thread_spawn_ref = *self
+            .func_refs
+            .get(&thread_spawn_name)
             .ok_or_else(|| format!("{} not found", thread_spawn_name))?;
         let thread_call = if args.is_empty() {
             self.builder.ins().call(thread_spawn_ref, &[func_addr])
         } else {
-            self.builder.ins().call(thread_spawn_ref, &[func_addr, env_ptr])
+            self.builder
+                .ins()
+                .call(thread_spawn_ref, &[func_addr, env_ptr])
         };
         let thread_handle = self.builder.inst_results(thread_call)[0];
         self.builder.ins().jump(merge_block, &[thread_handle]);
@@ -3867,12 +5158,17 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
 
         let await_func_name = match &expr_type {
             BolideType::Float => "@_coroutine_await_float",
-            BolideType::Str | BolideType::BigInt | BolideType::Decimal
-            | BolideType::List(_) | BolideType::Custom(_) => "@_coroutine_await_ptr",
+            BolideType::Str
+            | BolideType::BigInt
+            | BolideType::Decimal
+            | BolideType::List(_)
+            | BolideType::Custom(_) => "@_coroutine_await_ptr",
             _ => "@_coroutine_await_int",
         };
 
-        let func_ref = *self.func_refs.get(await_func_name)
+        let func_ref = *self
+            .func_refs
+            .get(await_func_name)
             .ok_or_else(|| format!("{} not found", await_func_name))?;
         let call = self.builder.ins().call(func_ref, &[future]);
         let result = self.builder.inst_results(call)[0];
@@ -3894,7 +5190,9 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         } else {
             return Err(format!("Channel not found: {}", channel_name));
         };
-        let func_ref = *self.func_refs.get("@_channel_recv")
+        let func_ref = *self
+            .func_refs
+            .get("@_channel_recv")
             .ok_or("channel_recv not found")?;
         let call = self.builder.ins().call(func_ref, &[ch]);
         Ok(self.builder.inst_results(call)[0])
@@ -3915,12 +5213,17 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             let expr_type = self.infer_expr_type(&exprs[i]);
             let await_func_name = match &expr_type {
                 Some(BolideType::Float) => "@_coroutine_await_float",
-                Some(BolideType::Str) | Some(BolideType::BigInt) | Some(BolideType::Decimal)
-                | Some(BolideType::List(_)) | Some(BolideType::Custom(_)) => "@_coroutine_await_ptr",
+                Some(BolideType::Str)
+                | Some(BolideType::BigInt)
+                | Some(BolideType::Decimal)
+                | Some(BolideType::List(_))
+                | Some(BolideType::Custom(_)) => "@_coroutine_await_ptr",
                 _ => "@_coroutine_await_int",
             };
 
-            let await_ref = *self.func_refs.get(await_func_name)
+            let await_ref = *self
+                .func_refs
+                .get(await_func_name)
                 .ok_or_else(|| format!("{} not found", await_func_name))?;
 
             let call = self.builder.ins().call(await_ref, &[*future_ptr]);
@@ -3935,17 +5238,23 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             Ok(results[0])
         } else {
             // 使用运行时元组存储所有结果
-            let tuple_new = *self.func_refs.get("@_tuple_new")
+            let tuple_new = *self
+                .func_refs
+                .get("@_tuple_new")
                 .ok_or("tuple_new not found")?;
             let len = self.builder.ins().iconst(types::I64, results.len() as i64);
             let call = self.builder.ins().call(tuple_new, &[len]);
             let tuple_ptr = self.builder.inst_results(call)[0];
 
-            let tuple_set = *self.func_refs.get("@_tuple_set")
+            let tuple_set = *self
+                .func_refs
+                .get("@_tuple_set")
                 .ok_or("tuple_set not found")?;
             for (i, result) in results.iter().enumerate() {
                 let idx = self.builder.ins().iconst(types::I64, i as i64);
-                self.builder.ins().call(tuple_set, &[tuple_ptr, idx, *result]);
+                self.builder
+                    .ins()
+                    .call(tuple_set, &[tuple_ptr, idx, *result]);
             }
 
             Ok(tuple_ptr)
@@ -3985,8 +5294,8 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
                 false
             }
             Statement::Break => {
-                let (_, break_block, scope_base) = *self.loop_stack.last()
-                    .ok_or("'break' outside of a loop")?;
+                let (_, break_block, scope_base) =
+                    *self.loop_stack.last().ok_or("'break' outside of a loop")?;
                 // 跳出前释放临时值与循环作用域内已声明的 RC 变量
                 self.release_temp_rc_values();
                 self.emit_scope_releases_from(scope_base);
@@ -3994,15 +5303,105 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
                 true
             }
             Statement::Continue => {
-                let (continue_block, _, scope_base) = *self.loop_stack.last()
+                let (continue_block, _, scope_base) = *self
+                    .loop_stack
+                    .last()
                     .ok_or("'continue' outside of a loop")?;
                 self.release_temp_rc_values();
                 self.emit_scope_releases_from(scope_base);
                 self.builder.ins().jump(continue_block, &[]);
                 true
             }
-            Statement::Import(_) | Statement::ExternBlock(_) | Statement::FuncDef(_) | Statement::ClassDef(_) => {
-                // 这些语句在顶层处理，函数体内忽略
+            Statement::Throw(expr) => {
+                // 计算异常值，存入 thread-local，然后直接跳转到最近的 catch 落点。
+                // 无 setjmp/longjmp：异常值经内存传递，控制流是普通分支，SSA 安全。
+                let val = self.compile_expr(expr)?;
+                let set_fn = *self.func_refs.get("@_exception_set")
+                    .ok_or("exception_set not found")?;
+                self.builder.ins().call(set_fn, &[val]);
+
+                if let Some(&catch_block) = self.catch_stack.last() {
+                    self.builder.ins().jump(catch_block, &[]);
+                } else {
+                    let uncaught_fn = *self.func_refs.get("@_throw_uncaught")
+                        .ok_or("throw_uncaught not found")?;
+                    self.builder.ins().call(uncaught_fn, &[val]);
+                    self.builder.ins().trap(TrapCode::unwrap_user(1));
+                }
+                true
+            }
+            Statement::Try(try_stmt) => {
+                let catch_clauses = try_stmt.catch_clauses.clone();
+                let try_body = try_stmt.try_body.clone();
+                let ptr_type = self.ptr_type;
+
+                let catch_block = self.builder.create_block();
+                let after_try = self.builder.create_block();
+
+                // 1. Try body —— 期间将 catch_block 压栈，使内部 throw 跳到这里
+                self.catch_stack.push(catch_block);
+                let mut try_diverted = false;
+                for s in &try_body {
+                    if try_diverted { break; }
+                    try_diverted = self.compile_stmt(s)?;
+                }
+                self.catch_stack.pop();
+                if !try_diverted {
+                    self.builder.ins().jump(after_try, &[]);
+                }
+
+                // 2. Catch block
+                self.builder.switch_to_block(catch_block);
+                self.builder.seal_block(catch_block);
+
+                let ex_get_fn = *self.func_refs.get("@_exception_get")
+                    .ok_or("exception_get not found")?;
+                let ex_call = self.builder.ins().call(ex_get_fn, &[]);
+                let ex_ptr = self.builder.inst_results(ex_call)[0];
+
+                let mut catch_diverted = false;
+                if let Some(first_catch) = catch_clauses.first() {
+                    let catch_var = self.declare_variable(&first_catch.var, ptr_type);
+                    self.builder.def_var(catch_var, ex_ptr);
+                    self.var_types.insert(first_catch.var.clone(), BolideType::Ptr);
+
+                    for s in &first_catch.body {
+                        if catch_diverted { break; }
+                        catch_diverted = self.compile_stmt(s)?;
+                    }
+                } else {
+                    // 无 catch 子句：重新抛出（跳到外层 catch 或未捕获）
+                    if let Some(&outer_catch) = self.catch_stack.last() {
+                        let set_fn = *self.func_refs.get("@_exception_set")
+                            .ok_or("exception_set not found")?;
+                        self.builder.ins().call(set_fn, &[ex_ptr]);
+                        self.builder.ins().jump(outer_catch, &[]);
+                    } else {
+                        let uncaught_fn = *self.func_refs.get("@_throw_uncaught")
+                            .ok_or("throw_uncaught not found")?;
+                        self.builder.ins().call(uncaught_fn, &[ex_ptr]);
+                        self.builder.ins().trap(TrapCode::unwrap_user(1));
+                    }
+                    catch_diverted = true;
+                }
+                if !catch_diverted {
+                    self.builder.ins().jump(after_try, &[]);
+                }
+
+                // 3. After try
+                let both_diverged = try_diverted && catch_diverted;
+                self.builder.switch_to_block(after_try);
+                self.builder.seal_block(after_try);
+                if both_diverged {
+                    self.builder.ins().trap(TrapCode::unwrap_user(1));
+                }
+                both_diverged
+            }
+            Statement::Import(_)
+            | Statement::ExternBlock(_)
+            | Statement::FuncDef(_)
+            | Statement::ClassDef(_) => {
+                // 这些语句在顶层处理，函数体内忽略（throw/try 稍后实现）
                 false
             }
             Statement::Pool(pool_stmt) => {
@@ -4027,7 +5426,7 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             // Release temporary values created by this statement if it didn't terminate
             self.release_temp_rc_values();
         }
-        
+
         Ok(is_terminator)
     }
 
@@ -4039,7 +5438,9 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             return Err(format!("Channel not found: {}", send_stmt.channel));
         };
         let val = self.compile_expr(&send_stmt.value)?;
-        let func_ref = *self.func_refs.get("@_channel_send")
+        let func_ref = *self
+            .func_refs
+            .get("@_channel_send")
             .ok_or("channel_send not found")?;
         self.builder.ins().call(func_ref, &[ch, val]);
         Ok(())
@@ -4050,13 +5451,17 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         let size = self.compile_expr(&pool_stmt.size)?;
 
         // 创建线程池
-        let pool_create_ref = *self.func_refs.get("@_pool_create")
+        let pool_create_ref = *self
+            .func_refs
+            .get("@_pool_create")
             .ok_or("pool_create not found")?;
         let call = self.builder.ins().call(pool_create_ref, &[size]);
         let pool_ptr = self.builder.inst_results(call)[0];
 
         // 进入线程池上下文
-        let pool_enter_ref = *self.func_refs.get("@_pool_enter")
+        let pool_enter_ref = *self
+            .func_refs
+            .get("@_pool_enter")
             .ok_or("pool_enter not found")?;
         self.builder.ins().call(pool_enter_ref, &[pool_ptr]);
 
@@ -4066,12 +5471,16 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         }
 
         // 退出线程池上下文
-        let pool_exit_ref = *self.func_refs.get("@_pool_exit")
+        let pool_exit_ref = *self
+            .func_refs
+            .get("@_pool_exit")
             .ok_or("pool_exit not found")?;
         self.builder.ins().call(pool_exit_ref, &[]);
 
         // 销毁线程池
-        let pool_destroy_ref = *self.func_refs.get("@_pool_destroy")
+        let pool_destroy_ref = *self
+            .func_refs
+            .get("@_pool_destroy")
             .ok_or("pool_destroy not found")?;
         self.builder.ins().call(pool_destroy_ref, &[pool_ptr]);
 
@@ -4114,7 +5523,9 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
 
         // 分配 channel 数组
         let array_size = (channel_count * 8) as i64;
-        let alloc_ref = *self.func_refs.get("@_bolide_alloc")
+        let alloc_ref = *self
+            .func_refs
+            .get("@_bolide_alloc")
             .ok_or("bolide_alloc not found")?;
         let size_val = self.builder.ins().iconst(types::I64, array_size);
         let call = self.builder.ins().call(alloc_ref, &[size_val]);
@@ -4122,11 +5533,15 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
 
         // 填充 channel 数组
         for (i, (_, channel_name, _)) in recv_branches.iter().enumerate() {
-            let ch_var = *self.variables.get(*channel_name)
+            let ch_var = *self
+                .variables
+                .get(*channel_name)
                 .ok_or_else(|| format!("Undefined channel: {}", channel_name))?;
             let ch_ptr = self.builder.use_var(ch_var);
             let offset = (i * 8) as i32;
-            self.builder.ins().store(MemFlags::new(), ch_ptr, array_ptr, offset);
+            self.builder
+                .ins()
+                .store(MemFlags::new(), ch_ptr, array_ptr, offset);
         }
 
         // 分配接收值空间
@@ -4144,10 +5559,15 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         };
 
         // 调用 channel_select
-        let select_ref = *self.func_refs.get("@_channel_select")
+        let select_ref = *self
+            .func_refs
+            .get("@_channel_select")
             .ok_or("channel_select not found")?;
         let count_val = self.builder.ins().iconst(types::I64, channel_count as i64);
-        let call = self.builder.ins().call(select_ref, &[array_ptr, count_val, timeout_val, value_ptr]);
+        let call = self
+            .builder
+            .ins()
+            .call(select_ref, &[array_ptr, count_val, timeout_val, value_ptr]);
         let selected_idx = self.builder.inst_results(call)[0];
 
         // 创建各分支的基本块
@@ -4172,7 +5592,9 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             let idx_val = self.builder.ins().iconst(types::I64, i as i64);
             let is_match = self.builder.ins().icmp(IntCC::Equal, selected_idx, idx_val);
             let next_block = self.builder.create_block();
-            self.builder.ins().brif(is_match, block, &[], next_block, &[]);
+            self.builder
+                .ins()
+                .brif(is_match, block, &[], next_block, &[]);
             self.builder.switch_to_block(next_block);
             self.builder.seal_block(next_block);
         }
@@ -4180,9 +5602,14 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         // 检查 timeout (-1)
         if let Some(block) = timeout_block {
             let timeout_val = self.builder.ins().iconst(types::I64, -1);
-            let is_timeout = self.builder.ins().icmp(IntCC::Equal, selected_idx, timeout_val);
+            let is_timeout = self
+                .builder
+                .ins()
+                .icmp(IntCC::Equal, selected_idx, timeout_val);
             let next_block = self.builder.create_block();
-            self.builder.ins().brif(is_timeout, block, &[], next_block, &[]);
+            self.builder
+                .ins()
+                .brif(is_timeout, block, &[], next_block, &[]);
             self.builder.switch_to_block(next_block);
             self.builder.seal_block(next_block);
         }
@@ -4199,7 +5626,10 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             self.builder.switch_to_block(branch_blocks[i]);
             self.builder.seal_block(branch_blocks[i]);
 
-            let recv_val = self.builder.ins().load(types::I64, MemFlags::new(), value_ptr, 0);
+            let recv_val = self
+                .builder
+                .ins()
+                .load(types::I64, MemFlags::new(), value_ptr, 0);
             let var = self.declare_variable(var_name, types::I64);
             self.builder.def_var(var, recv_val);
 
@@ -4236,9 +5666,14 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
     }
 
     /// 编译 AwaitScope 语句
-    fn compile_await_scope(&mut self, scope_stmt: &bolide_parser::AwaitScopeStmt) -> Result<(), String> {
+    fn compile_await_scope(
+        &mut self,
+        scope_stmt: &bolide_parser::AwaitScopeStmt,
+    ) -> Result<(), String> {
         // 进入作用域
-        let scope_enter_ref = *self.func_refs.get("@_scope_enter")
+        let scope_enter_ref = *self
+            .func_refs
+            .get("@_scope_enter")
             .ok_or("scope_enter not found")?;
         self.builder.ins().call(scope_enter_ref, &[]);
 
@@ -4248,7 +5683,9 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         }
 
         // 退出作用域
-        let scope_exit_ref = *self.func_refs.get("@_scope_exit")
+        let scope_exit_ref = *self
+            .func_refs
+            .get("@_scope_exit")
             .ok_or("scope_exit not found")?;
         self.builder.ins().call(scope_exit_ref, &[]);
 
@@ -4256,7 +5693,10 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
     }
 
     /// 编译 AsyncSelect 语句
-    fn compile_async_select(&mut self, async_select: &bolide_parser::AsyncSelectStmt) -> Result<(), String> {
+    fn compile_async_select(
+        &mut self,
+        async_select: &bolide_parser::AsyncSelectStmt,
+    ) -> Result<(), String> {
         use bolide_parser::AsyncSelectBranch;
         use cranelift_codegen::ir::StackSlotData;
         use cranelift_codegen::ir::StackSlotKind;
@@ -4290,14 +5730,21 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         // 3. 将 futures 存入数组
         for (i, future) in futures.iter().enumerate() {
             let offset = (i * 8) as i32;
-            self.builder.ins().store(MemFlags::new(), *future, array_ptr, offset);
+            self.builder
+                .ins()
+                .store(MemFlags::new(), *future, array_ptr, offset);
         }
 
         // 4. 调用 select_wait_first 获取第一个完成的索引
-        let select_wait_first = *self.func_refs.get("@_select_wait_first")
+        let select_wait_first = *self
+            .func_refs
+            .get("@_select_wait_first")
             .ok_or("select_wait_first not found")?;
         let count = self.builder.ins().iconst(types::I64, branch_count as i64);
-        let call = self.builder.ins().call(select_wait_first, &[array_ptr, count]);
+        let call = self
+            .builder
+            .ins()
+            .call(select_wait_first, &[array_ptr, count]);
         let winner_idx = self.builder.inst_results(call)[0];
 
         // 5. 根据获胜索引执行对应分支
@@ -4324,7 +5771,9 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             // 比较 winner_idx == i
             let idx_const = self.builder.ins().iconst(types::I64, i as i64);
             let cmp = self.builder.ins().icmp(IntCC::Equal, winner_idx, idx_const);
-            self.builder.ins().brif(cmp, branch_block, &[], next_block, &[]);
+            self.builder
+                .ins()
+                .brif(cmp, branch_block, &[], next_block, &[]);
 
             // 分支块
             self.builder.switch_to_block(branch_block);
@@ -4333,7 +5782,9 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             match branch {
                 AsyncSelectBranch::Bind { var, body, .. } => {
                     // await 获取结果并绑定变量
-                    let await_int = *self.func_refs.get("@_coroutine_await_int")
+                    let await_int = *self
+                        .func_refs
+                        .get("@_coroutine_await_int")
                         .ok_or("coroutine_await_int not found")?;
                     let call = self.builder.ins().call(await_int, &[futures[i]]);
                     let result = self.builder.inst_results(call)[0];
@@ -4400,12 +5851,14 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         if let Some(ref value) = decl.value {
             match value {
                 Expr::Spawn(func_name, _) => {
-                    self.spawn_func_map.insert(decl.name.clone(), func_name.clone());
+                    self.spawn_func_map
+                        .insert(decl.name.clone(), func_name.clone());
                 }
                 Expr::Call(func_expr, _) => {
                     if let Expr::Ident(func_name) = func_expr.as_ref() {
                         if self.async_funcs.contains(func_name) {
-                            self.spawn_func_map.insert(decl.name.clone(), func_name.clone());
+                            self.spawn_func_map
+                                .insert(decl.name.clone(), func_name.clone());
                         }
                     }
                 }
@@ -4415,17 +5868,23 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
 
         if let Some(ref value) = decl.value {
             // 空列表字面量需用类型标注确定元素类型
-            let val = if matches!(value, Expr::List(items) if items.is_empty()) && matches!(decl.ty, Some(BolideType::List(_))) {
+            let val = if matches!(value, Expr::List(items) if items.is_empty())
+                && matches!(decl.ty, Some(BolideType::List(_)))
+            {
                 self.compile_list_with_hint(&[], decl.ty.as_ref())?
             } else {
                 self.compile_expr(value)?
             };
 
             let declared_ty = self.var_types.get(&decl.name).cloned();
-            let is_weak_decl = declared_ty.as_ref()
+            let is_weak_decl = declared_ty
+                .as_ref()
                 .map(|t| Self::is_weak_ref_type(t))
                 .unwrap_or(false);
-            let is_rc = declared_ty.as_ref().map(|t| Self::is_rc_type(t)).unwrap_or(false);
+            let is_rc = declared_ty
+                .as_ref()
+                .map(|t| Self::is_rc_type(t))
+                .unwrap_or(false);
 
             let mut store_val = val;
             if is_weak_decl {
@@ -4451,7 +5910,12 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         } else {
             let zero = self.builder.ins().iconst(types::I64, 0);
             self.builder.def_var(var, zero);
-            if self.var_types.get(&decl.name).map(|t| Self::is_weak_ref_type(t)).unwrap_or(false) {
+            if self
+                .var_types
+                .get(&decl.name)
+                .map(|t| Self::is_weak_ref_type(t))
+                .unwrap_or(false)
+            {
                 self.weak_variables.insert(decl.name.clone());
             }
         }
@@ -4468,7 +5932,9 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
     fn compile_assign(&mut self, assign: &bolide_parser::Assign) -> Result<(), String> {
         match &assign.target {
             Expr::Ident(var_name) => {
-                let var = *self.variables.get(var_name)
+                let var = *self
+                    .variables
+                    .get(var_name)
                     .ok_or_else(|| format!("Undefined variable: {}", var_name))?;
 
                 // 检查是否是 ref 参数，决定是否释放旧值（对齐 JIT）
@@ -4544,12 +6010,17 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
     }
 
     /// 编译成员赋值
-    fn compile_member_assign(&mut self, base: &Expr, member: &str, value: &Expr) -> Result<(), String> {
+    fn compile_member_assign(
+        &mut self,
+        base: &Expr,
+        member: &str,
+        value: &Expr,
+    ) -> Result<(), String> {
         let base_val = self.compile_expr(base)?;
         let val = self.compile_expr(value)?;
 
         let base_type = self.infer_expr_type(base);
-        
+
         // 处理 Weak/Unowned 类型，提取内部的 Custom 类型
         let class_name = match &base_type {
             Some(BolideType::Custom(name)) => Some(name.clone()),
@@ -4569,35 +6040,48 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             }
             _ => None,
         };
-        
+
         if let Some(class_name) = class_name {
             if let Some(class_info) = self.classes.get(&class_name).cloned() {
                 for field in &class_info.fields {
                     if field.name == member {
                         let offset = field.offset as i32;
-                        
+
                         // Release old value if RC type
                         if Self::is_rc_type(&field.ty) {
                             let field_ptr = self.builder.ins().iadd_imm(base_val, offset as i64);
-                            let old_val = self.builder.ins().load(types::I64, MemFlags::new(), field_ptr, 0);
+                            let old_val =
+                                self.builder
+                                    .ins()
+                                    .load(types::I64, MemFlags::new(), field_ptr, 0);
                             self.emit_release(old_val, &field.ty);
-                            
+
                             // Take ownership of new value if it's a temp
                             self.remove_temp_rc_value(val);
                         }
-                        
-                        self.builder.ins().store(MemFlags::new(), val, base_val, offset);
+
+                        self.builder
+                            .ins()
+                            .store(MemFlags::new(), val, base_val, offset);
                         return Ok(());
                     }
                 }
-                return Err(format!("Field '{}' not found in class '{}'", member, class_name));
+                return Err(format!(
+                    "Field '{}' not found in class '{}'",
+                    member, class_name
+                ));
             }
         }
         Err("Cannot assign to member of non-class type".to_string())
     }
 
     /// 编译索引赋值
-    fn compile_index_assign(&mut self, base: &Expr, index: &Expr, value: &Expr) -> Result<(), String> {
+    fn compile_index_assign(
+        &mut self,
+        base: &Expr,
+        index: &Expr,
+        value: &Expr,
+    ) -> Result<(), String> {
         let base_type = self.infer_expr_type(base);
         let base_val = self.compile_expr(base)?;
         let index_val = self.compile_expr(index)?;
@@ -4608,24 +6092,39 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
 
         match base_type {
             Some(BolideType::List(ref elem_ty))
-                if matches!(elem_ty.as_ref(), BolideType::Int | BolideType::Float | BolideType::Bool) =>
+                if matches!(
+                    elem_ty.as_ref(),
+                    BolideType::Int | BolideType::Float | BolideType::Bool
+                ) =>
             {
                 return self.emit_list_set_inline(base_val, index_val, val, elem_ty.as_ref());
             }
             Some(BolideType::Dict(_, _)) => {
-                let func_ref = *self.func_refs.get("@_dict_set")
+                let func_ref = *self
+                    .func_refs
+                    .get("@_dict_set")
                     .ok_or_else(|| "@_dict_set not found")?;
-                self.builder.ins().call(func_ref, &[base_val, index_val, val]);
+                self.builder
+                    .ins()
+                    .call(func_ref, &[base_val, index_val, val]);
             }
             Some(BolideType::Tuple(_)) => {
-                let func_ref = *self.func_refs.get("@_tuple_set")
+                let func_ref = *self
+                    .func_refs
+                    .get("@_tuple_set")
                     .ok_or_else(|| "@_tuple_set not found")?;
-                self.builder.ins().call(func_ref, &[base_val, index_val, val]);
+                self.builder
+                    .ins()
+                    .call(func_ref, &[base_val, index_val, val]);
             }
             _ => {
-                let func_ref = *self.func_refs.get("@_list_set")
+                let func_ref = *self
+                    .func_refs
+                    .get("@_list_set")
                     .ok_or_else(|| "@_list_set not found")?;
-                self.builder.ins().call(func_ref, &[base_val, index_val, val]);
+                self.builder
+                    .ins()
+                    .call(func_ref, &[base_val, index_val, val]);
             }
         };
         Ok(())
@@ -4694,16 +6193,18 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
 
         let zero = self.builder.ins().iconst(types::I64, 0);
         let cond_bool = self.builder.ins().icmp(IntCC::NotEqual, cond, zero);
-        
+
         // Release condition temps before branching
         self.release_temp_rc_values();
-        
-        self.builder.ins().brif(cond_bool, then_block, &[], else_block, &[]);
+
+        self.builder
+            .ins()
+            .brif(cond_bool, then_block, &[], else_block, &[]);
 
         // then 分支
         self.builder.switch_to_block(then_block);
         self.builder.seal_block(then_block);
-        
+
         let scope_idx = self.enter_scope();
         let mut then_returned = false;
         for stmt in &if_stmt.then_body {
@@ -4713,15 +6214,15 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             }
         }
         if !then_returned {
-             self.leave_scope(scope_idx);
-             self.builder.ins().jump(merge_block, &[]);
+            self.leave_scope(scope_idx);
+            self.builder.ins().jump(merge_block, &[]);
         }
         // Scope variables released before jump
 
         // else 分支
         self.builder.switch_to_block(else_block);
         self.builder.seal_block(else_block);
-        
+
         let scope_idx_else = self.enter_scope();
         let mut else_returned = false;
         if let Some(ref else_body) = if_stmt.else_body {
@@ -4756,16 +6257,18 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         let cond = self.compile_expr(&while_stmt.condition)?;
         let zero = self.builder.ins().iconst(types::I64, 0);
         let cond_bool = self.builder.ins().icmp(IntCC::NotEqual, cond, zero);
-        
+
         // Release condition temps before branching
         self.release_temp_rc_values();
-        
-        self.builder.ins().brif(cond_bool, body_block, &[], exit_block, &[]);
+
+        self.builder
+            .ins()
+            .brif(cond_bool, body_block, &[], exit_block, &[]);
 
         // 循环体
         self.builder.switch_to_block(body_block);
         self.builder.seal_block(body_block);
-        
+
         let scope_idx = self.enter_scope();
         // while: continue → 重新检查条件（header）；break → exit
         self.loop_stack.push((header_block, exit_block, scope_idx));
@@ -4779,11 +6282,11 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         self.loop_stack.pop();
 
         if !body_returned {
-             self.leave_scope(scope_idx);
-             self.builder.ins().jump(header_block, &[]);
+            self.leave_scope(scope_idx);
+            self.builder.ins().jump(header_block, &[]);
         } else {
-             // 提前跳出路径已自行释放作用域变量，这里只清理编译期记录
-             self.rc_variables.truncate(scope_idx);
+            // 提前跳出路径已自行释放作用域变量，这里只清理编译期记录
+            self.rc_variables.truncate(scope_idx);
         }
 
         // 现在所有 header_block 的前驱都已添加，可以 seal 了
@@ -4836,7 +6339,11 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
     }
 
     /// 编译 range for 循环
-    fn compile_range_for(&mut self, for_stmt: &bolide_parser::ForStmt, args: &[Expr]) -> Result<(), String> {
+    fn compile_range_for(
+        &mut self,
+        for_stmt: &bolide_parser::ForStmt,
+        args: &[Expr],
+    ) -> Result<(), String> {
         // 解析 range 参数: range(end) 或 range(start, end) 或 range(start, end, step)
         let (start, end, step) = match args.len() {
             1 => {
@@ -4861,7 +6368,9 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         };
 
         // 创建循环变量
-        let var_name = for_stmt.vars.first()
+        let var_name = for_stmt
+            .vars
+            .first()
             .ok_or("For loop requires at least one variable")?;
         let loop_var = self.declare_variable(var_name, types::I64);
         self.builder.def_var(loop_var, start);
@@ -4877,7 +6386,9 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         self.builder.switch_to_block(header_block);
         let idx = self.builder.use_var(loop_var);
         let cond = self.builder.ins().icmp(IntCC::SignedLessThan, idx, end);
-        self.builder.ins().brif(cond, body_block, &[], exit_block, &[]);
+        self.builder
+            .ins()
+            .brif(cond, body_block, &[], exit_block, &[]);
 
         // 循环体
         self.builder.switch_to_block(body_block);
@@ -4895,10 +6406,10 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         self.loop_stack.pop();
 
         if !body_returned {
-             self.leave_scope(scope_idx);
-             self.builder.ins().jump(latch_block, &[]);
+            self.leave_scope(scope_idx);
+            self.builder.ins().jump(latch_block, &[]);
         } else {
-             self.rc_variables.truncate(scope_idx);
+            self.rc_variables.truncate(scope_idx);
         }
 
         // latch: 递增索引后回到 header（continue 跳转到此处以保证步进）
@@ -4921,7 +6432,7 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
     fn compile_list_for(&mut self, for_stmt: &bolide_parser::ForStmt) -> Result<(), String> {
         // 编译迭代器
         let iter_val = self.compile_expr(&for_stmt.iter)?;
-        
+
         // Infer element type
         let elem_type = match self.infer_expr_type(&for_stmt.iter) {
             Some(BolideType::List(inner)) => *inner,
@@ -4929,7 +6440,9 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         };
 
         // 获取列表长度
-        let len_ref = *self.func_refs.get("@_list_len")
+        let len_ref = *self
+            .func_refs
+            .get("@_list_len")
             .ok_or("list_len not found")?;
         let call = self.builder.ins().call(len_ref, &[iter_val]);
         let len = self.builder.inst_results(call)[0];
@@ -4940,11 +6453,13 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         self.builder.def_var(idx_var, zero);
 
         // 创建循环变量
-        let var_name = for_stmt.vars.first()
+        let var_name = for_stmt
+            .vars
+            .first()
             .ok_or("For loop requires at least one variable")?;
         let loop_var = self.declare_variable(var_name, types::I64);
         self.builder.def_var(loop_var, zero);
-        
+
         self.var_types.insert(var_name.clone(), elem_type.clone());
 
         let header_block = self.builder.create_block();
@@ -4958,7 +6473,9 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         self.builder.switch_to_block(header_block);
         let idx = self.builder.use_var(idx_var);
         let cond = self.builder.ins().icmp(IntCC::SignedLessThan, idx, len);
-        self.builder.ins().brif(cond, body_block, &[], exit_block, &[]);
+        self.builder
+            .ins()
+            .brif(cond, body_block, &[], exit_block, &[]);
 
         // 循环体
         self.builder.switch_to_block(body_block);
@@ -4969,16 +6486,18 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             self.track_rc_variable(var_name, &elem_type);
         }
 
-        let get_ref = *self.func_refs.get("@_list_get")
+        let get_ref = *self
+            .func_refs
+            .get("@_list_get")
             .ok_or("list_get not found")?;
         let idx = self.builder.use_var(idx_var);
         let call = self.builder.ins().call(get_ref, &[iter_val, idx]);
         let elem = self.builder.inst_results(call)[0];
 
         let elem = if Self::is_rc_type(&elem_type) {
-             self.emit_retain(elem, &elem_type)
+            self.emit_retain(elem, &elem_type)
         } else {
-             elem
+            elem
         };
         self.builder.def_var(loop_var, elem);
 
@@ -5027,14 +6546,18 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         };
 
         // dict_iter(dict) → keys list
-        let dict_iter_ref = *self.func_refs.get("@_dict_iter")
+        let dict_iter_ref = *self
+            .func_refs
+            .get("@_dict_iter")
             .ok_or("dict_iter not found")?;
         let call = self.builder.ins().call(dict_iter_ref, &[dict_ptr]);
         let keys_list = self.builder.inst_results(call)[0];
 
         if vars.len() == 2 {
             // for k, v in dict: 遍历 keys，循环体内用 dict_get 取值
-            let list_len_ref = *self.func_refs.get("@_list_len")
+            let list_len_ref = *self
+                .func_refs
+                .get("@_list_len")
                 .ok_or("list_len not found")?;
             let len_call = self.builder.ins().call(list_len_ref, &[keys_list]);
             let list_len = self.builder.inst_results(len_call)[0];
@@ -5054,20 +6577,32 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             // Header: check idx < len
             self.builder.switch_to_block(header_block);
             let current_idx = self.builder.use_var(idx_var);
-            let cond = self.builder.ins().icmp(IntCC::SignedLessThan, current_idx, list_len);
-            self.builder.ins().brif(cond, body_block, &[], exit_block, &[]);
+            let cond = self
+                .builder
+                .ins()
+                .icmp(IntCC::SignedLessThan, current_idx, list_len);
+            self.builder
+                .ins()
+                .brif(cond, body_block, &[], exit_block, &[]);
 
             // Body
             self.builder.switch_to_block(body_block);
             self.builder.seal_block(body_block);
 
-            let list_get_ref = *self.func_refs.get("@_list_get")
+            let list_get_ref = *self
+                .func_refs
+                .get("@_list_get")
                 .ok_or("list_get not found")?;
-            let get_key_call = self.builder.ins().call(list_get_ref, &[keys_list, current_idx]);
+            let get_key_call = self
+                .builder
+                .ins()
+                .call(list_get_ref, &[keys_list, current_idx]);
             let key_val = self.builder.inst_results(get_key_call)[0];
             self.define_variable(&vars[0], key_val, key_type.clone())?;
 
-            let dict_get_ref = *self.func_refs.get("@_dict_get")
+            let dict_get_ref = *self
+                .func_refs
+                .get("@_dict_get")
                 .ok_or("dict_get not found")?;
             let get_val_call = self.builder.ins().call(dict_get_ref, &[dict_ptr, key_val]);
             let val_val = self.builder.inst_results(get_val_call)[0];
@@ -5108,7 +6643,9 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         }
 
         // 释放 keys 列表
-        let release_ref = *self.func_refs.get("@_list_release")
+        let release_ref = *self
+            .func_refs
+            .get("@_list_release")
             .ok_or("list_release not found")?;
         self.builder.ins().call(release_ref, &[keys_list]);
 
@@ -5123,7 +6660,9 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         elem_type: BolideType,
         body: &[Statement],
     ) -> Result<(), String> {
-        let list_len_ref = *self.func_refs.get("@_list_len")
+        let list_len_ref = *self
+            .func_refs
+            .get("@_list_len")
             .ok_or("list_len not found")?;
         let len_call = self.builder.ins().call(list_len_ref, &[list_ptr]);
         let list_len = self.builder.inst_results(len_call)[0];
@@ -5147,8 +6686,13 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
 
         self.builder.switch_to_block(header_block);
         let idx = self.builder.use_var(idx_var);
-        let cond = self.builder.ins().icmp(IntCC::SignedLessThan, idx, list_len);
-        self.builder.ins().brif(cond, body_block, &[], exit_block, &[]);
+        let cond = self
+            .builder
+            .ins()
+            .icmp(IntCC::SignedLessThan, idx, list_len);
+        self.builder
+            .ins()
+            .brif(cond, body_block, &[], exit_block, &[]);
 
         self.builder.switch_to_block(body_block);
         self.builder.seal_block(body_block);
@@ -5158,7 +6702,9 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             self.track_rc_variable(var_name, &elem_type);
         }
 
-        let get_ref = *self.func_refs.get("@_list_get")
+        let get_ref = *self
+            .func_refs
+            .get("@_list_get")
             .ok_or("list_get not found")?;
         let idx = self.builder.use_var(idx_var);
         let call = self.builder.ins().call(get_ref, &[list_ptr, idx]);

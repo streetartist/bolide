@@ -14,8 +14,8 @@ kw_and   = @{ "and" ~ !id_char }
 kw_in    = @{ "in" ~ !id_char }
 kw_as    = @{ "as" ~ !id_char }
 kw_from  = @{ "from" ~ !id_char }
-kw_await = @{ "await" ~ !id_char }
-kw_spawn = @{ "spawn" ~ !id_char }
+kw_await  = @{ "await"  ~ !id_char }
+kw_spawn  = @{ "spawn"  ~ !id_char }
 
 // 程序入口
 program = { SOI ~ (statement)* ~ EOI }
@@ -30,6 +30,8 @@ statement = {
     for_stmt |
     break_stmt |
     continue_stmt |
+    throw_stmt |
+    try_stmt |
     pool_stmt |
     await_scope_stmt |
     async_select_stmt |
@@ -41,6 +43,11 @@ statement = {
     assign_stmt |
     expr_stmt
 }
+
+throw_stmt = { "throw" ~ expr ~ ";" }
+try_stmt  = { "try" ~ block ~ catch_clause+ ~ finally? }
+catch_clause = { "catch" ~ "(" ~ ident ~ ":" ~ type_expr ~ ")" ~ block }
+finally = { "finally" ~ !id_char ~ block }
 
 // 导入语句
 import_stmt = { "import" ~ (string_lit | module_path) ~ (kw_as ~ ident)? ~ ";" }

@@ -6,7 +6,7 @@
 use std::os::raw::c_void;
 
 use crate::rc::{RcHeader, TypeTag};
-use crate::{BolideString, BolideBigInt, BolideDecimal};
+use crate::{BolideBigInt, BolideDecimal, BolideDict, BolideDynamic, BolideString};
 
 /// 元素类型标签
 #[repr(u8)]
@@ -39,9 +39,9 @@ impl ElementType {
 #[repr(C)]
 pub struct BolideList {
     header: RcHeader,
-    data: *mut u8,        // 元素字节数组
+    data: *mut u8, // 元素字节数组
     len: usize,
-    capacity: usize,      // 已分配元素数（非字节）
+    capacity: usize, // 已分配元素数（非字节）
     elem_type: ElementType,
 }
 
@@ -205,14 +205,28 @@ impl BolideList {
     /// 增加单个元素引用
     unsafe fn retain_element(&self, value: i64) {
         let ptr = value as *mut c_void;
-        if ptr.is_null() { return; }
+        if ptr.is_null() {
+            return;
+        }
         match self.elem_type {
-            ElementType::String => { crate::bolide_string_retain(ptr as *mut BolideString); }
-            ElementType::BigInt => { crate::bolide_bigint_retain(ptr as *mut BolideBigInt); }
-            ElementType::Decimal => { crate::bolide_decimal_retain(ptr as *mut BolideDecimal); }
-            ElementType::List => { bolide_list_retain(ptr as *mut BolideList); }
-            ElementType::Dict => { crate::bolide_dict_retain(ptr as *mut crate::dict::BolideDict); }
-            ElementType::Dynamic => { crate::bolide_dynamic_retain(ptr as *mut crate::dynamic::BolideDynamic); }
+            ElementType::String => {
+                crate::bolide_string_retain(ptr as *mut BolideString);
+            }
+            ElementType::BigInt => {
+                crate::bolide_bigint_retain(ptr as *mut BolideBigInt);
+            }
+            ElementType::Decimal => {
+                crate::bolide_decimal_retain(ptr as *mut BolideDecimal);
+            }
+            ElementType::List => {
+                bolide_list_retain(ptr as *mut BolideList);
+            }
+            ElementType::Dict => {
+                crate::bolide_dict_retain(ptr as *mut crate::dict::BolideDict);
+            }
+            ElementType::Dynamic => {
+                crate::bolide_dynamic_retain(ptr as *mut crate::dynamic::BolideDynamic);
+            }
             _ => {}
         }
     }
@@ -220,14 +234,28 @@ impl BolideList {
     /// 释放单个元素引用
     unsafe fn release_element(&self, value: i64) {
         let ptr = value as *mut c_void;
-        if ptr.is_null() { return; }
+        if ptr.is_null() {
+            return;
+        }
         match self.elem_type {
-            ElementType::String => { crate::bolide_string_release(ptr as *mut BolideString); }
-            ElementType::BigInt => { crate::bolide_bigint_release(ptr as *mut BolideBigInt); }
-            ElementType::Decimal => { crate::bolide_decimal_release(ptr as *mut BolideDecimal); }
-            ElementType::List => { bolide_list_release(ptr as *mut BolideList); }
-            ElementType::Dict => { crate::bolide_dict_release(ptr as *mut crate::dict::BolideDict); }
-            ElementType::Dynamic => { crate::bolide_dynamic_release(ptr as *mut crate::dynamic::BolideDynamic); }
+            ElementType::String => {
+                crate::bolide_string_release(ptr as *mut BolideString);
+            }
+            ElementType::BigInt => {
+                crate::bolide_bigint_release(ptr as *mut BolideBigInt);
+            }
+            ElementType::Decimal => {
+                crate::bolide_decimal_release(ptr as *mut BolideDecimal);
+            }
+            ElementType::List => {
+                bolide_list_release(ptr as *mut BolideList);
+            }
+            ElementType::Dict => {
+                crate::bolide_dict_release(ptr as *mut crate::dict::BolideDict);
+            }
+            ElementType::Dynamic => {
+                crate::bolide_dynamic_release(ptr as *mut crate::dynamic::BolideDynamic);
+            }
             _ => {}
         }
     }
@@ -282,7 +310,9 @@ pub extern "C" fn bolide_list_with_capacity(elem_type: u8, capacity: usize) -> *
 #[no_mangle]
 pub extern "C" fn bolide_list_retain(list: *mut BolideList) -> *mut BolideList {
     if !list.is_null() {
-        unsafe { (*list).retain(); }
+        unsafe {
+            (*list).retain();
+        }
     }
     list
 }
@@ -290,7 +320,9 @@ pub extern "C" fn bolide_list_retain(list: *mut BolideList) -> *mut BolideList {
 /// 减少引用计数
 #[no_mangle]
 pub extern "C" fn bolide_list_release(list: *mut BolideList) {
-    if list.is_null() { return; }
+    if list.is_null() {
+        return;
+    }
     unsafe {
         if (*list).release() {
             (*list).release_elements();
@@ -334,64 +366,96 @@ pub extern "C" fn bolide_list_clone(list: *const BolideList) -> *mut BolideList 
 /// 获取引用计数
 #[no_mangle]
 pub extern "C" fn bolide_list_ref_count(list: *const BolideList) -> u32 {
-    if list.is_null() { return 0; }
+    if list.is_null() {
+        return 0;
+    }
     unsafe { (*list).ref_count() }
 }
 
 /// 获取列表长度
 #[no_mangle]
 pub extern "C" fn bolide_list_len(list: *const BolideList) -> usize {
-    if list.is_null() { return 0; }
+    if list.is_null() {
+        return 0;
+    }
     unsafe { (*list).len() }
 }
 
 /// 追加元素
 #[no_mangle]
 pub extern "C" fn bolide_list_push(list: *mut BolideList, value: i64) {
-    if list.is_null() { return; }
-    unsafe { (*list).push(value); }
+    if list.is_null() {
+        return;
+    }
+    unsafe {
+        (*list).push(value);
+    }
 }
 
 /// 弹出最后一个元素
 #[no_mangle]
 pub extern "C" fn bolide_list_pop(list: *mut BolideList) -> i64 {
-    if list.is_null() { return 0; }
+    if list.is_null() {
+        return 0;
+    }
     unsafe { (*list).pop().unwrap_or(0) }
 }
 
 /// 获取指定位置的元素
 #[no_mangle]
 pub extern "C" fn bolide_list_get(list: *const BolideList, index: usize) -> i64 {
-    if list.is_null() { return 0; }
+    if list.is_null() {
+        return 0;
+    }
     unsafe { (*list).get(index).unwrap_or(0) }
 }
 
 /// 设置指定位置的元素
 #[no_mangle]
 pub extern "C" fn bolide_list_set(list: *mut BolideList, index: usize, value: i64) -> i64 {
-    if list.is_null() { return 0; }
-    unsafe { if (*list).set(index, value) { 1 } else { 0 } }
+    if list.is_null() {
+        return 0;
+    }
+    unsafe {
+        if (*list).set(index, value) {
+            1
+        } else {
+            0
+        }
+    }
 }
 
 /// 获取元素类型
 #[no_mangle]
 pub extern "C" fn bolide_list_elem_type(list: *const BolideList) -> u8 {
-    if list.is_null() { return 7; }
+    if list.is_null() {
+        return 7;
+    }
     unsafe { (*list).elem_type() as u8 }
 }
 
 /// 检查是否已被 move
 #[no_mangle]
 pub extern "C" fn bolide_list_is_moved(list: *const BolideList) -> i32 {
-    if list.is_null() { return 0; }
-    unsafe { if (*list).is_moved() { 1 } else { 0 } }
+    if list.is_null() {
+        return 0;
+    }
+    unsafe {
+        if (*list).is_moved() {
+            1
+        } else {
+            0
+        }
+    }
 }
 
 /// 标记为已 move
 #[no_mangle]
 pub extern "C" fn bolide_list_mark_moved(list: *mut BolideList) {
     if !list.is_null() {
-        unsafe { (*list).mark_moved(); }
+        unsafe {
+            (*list).mark_moved();
+        }
     }
 }
 
@@ -404,7 +468,9 @@ unsafe fn ptr_copy(dst: *mut u8, src: *const u8, count: usize, bw: usize) {
 /// 在指定位置插入元素
 #[no_mangle]
 pub extern "C" fn bolide_list_insert(list: *mut BolideList, index: usize, value: i64) {
-    if list.is_null() { return; }
+    if list.is_null() {
+        return;
+    }
     unsafe {
         let list = &mut *list;
         let index = index.min(list.len);
@@ -429,10 +495,14 @@ pub extern "C" fn bolide_list_insert(list: *mut BolideList, index: usize, value:
 /// 移除并返回指定位置的元素
 #[no_mangle]
 pub extern "C" fn bolide_list_remove(list: *mut BolideList, index: usize) -> i64 {
-    if list.is_null() { return 0; }
+    if list.is_null() {
+        return 0;
+    }
     unsafe {
         let list = &mut *list;
-        if index >= list.len { return 0; }
+        if index >= list.len {
+            return 0;
+        }
 
         let value = list.read_at(index);
         if index < list.len - 1 {
@@ -452,7 +522,9 @@ pub extern "C" fn bolide_list_remove(list: *mut BolideList, index: usize) -> i64
 /// 清空列表
 #[no_mangle]
 pub extern "C" fn bolide_list_clear(list: *mut BolideList) {
-    if list.is_null() { return; }
+    if list.is_null() {
+        return;
+    }
     unsafe {
         let list = &mut *list;
         list.release_elements();
@@ -463,10 +535,14 @@ pub extern "C" fn bolide_list_clear(list: *mut BolideList) {
 /// 原地反转列表
 #[no_mangle]
 pub extern "C" fn bolide_list_reverse(list: *mut BolideList) {
-    if list.is_null() { return; }
+    if list.is_null() {
+        return;
+    }
     unsafe {
         let list = &mut *list;
-        if list.len <= 1 { return; }
+        if list.len <= 1 {
+            return;
+        }
         let bw = list.byte_width();
         let mut left = 0usize;
         let mut right = list.len - 1;
@@ -484,7 +560,9 @@ pub extern "C" fn bolide_list_reverse(list: *mut BolideList) {
 /// 扩展列表（用另一个列表的元素）
 #[no_mangle]
 pub extern "C" fn bolide_list_extend(list: *mut BolideList, other: *const BolideList) {
-    if list.is_null() || other.is_null() { return; }
+    if list.is_null() || other.is_null() {
+        return;
+    }
     unsafe {
         let list = &mut *list;
         let other = &*other;
@@ -499,7 +577,9 @@ pub extern "C" fn bolide_list_extend(list: *mut BolideList, other: *const Bolide
 /// 检查列表是否包含指定值
 #[no_mangle]
 pub extern "C" fn bolide_list_contains(list: *const BolideList, value: i64) -> i64 {
-    if list.is_null() { return 0; }
+    if list.is_null() {
+        return 0;
+    }
     unsafe {
         let list = &*list;
         for i in 0..list.len {
@@ -514,7 +594,9 @@ pub extern "C" fn bolide_list_contains(list: *const BolideList, value: i64) -> i
 /// 查找值的第一个索引（找不到返回 -1）
 #[no_mangle]
 pub extern "C" fn bolide_list_index_of(list: *const BolideList, value: i64) -> i64 {
-    if list.is_null() { return -1; }
+    if list.is_null() {
+        return -1;
+    }
     unsafe {
         let list = &*list;
         for i in 0..list.len {
@@ -529,7 +611,9 @@ pub extern "C" fn bolide_list_index_of(list: *const BolideList, value: i64) -> i
 /// 统计值出现的次数
 #[no_mangle]
 pub extern "C" fn bolide_list_count(list: *const BolideList, value: i64) -> i64 {
-    if list.is_null() { return 0; }
+    if list.is_null() {
+        return 0;
+    }
     unsafe {
         let list = &*list;
         let mut count = 0i64;
@@ -545,10 +629,14 @@ pub extern "C" fn bolide_list_count(list: *const BolideList, value: i64) -> i64 
 /// 原地排序（仅支持 Int 和 Float 类型）
 #[no_mangle]
 pub extern "C" fn bolide_list_sort(list: *mut BolideList) {
-    if list.is_null() { return; }
+    if list.is_null() {
+        return;
+    }
     unsafe {
         let list = &mut *list;
-        if list.len <= 1 { return; }
+        if list.len <= 1 {
+            return;
+        }
 
         match list.elem_type {
             ElementType::Int => {
@@ -570,13 +658,27 @@ pub extern "C" fn bolide_list_sort(list: *mut BolideList) {
 
 /// 切片（返回新列表）
 #[no_mangle]
-pub extern "C" fn bolide_list_slice(list: *const BolideList, start: i64, end: i64) -> *mut BolideList {
-    if list.is_null() { return std::ptr::null_mut(); }
+pub extern "C" fn bolide_list_slice(
+    list: *const BolideList,
+    start: i64,
+    end: i64,
+) -> *mut BolideList {
+    if list.is_null() {
+        return std::ptr::null_mut();
+    }
     unsafe {
         let src = &*list;
         let len = src.len as i64;
-        let start = if start < 0 { (len + start).max(0) } else { start.min(len) } as usize;
-        let end = if end < 0 { (len + end).max(0) } else { end.min(len) } as usize;
+        let start = if start < 0 {
+            (len + start).max(0)
+        } else {
+            start.min(len)
+        } as usize;
+        let end = if end < 0 {
+            (len + end).max(0)
+        } else {
+            end.min(len)
+        } as usize;
 
         if start >= end {
             return BolideList::new(src.elem_type);
@@ -599,17 +701,29 @@ pub extern "C" fn bolide_list_slice(list: *const BolideList, start: i64, end: i6
 /// 检查列表是否为空
 #[no_mangle]
 pub extern "C" fn bolide_list_is_empty(list: *const BolideList) -> i64 {
-    if list.is_null() { return 1; }
-    unsafe { if (*list).len == 0 { 1 } else { 0 } }
+    if list.is_null() {
+        return 1;
+    }
+    unsafe {
+        if (*list).len == 0 {
+            1
+        } else {
+            0
+        }
+    }
 }
 
 /// 获取第一个元素
 #[no_mangle]
 pub extern "C" fn bolide_list_first(list: *const BolideList) -> i64 {
-    if list.is_null() { return 0; }
+    if list.is_null() {
+        return 0;
+    }
     unsafe {
         let list = &*list;
-        if list.len == 0 { return 0; }
+        if list.len == 0 {
+            return 0;
+        }
         list.read_at(0)
     }
 }
@@ -617,10 +731,14 @@ pub extern "C" fn bolide_list_first(list: *const BolideList) -> i64 {
 /// 获取最后一个元素
 #[no_mangle]
 pub extern "C" fn bolide_list_last(list: *const BolideList) -> i64 {
-    if list.is_null() { return 0; }
+    if list.is_null() {
+        return 0;
+    }
     unsafe {
         let list = &*list;
-        if list.len == 0 { return 0; }
+        if list.len == 0 {
+            return 0;
+        }
         list.read_at(list.len - 1)
     }
 }
@@ -628,32 +746,69 @@ pub extern "C" fn bolide_list_last(list: *const BolideList) -> i64 {
 /// 打印列表
 #[no_mangle]
 pub extern "C" fn bolide_print_list(list: *const BolideList) {
+    print_list_inline(list);
+    println!();
+}
+
+pub(crate) fn print_element_inline(elem_type: ElementType, val: i64) {
+    match elem_type {
+        ElementType::Int => print!("{}", val),
+        ElementType::Float => print!("{}", f64::from_bits(val as u64)),
+        ElementType::Bool => print!("{}", if val != 0 { "true" } else { "false" }),
+        ElementType::String => {
+            let s = val as *const BolideString;
+            if !s.is_null() {
+                unsafe { print!("\"{}\"", (*s).as_str()) };
+            } else {
+                print!("null");
+            }
+        }
+        ElementType::BigInt => {
+            let b = val as *const BolideBigInt;
+            if !b.is_null() {
+                unsafe { print!("{}", (*b).to_string()) };
+            } else {
+                print!("null");
+            }
+        }
+        ElementType::Decimal => {
+            let d = val as *const BolideDecimal;
+            if !d.is_null() {
+                unsafe { print!("{}", (*d).to_string()) };
+            } else {
+                print!("null");
+            }
+        }
+        ElementType::List => print_list_inline(val as *const BolideList),
+        ElementType::Dict => crate::dict::print_dict_inline(val as *const BolideDict),
+        ElementType::Dynamic => {
+            let d = val as *const BolideDynamic;
+            if !d.is_null() {
+                unsafe { print!("{}", (*d).to_string_repr()) };
+            } else {
+                print!("null");
+            }
+        }
+        ElementType::Ptr => print!("0x{:x}", val),
+    }
+}
+
+pub(crate) fn print_list_inline(list: *const BolideList) {
     if list.is_null() {
-        println!("[]");
+        print!("null");
         return;
     }
     unsafe {
         let list = &*list;
         print!("[");
         for i in 0..list.len {
-            if i > 0 { print!(", "); }
-            let val = list.read_at(i);
-            match list.elem_type {
-                ElementType::Int => print!("{}", val),
-                ElementType::Float => print!("{}", f64::from_bits(val as u64)),
-                ElementType::Bool => print!("{}", if val != 0 { "true" } else { "false" }),
-                ElementType::String => {
-                    let s = val as *const crate::BolideString;
-                    if !s.is_null() {
-                        print!("\"{}\"", (*s).as_str());
-                    } else {
-                        print!("null");
-                    }
-                }
-                _ => print!("0x{:x}", val),
+            if i > 0 {
+                print!(", ");
             }
+            let val = list.read_at(i);
+            print_element_inline(list.elem_type, val);
         }
-        println!("]");
+        print!("]");
     }
 }
 

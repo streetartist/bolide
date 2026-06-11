@@ -3,7 +3,7 @@
 //! BolideBigInt 使用引用计数管理内存
 
 use num_bigint::BigInt;
-use num_traits::{Zero, Signed, ToPrimitive};
+use num_traits::{ToPrimitive, Zero};
 #[cfg(debug_assertions)]
 use std::sync::atomic::{AtomicI64, Ordering};
 
@@ -122,7 +122,9 @@ pub extern "C" fn bolide_bigint_from_str(s: *const i8, len: usize) -> *mut Bolid
 #[no_mangle]
 pub extern "C" fn bolide_bigint_retain(b: *mut BolideBigInt) -> *mut BolideBigInt {
     if !b.is_null() {
-        unsafe { (*b).retain(); }
+        unsafe {
+            (*b).retain();
+        }
     }
     b
 }
@@ -130,7 +132,9 @@ pub extern "C" fn bolide_bigint_retain(b: *mut BolideBigInt) -> *mut BolideBigIn
 /// 减少引用计数
 #[no_mangle]
 pub extern "C" fn bolide_bigint_release(b: *mut BolideBigInt) {
-    if b.is_null() { return; }
+    if b.is_null() {
+        return;
+    }
     unsafe {
         if (*b).release() {
             track_free();
@@ -142,7 +146,9 @@ pub extern "C" fn bolide_bigint_release(b: *mut BolideBigInt) {
 /// 深拷贝
 #[no_mangle]
 pub extern "C" fn bolide_bigint_clone(a: *const BolideBigInt) -> *mut BolideBigInt {
-    if a.is_null() { return std::ptr::null_mut(); }
+    if a.is_null() {
+        return std::ptr::null_mut();
+    }
     let a = unsafe { &*a };
     BolideBigInt::from_bigint(a.inner.clone())
 }
@@ -155,64 +161,101 @@ pub extern "C" fn bolide_bigint_free(b: *mut BolideBigInt) {
 
 #[no_mangle]
 pub extern "C" fn bolide_bigint_ref_count(b: *const BolideBigInt) -> u32 {
-    if b.is_null() { return 0; }
+    if b.is_null() {
+        return 0;
+    }
     unsafe { (*b).ref_count() }
 }
 
 #[no_mangle]
 pub extern "C" fn bolide_bigint_to_i64(a: *const BolideBigInt) -> i64 {
-    if a.is_null() { return 0; }
+    if a.is_null() {
+        return 0;
+    }
     unsafe { (*a).to_i64().unwrap_or(0) }
 }
 
 #[no_mangle]
 pub extern "C" fn bolide_bigint_to_f64(a: *const BolideBigInt) -> f64 {
-    if a.is_null() { return 0.0; }
+    if a.is_null() {
+        return 0.0;
+    }
     unsafe { (*a).to_f64() }
 }
 
 // ==================== 算术运算（返回新对象，ref_count = 1）====================
 
 #[no_mangle]
-pub extern "C" fn bolide_bigint_add(a: *const BolideBigInt, b: *const BolideBigInt) -> *mut BolideBigInt {
-    if a.is_null() || b.is_null() { return std::ptr::null_mut(); }
+pub extern "C" fn bolide_bigint_add(
+    a: *const BolideBigInt,
+    b: *const BolideBigInt,
+) -> *mut BolideBigInt {
+    if a.is_null() || b.is_null() {
+        return std::ptr::null_mut();
+    }
     let (a, b) = unsafe { (&*a, &*b) };
     BolideBigInt::from_bigint(&a.inner + &b.inner)
 }
 
 #[no_mangle]
-pub extern "C" fn bolide_bigint_sub(a: *const BolideBigInt, b: *const BolideBigInt) -> *mut BolideBigInt {
-    if a.is_null() || b.is_null() { return std::ptr::null_mut(); }
+pub extern "C" fn bolide_bigint_sub(
+    a: *const BolideBigInt,
+    b: *const BolideBigInt,
+) -> *mut BolideBigInt {
+    if a.is_null() || b.is_null() {
+        return std::ptr::null_mut();
+    }
     let (a, b) = unsafe { (&*a, &*b) };
     BolideBigInt::from_bigint(&a.inner - &b.inner)
 }
 
 #[no_mangle]
-pub extern "C" fn bolide_bigint_mul(a: *const BolideBigInt, b: *const BolideBigInt) -> *mut BolideBigInt {
-    if a.is_null() || b.is_null() { return std::ptr::null_mut(); }
+pub extern "C" fn bolide_bigint_mul(
+    a: *const BolideBigInt,
+    b: *const BolideBigInt,
+) -> *mut BolideBigInt {
+    if a.is_null() || b.is_null() {
+        return std::ptr::null_mut();
+    }
     let (a, b) = unsafe { (&*a, &*b) };
     BolideBigInt::from_bigint(&a.inner * &b.inner)
 }
 
 #[no_mangle]
-pub extern "C" fn bolide_bigint_div(a: *const BolideBigInt, b: *const BolideBigInt) -> *mut BolideBigInt {
-    if a.is_null() || b.is_null() { return std::ptr::null_mut(); }
+pub extern "C" fn bolide_bigint_div(
+    a: *const BolideBigInt,
+    b: *const BolideBigInt,
+) -> *mut BolideBigInt {
+    if a.is_null() || b.is_null() {
+        return std::ptr::null_mut();
+    }
     let (a, b) = unsafe { (&*a, &*b) };
-    if b.is_zero() { return std::ptr::null_mut(); }
+    if b.is_zero() {
+        return std::ptr::null_mut();
+    }
     BolideBigInt::from_bigint(&a.inner / &b.inner)
 }
 
 #[no_mangle]
-pub extern "C" fn bolide_bigint_rem(a: *const BolideBigInt, b: *const BolideBigInt) -> *mut BolideBigInt {
-    if a.is_null() || b.is_null() { return std::ptr::null_mut(); }
+pub extern "C" fn bolide_bigint_rem(
+    a: *const BolideBigInt,
+    b: *const BolideBigInt,
+) -> *mut BolideBigInt {
+    if a.is_null() || b.is_null() {
+        return std::ptr::null_mut();
+    }
     let (a, b) = unsafe { (&*a, &*b) };
-    if b.is_zero() { return std::ptr::null_mut(); }
+    if b.is_zero() {
+        return std::ptr::null_mut();
+    }
     BolideBigInt::from_bigint(&a.inner % &b.inner)
 }
 
 #[no_mangle]
 pub extern "C" fn bolide_bigint_neg(a: *const BolideBigInt) -> *mut BolideBigInt {
-    if a.is_null() { return std::ptr::null_mut(); }
+    if a.is_null() {
+        return std::ptr::null_mut();
+    }
     let a = unsafe { &*a };
     BolideBigInt::from_bigint(-&a.inner)
 }
@@ -221,44 +264,80 @@ pub extern "C" fn bolide_bigint_neg(a: *const BolideBigInt) -> *mut BolideBigInt
 
 #[no_mangle]
 pub extern "C" fn bolide_bigint_eq(a: *const BolideBigInt, b: *const BolideBigInt) -> i64 {
-    if a.is_null() || b.is_null() { return 0; }
+    if a.is_null() || b.is_null() {
+        return 0;
+    }
     let (a, b) = unsafe { (&*a, &*b) };
-    if a.inner == b.inner { 1 } else { 0 }
+    if a.inner == b.inner {
+        1
+    } else {
+        0
+    }
 }
 
 #[no_mangle]
 pub extern "C" fn bolide_bigint_ne(a: *const BolideBigInt, b: *const BolideBigInt) -> i64 {
-    if a.is_null() || b.is_null() { return 0; }
+    if a.is_null() || b.is_null() {
+        return 0;
+    }
     let (a, b) = unsafe { (&*a, &*b) };
-    if a.inner != b.inner { 1 } else { 0 }
+    if a.inner != b.inner {
+        1
+    } else {
+        0
+    }
 }
 
 #[no_mangle]
 pub extern "C" fn bolide_bigint_lt(a: *const BolideBigInt, b: *const BolideBigInt) -> i64 {
-    if a.is_null() || b.is_null() { return 0; }
+    if a.is_null() || b.is_null() {
+        return 0;
+    }
     let (a, b) = unsafe { (&*a, &*b) };
-    if a.inner < b.inner { 1 } else { 0 }
+    if a.inner < b.inner {
+        1
+    } else {
+        0
+    }
 }
 
 #[no_mangle]
 pub extern "C" fn bolide_bigint_le(a: *const BolideBigInt, b: *const BolideBigInt) -> i64 {
-    if a.is_null() || b.is_null() { return 0; }
+    if a.is_null() || b.is_null() {
+        return 0;
+    }
     let (a, b) = unsafe { (&*a, &*b) };
-    if a.inner <= b.inner { 1 } else { 0 }
+    if a.inner <= b.inner {
+        1
+    } else {
+        0
+    }
 }
 
 #[no_mangle]
 pub extern "C" fn bolide_bigint_gt(a: *const BolideBigInt, b: *const BolideBigInt) -> i64 {
-    if a.is_null() || b.is_null() { return 0; }
+    if a.is_null() || b.is_null() {
+        return 0;
+    }
     let (a, b) = unsafe { (&*a, &*b) };
-    if a.inner > b.inner { 1 } else { 0 }
+    if a.inner > b.inner {
+        1
+    } else {
+        0
+    }
 }
 
 #[no_mangle]
 pub extern "C" fn bolide_bigint_ge(a: *const BolideBigInt, b: *const BolideBigInt) -> i64 {
-    if a.is_null() || b.is_null() { return 0; }
+    if a.is_null() || b.is_null() {
+        return 0;
+    }
     let (a, b) = unsafe { (&*a, &*b) };
-    if a.inner >= b.inner { 1 } else { 0 }
+    if a.inner >= b.inner {
+        1
+    } else {
+        0
+    }
 }
 
 // ==================== Debug Stats ====================
@@ -270,7 +349,12 @@ pub extern "C" fn bolide_bigint_debug_stats() {
     {
         let alloc = BIGINT_ALLOC_COUNT.load(Ordering::Relaxed);
         let free = BIGINT_FREE_COUNT.load(Ordering::Relaxed);
-        println!("[BigInt Stats] alloc: {}, free: {}, leak: {}", alloc, free, alloc - free);
+        println!(
+            "[BigInt Stats] alloc: {}, free: {}, leak: {}",
+            alloc,
+            free,
+            alloc - free
+        );
     }
     #[cfg(not(debug_assertions))]
     println!("[BigInt Stats] not tracked in release build");

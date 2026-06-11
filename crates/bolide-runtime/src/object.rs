@@ -9,15 +9,16 @@
 //! - 弱引用计数（含一个隐式 +1，当 strong > 0 时）归零时，整个分配被释放。
 
 use std::alloc::{alloc, dealloc, Layout};
-use std::sync::atomic::{fence, AtomicUsize, Ordering};
+use std::sync::atomic::{fence, AtomicU32, Ordering};
 
 /// 对象头部结构（每个对象都有）
 #[repr(C)]
 pub struct ObjectHeader {
-    pub ref_count: AtomicUsize,
+    pub ref_count: AtomicU32,
     /// 弱引用计数（含隐式 +1，当 strong > 0 时）
-    pub weak_count: AtomicUsize,
-    pub data_size: usize,  // 数据部分大小
+    pub weak_count: AtomicU32,
+    pub data_size: u32, // 数据部分大小
+    _padding: u32,
 }
 
 const HEADER_SIZE: usize = std::mem::size_of::<ObjectHeader>();
@@ -29,7 +30,7 @@ unsafe fn header_of(data_ptr: *mut u8) -> *mut ObjectHeader {
 
 unsafe fn dealloc_object(header_ptr: *mut u8) {
     let header = header_ptr as *mut ObjectHeader;
-    let data_size = (*header).data_size;
+    let data_size = (*header).data_size as usize;
     let total_size = HEADER_SIZE + data_size;
     let layout = Layout::from_size_align(total_size, 8).unwrap();
     dealloc(header_ptr, layout);
@@ -40,6 +41,9 @@ unsafe fn dealloc_object(header_ptr: *mut u8) {
 /// 返回: 指向对象数据的指针（头部在前面）
 #[no_mangle]
 pub extern "C" fn object_alloc(size: usize) -> *mut u8 {
+    if size > u32::MAX as usize {
+        panic!("Object allocation too large");
+    }
     let total_size = HEADER_SIZE + size;
     let layout = Layout::from_size_align(total_size, 8).unwrap();
 
@@ -51,9 +55,10 @@ pub extern "C" fn object_alloc(size: usize) -> *mut u8 {
 
         // 初始化头部
         let header = ptr as *mut ObjectHeader;
-        (*header).ref_count = AtomicUsize::new(1);
-        (*header).weak_count = AtomicUsize::new(1); // 隐式 +1
-        (*header).data_size = size;
+        (*header).ref_count = AtomicU32::new(1);
+        (*header).weak_count = AtomicU32::new(1); // 隐式 +1
+        (*header).data_size = size as u32;
+        (*header)._padding = 0;
 
         // 返回数据部分的指针
         ptr.add(HEADER_SIZE)
@@ -140,7 +145,9 @@ pub extern "C" fn object_assert_alive(data_ptr: *mut u8) {
     unsafe {
         let header = header_of(data_ptr);
         if (*header).ref_count.load(Ordering::Acquire) == 0 {
-            eprintln!("runtime error: weak/unowned reference accessed after object was deallocated");
+            eprintln!(
+                "runtime error: weak/unowned reference accessed after object was deallocated"
+            );
             std::process::abort();
         }
     }
@@ -154,7 +161,11 @@ pub extern "C" fn object_is_alive(data_ptr: *mut u8) -> i64 {
     }
     unsafe {
         let header = header_of(data_ptr);
-        if (*header).ref_count.load(Ordering::Acquire) > 0 { 1 } else { 0 }
+        if (*header).ref_count.load(Ordering::Acquire) > 0 {
+            1
+        } else {
+            0
+        }
     }
 }
 
@@ -186,4 +197,15 @@ pub extern "C" fn object_clone(data_ptr: *mut u8) -> *mut u8 {
         object_retain(data_ptr);
     }
     data_ptr
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_object_header_size() {
+        assert_eq!(std::mem::size_of::<ObjectHeader>(), 16);
+        assert_eq!(HEADER_SIZE % 8, 0);
+    }
 }

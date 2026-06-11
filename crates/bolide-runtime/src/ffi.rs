@@ -1,9 +1,9 @@
 //! FFI 运行时支持
 
+use libloading::Library;
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::sync::Mutex;
-use libloading::Library;
 
 /// 全局库缓存
 static LOADED_LIBS: Mutex<Option<HashMap<String, Library>>> = Mutex::new(None);
@@ -110,9 +110,6 @@ pub extern "C" fn bolide_test_callback(
 
 /// 测试回调：对数组元素应用函数
 #[no_mangle]
-pub extern "C" fn bolide_map_int(
-    callback: extern "C" fn(i64) -> i64,
-    value: i64,
-) -> i64 {
+pub extern "C" fn bolide_map_int(callback: extern "C" fn(i64) -> i64, value: i64) -> i64 {
     callback(value)
 }

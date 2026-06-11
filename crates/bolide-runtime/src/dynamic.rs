@@ -3,7 +3,7 @@
 //! BolideDynamic 是 Python 风格的动态类型，使用引用计数管理内存
 
 use crate::rc::{RcHeader, TypeTag};
-use crate::{BolideBigInt, BolideDecimal, BolideString, BolideList};
+use crate::{BolideBigInt, BolideDecimal, BolideList, BolideString};
 use once_cell::sync::Lazy;
 
 /// newtype 包装 *mut T 使其满足 Send+Sync（不可变单例指针跨线程安全）
@@ -25,19 +25,16 @@ fn immortal_dynamic(tag: DynamicType, data: DynamicData) -> DynPtr {
 }
 
 // 不可变单例缓存：None / Bool / 小整数 (-128..255) 永不分配
-static DYN_NONE: Lazy<DynPtr> = Lazy::new(|| {
-    immortal_dynamic(DynamicType::None, DynamicData { none: () })
-});
-static DYN_TRUE: Lazy<DynPtr> = Lazy::new(|| {
-    immortal_dynamic(DynamicType::Bool, DynamicData { bool_val: 1 })
-});
-static DYN_FALSE: Lazy<DynPtr> = Lazy::new(|| {
-    immortal_dynamic(DynamicType::Bool, DynamicData { bool_val: 0 })
-});
+static DYN_NONE: Lazy<DynPtr> =
+    Lazy::new(|| immortal_dynamic(DynamicType::None, DynamicData { none: () }));
+static DYN_TRUE: Lazy<DynPtr> =
+    Lazy::new(|| immortal_dynamic(DynamicType::Bool, DynamicData { bool_val: 1 }));
+static DYN_FALSE: Lazy<DynPtr> =
+    Lazy::new(|| immortal_dynamic(DynamicType::Bool, DynamicData { bool_val: 0 }));
 static SMALL_INTS: Lazy<Vec<DynPtr>> = Lazy::new(|| {
-    (-128i64..=255).map(|i| {
-        immortal_dynamic(DynamicType::Int, DynamicData { int_val: i })
-    }).collect()
+    (-128i64..=255)
+        .map(|i| immortal_dynamic(DynamicType::Int, DynamicData { int_val: i }))
+        .collect()
 });
 
 /// 动态值类型标签
@@ -82,7 +79,11 @@ impl BolideDynamic {
     }
 
     pub fn from_bool(value: bool) -> *mut Self {
-        if value { DYN_TRUE.0 } else { DYN_FALSE.0 }
+        if value {
+            DYN_TRUE.0
+        } else {
+            DYN_FALSE.0
+        }
     }
 
     pub fn from_int(value: i64) -> *mut Self {
@@ -161,19 +162,27 @@ impl BolideDynamic {
             DynamicType::Int => unsafe { self.data.int_val != 0 },
             DynamicType::Float => unsafe { self.data.float_val != 0.0 },
             DynamicType::BigInt => unsafe {
-                if self.data.bigint_ptr.is_null() { return false; }
+                if self.data.bigint_ptr.is_null() {
+                    return false;
+                }
                 !(*self.data.bigint_ptr).is_zero()
             },
             DynamicType::Decimal => unsafe {
-                if self.data.decimal_ptr.is_null() { return false; }
+                if self.data.decimal_ptr.is_null() {
+                    return false;
+                }
                 !(*self.data.decimal_ptr).is_zero()
             },
             DynamicType::String => unsafe {
-                if self.data.string_ptr.is_null() { return false; }
+                if self.data.string_ptr.is_null() {
+                    return false;
+                }
                 (*self.data.string_ptr).len() > 0
             },
             DynamicType::List => unsafe {
-                if self.data.list_ptr.is_null() { return false; }
+                if self.data.list_ptr.is_null() {
+                    return false;
+                }
                 crate::bolide_list_len(self.data.list_ptr) > 0
             },
         }
@@ -186,16 +195,25 @@ impl BolideDynamic {
             DynamicType::Int => unsafe { self.data.int_val },
             DynamicType::Float => unsafe { self.data.float_val as i64 },
             DynamicType::BigInt => unsafe {
-                if self.data.bigint_ptr.is_null() { 0 }
-                else { (*self.data.bigint_ptr).to_i64().unwrap_or(0) }
+                if self.data.bigint_ptr.is_null() {
+                    0
+                } else {
+                    (*self.data.bigint_ptr).to_i64().unwrap_or(0)
+                }
             },
             DynamicType::Decimal => unsafe {
-                if self.data.decimal_ptr.is_null() { 0 }
-                else { (*self.data.decimal_ptr).to_i64() }
+                if self.data.decimal_ptr.is_null() {
+                    0
+                } else {
+                    (*self.data.decimal_ptr).to_i64()
+                }
             },
             DynamicType::String => unsafe {
-                if self.data.string_ptr.is_null() { 0 }
-                else { (*self.data.string_ptr).as_str().parse().unwrap_or(0) }
+                if self.data.string_ptr.is_null() {
+                    0
+                } else {
+                    (*self.data.string_ptr).as_str().parse().unwrap_or(0)
+                }
             },
             DynamicType::List => 0,
         }
@@ -208,16 +226,25 @@ impl BolideDynamic {
             DynamicType::Int => unsafe { self.data.int_val as f64 },
             DynamicType::Float => unsafe { self.data.float_val },
             DynamicType::BigInt => unsafe {
-                if self.data.bigint_ptr.is_null() { 0.0 }
-                else { (*self.data.bigint_ptr).to_f64() }
+                if self.data.bigint_ptr.is_null() {
+                    0.0
+                } else {
+                    (*self.data.bigint_ptr).to_f64()
+                }
             },
             DynamicType::Decimal => unsafe {
-                if self.data.decimal_ptr.is_null() { 0.0 }
-                else { (*self.data.decimal_ptr).to_f64() }
+                if self.data.decimal_ptr.is_null() {
+                    0.0
+                } else {
+                    (*self.data.decimal_ptr).to_f64()
+                }
             },
             DynamicType::String => unsafe {
-                if self.data.string_ptr.is_null() { 0.0 }
-                else { (*self.data.string_ptr).as_str().parse().unwrap_or(0.0) }
+                if self.data.string_ptr.is_null() {
+                    0.0
+                } else {
+                    (*self.data.string_ptr).as_str().parse().unwrap_or(0.0)
+                }
             },
             DynamicType::List => 0.0,
         }
@@ -227,21 +254,34 @@ impl BolideDynamic {
         match self.tag {
             DynamicType::None => "none".to_string(),
             DynamicType::Bool => unsafe {
-                if self.data.bool_val != 0 { "true".to_string() } else { "false".to_string() }
+                if self.data.bool_val != 0 {
+                    "true".to_string()
+                } else {
+                    "false".to_string()
+                }
             },
             DynamicType::Int => unsafe { self.data.int_val.to_string() },
             DynamicType::Float => unsafe { self.data.float_val.to_string() },
             DynamicType::BigInt => unsafe {
-                if self.data.bigint_ptr.is_null() { "null".to_string() }
-                else { (*self.data.bigint_ptr).to_string() }
+                if self.data.bigint_ptr.is_null() {
+                    "null".to_string()
+                } else {
+                    (*self.data.bigint_ptr).to_string()
+                }
             },
             DynamicType::Decimal => unsafe {
-                if self.data.decimal_ptr.is_null() { "null".to_string() }
-                else { (*self.data.decimal_ptr).to_string() }
+                if self.data.decimal_ptr.is_null() {
+                    "null".to_string()
+                } else {
+                    (*self.data.decimal_ptr).to_string()
+                }
             },
             DynamicType::String => unsafe {
-                if self.data.string_ptr.is_null() { "null".to_string() }
-                else { (*self.data.string_ptr).as_str().to_string() }
+                if self.data.string_ptr.is_null() {
+                    "null".to_string()
+                } else {
+                    (*self.data.string_ptr).as_str().to_string()
+                }
             },
             DynamicType::List => "[...]".to_string(),
         }
@@ -281,22 +321,22 @@ impl BolideDynamic {
                 if !self.data.bigint_ptr.is_null() {
                     crate::bolide_bigint_release(self.data.bigint_ptr);
                 }
-            },
+            }
             DynamicType::Decimal => {
                 if !self.data.decimal_ptr.is_null() {
                     crate::bolide_decimal_release(self.data.decimal_ptr);
                 }
-            },
+            }
             DynamicType::String => {
                 if !self.data.string_ptr.is_null() {
                     crate::bolide_string_release(self.data.string_ptr);
                 }
-            },
+            }
             DynamicType::List => {
                 if !self.data.list_ptr.is_null() {
                     crate::bolide_list_release(self.data.list_ptr);
                 }
-            },
+            }
             _ => {}
         }
     }
@@ -308,22 +348,22 @@ impl BolideDynamic {
                 if !self.data.bigint_ptr.is_null() {
                     crate::bolide_bigint_retain(self.data.bigint_ptr);
                 }
-            },
+            }
             DynamicType::Decimal => {
                 if !self.data.decimal_ptr.is_null() {
                     crate::bolide_decimal_retain(self.data.decimal_ptr);
                 }
-            },
+            }
             DynamicType::String => {
                 if !self.data.string_ptr.is_null() {
                     crate::bolide_string_retain(self.data.string_ptr);
                 }
-            },
+            }
             DynamicType::List => {
                 if !self.data.list_ptr.is_null() {
                     crate::bolide_list_retain(self.data.list_ptr);
                 }
-            },
+            }
             _ => {}
         }
     }
@@ -375,7 +415,9 @@ pub extern "C" fn bolide_dynamic_from_list(ptr: *mut BolideList) -> *mut BolideD
 #[no_mangle]
 pub extern "C" fn bolide_dynamic_retain(d: *mut BolideDynamic) -> *mut BolideDynamic {
     if !d.is_null() {
-        unsafe { (*d).retain(); }
+        unsafe {
+            (*d).retain();
+        }
     }
     d
 }
@@ -383,7 +425,9 @@ pub extern "C" fn bolide_dynamic_retain(d: *mut BolideDynamic) -> *mut BolideDyn
 /// 减少引用计数
 #[no_mangle]
 pub extern "C" fn bolide_dynamic_release(d: *mut BolideDynamic) {
-    if d.is_null() { return; }
+    if d.is_null() {
+        return;
+    }
     unsafe {
         if (*d).release() {
             (*d).release_inner();
@@ -395,7 +439,9 @@ pub extern "C" fn bolide_dynamic_release(d: *mut BolideDynamic) {
 /// 深拷贝
 #[no_mangle]
 pub extern "C" fn bolide_dynamic_clone(a: *const BolideDynamic) -> *mut BolideDynamic {
-    if a.is_null() { return std::ptr::null_mut(); }
+    if a.is_null() {
+        return std::ptr::null_mut();
+    }
     let a = unsafe { &*a };
 
     match a.tag {
@@ -446,34 +492,48 @@ pub extern "C" fn bolide_dynamic_free(d: *mut BolideDynamic) {
 
 #[no_mangle]
 pub extern "C" fn bolide_dynamic_ref_count(d: *const BolideDynamic) -> u32 {
-    if d.is_null() { return 0; }
+    if d.is_null() {
+        return 0;
+    }
     unsafe { (*d).ref_count() }
 }
 
 #[no_mangle]
 pub extern "C" fn bolide_dynamic_get_type(a: *const BolideDynamic) -> i64 {
-    if a.is_null() { return 0; }
+    if a.is_null() {
+        return 0;
+    }
     let a = unsafe { &*a };
     a.tag as i64
 }
 
 #[no_mangle]
 pub extern "C" fn bolide_dynamic_is_truthy(a: *const BolideDynamic) -> i64 {
-    if a.is_null() { return 0; }
+    if a.is_null() {
+        return 0;
+    }
     let a = unsafe { &*a };
-    if a.is_truthy() { 1 } else { 0 }
+    if a.is_truthy() {
+        1
+    } else {
+        0
+    }
 }
 
 #[no_mangle]
 pub extern "C" fn bolide_dynamic_to_int(a: *const BolideDynamic) -> i64 {
-    if a.is_null() { return 0; }
+    if a.is_null() {
+        return 0;
+    }
     let a = unsafe { &*a };
     a.to_int()
 }
 
 #[no_mangle]
 pub extern "C" fn bolide_dynamic_to_float(a: *const BolideDynamic) -> f64 {
-    if a.is_null() { return 0.0; }
+    if a.is_null() {
+        return 0.0;
+    }
     let a = unsafe { &*a };
     a.to_float()
 }
@@ -481,8 +541,13 @@ pub extern "C" fn bolide_dynamic_to_float(a: *const BolideDynamic) -> f64 {
 // ==================== 动态算术运算 ====================
 
 #[no_mangle]
-pub extern "C" fn bolide_dynamic_add(a: *const BolideDynamic, b: *const BolideDynamic) -> *mut BolideDynamic {
-    if a.is_null() || b.is_null() { return bolide_dynamic_none(); }
+pub extern "C" fn bolide_dynamic_add(
+    a: *const BolideDynamic,
+    b: *const BolideDynamic,
+) -> *mut BolideDynamic {
+    if a.is_null() || b.is_null() {
+        return bolide_dynamic_none();
+    }
     let a = unsafe { &*a };
     let b = unsafe { &*b };
 
@@ -495,7 +560,7 @@ pub extern "C" fn bolide_dynamic_add(a: *const BolideDynamic, b: *const BolideDy
         },
         (DynamicType::Int, DynamicType::Float) | (DynamicType::Float, DynamicType::Int) => {
             BolideDynamic::from_float(a.to_float() + b.to_float())
-        },
+        }
         (DynamicType::BigInt, DynamicType::BigInt) => unsafe {
             let result = crate::bolide_bigint_add(a.data.bigint_ptr, b.data.bigint_ptr);
             BolideDynamic::from_bigint(result)
@@ -508,15 +573,18 @@ pub extern "C" fn bolide_dynamic_add(a: *const BolideDynamic, b: *const BolideDy
             let result = crate::bolide_string_concat(a.data.string_ptr, b.data.string_ptr);
             BolideDynamic::from_string(result)
         },
-        _ => {
-            BolideDynamic::from_float(a.to_float() + b.to_float())
-        }
+        _ => BolideDynamic::from_float(a.to_float() + b.to_float()),
     }
 }
 
 #[no_mangle]
-pub extern "C" fn bolide_dynamic_sub(a: *const BolideDynamic, b: *const BolideDynamic) -> *mut BolideDynamic {
-    if a.is_null() || b.is_null() { return bolide_dynamic_none(); }
+pub extern "C" fn bolide_dynamic_sub(
+    a: *const BolideDynamic,
+    b: *const BolideDynamic,
+) -> *mut BolideDynamic {
+    if a.is_null() || b.is_null() {
+        return bolide_dynamic_none();
+    }
     let a = unsafe { &*a };
     let b = unsafe { &*b };
 
@@ -535,15 +603,18 @@ pub extern "C" fn bolide_dynamic_sub(a: *const BolideDynamic, b: *const BolideDy
             let result = crate::bolide_decimal_sub(a.data.decimal_ptr, b.data.decimal_ptr);
             BolideDynamic::from_decimal(result)
         },
-        _ => {
-            BolideDynamic::from_float(a.to_float() - b.to_float())
-        }
+        _ => BolideDynamic::from_float(a.to_float() - b.to_float()),
     }
 }
 
 #[no_mangle]
-pub extern "C" fn bolide_dynamic_mul(a: *const BolideDynamic, b: *const BolideDynamic) -> *mut BolideDynamic {
-    if a.is_null() || b.is_null() { return bolide_dynamic_none(); }
+pub extern "C" fn bolide_dynamic_mul(
+    a: *const BolideDynamic,
+    b: *const BolideDynamic,
+) -> *mut BolideDynamic {
+    if a.is_null() || b.is_null() {
+        return bolide_dynamic_none();
+    }
     let a = unsafe { &*a };
     let b = unsafe { &*b };
 
@@ -562,21 +633,26 @@ pub extern "C" fn bolide_dynamic_mul(a: *const BolideDynamic, b: *const BolideDy
             let result = crate::bolide_decimal_mul(a.data.decimal_ptr, b.data.decimal_ptr);
             BolideDynamic::from_decimal(result)
         },
-        _ => {
-            BolideDynamic::from_float(a.to_float() * b.to_float())
-        }
+        _ => BolideDynamic::from_float(a.to_float() * b.to_float()),
     }
 }
 
 #[no_mangle]
-pub extern "C" fn bolide_dynamic_div(a: *const BolideDynamic, b: *const BolideDynamic) -> *mut BolideDynamic {
-    if a.is_null() || b.is_null() { return bolide_dynamic_none(); }
+pub extern "C" fn bolide_dynamic_div(
+    a: *const BolideDynamic,
+    b: *const BolideDynamic,
+) -> *mut BolideDynamic {
+    if a.is_null() || b.is_null() {
+        return bolide_dynamic_none();
+    }
     let a = unsafe { &*a };
     let b = unsafe { &*b };
 
     match (a.tag, b.tag) {
         (DynamicType::Int, DynamicType::Int) => unsafe {
-            if b.data.int_val == 0 { return bolide_dynamic_none(); }
+            if b.data.int_val == 0 {
+                return bolide_dynamic_none();
+            }
             BolideDynamic::from_int(a.data.int_val / b.data.int_val)
         },
         (DynamicType::BigInt, DynamicType::BigInt) => unsafe {
@@ -589,7 +665,9 @@ pub extern "C" fn bolide_dynamic_div(a: *const BolideDynamic, b: *const BolideDy
         },
         _ => {
             let bf = b.to_float();
-            if bf == 0.0 { return bolide_dynamic_none(); }
+            if bf == 0.0 {
+                return bolide_dynamic_none();
+            }
             BolideDynamic::from_float(a.to_float() / bf)
         }
     }
@@ -597,16 +675,14 @@ pub extern "C" fn bolide_dynamic_div(a: *const BolideDynamic, b: *const BolideDy
 
 #[no_mangle]
 pub extern "C" fn bolide_dynamic_neg(a: *const BolideDynamic) -> *mut BolideDynamic {
-    if a.is_null() { return bolide_dynamic_none(); }
+    if a.is_null() {
+        return bolide_dynamic_none();
+    }
     let a = unsafe { &*a };
 
     match a.tag {
-        DynamicType::Int => unsafe {
-            BolideDynamic::from_int(-a.data.int_val)
-        },
-        DynamicType::Float => unsafe {
-            BolideDynamic::from_float(-a.data.float_val)
-        },
+        DynamicType::Int => unsafe { BolideDynamic::from_int(-a.data.int_val) },
+        DynamicType::Float => unsafe { BolideDynamic::from_float(-a.data.float_val) },
         DynamicType::BigInt => unsafe {
             let result = crate::bolide_bigint_neg(a.data.bigint_ptr);
             BolideDynamic::from_bigint(result)
@@ -623,45 +699,105 @@ pub extern "C" fn bolide_dynamic_neg(a: *const BolideDynamic) -> *mut BolideDyna
 
 #[no_mangle]
 pub extern "C" fn bolide_dynamic_eq(a: *const BolideDynamic, b: *const BolideDynamic) -> i64 {
-    if a.is_null() && b.is_null() { return 1; }
-    if a.is_null() || b.is_null() { return 0; }
+    if a.is_null() && b.is_null() {
+        return 1;
+    }
+    if a.is_null() || b.is_null() {
+        return 0;
+    }
     let a = unsafe { &*a };
     let b = unsafe { &*b };
 
     if a.tag != b.tag {
-        return if (a.to_float() - b.to_float()).abs() < 1e-10 { 1 } else { 0 };
+        return if (a.to_float() - b.to_float()).abs() < 1e-10 {
+            1
+        } else {
+            0
+        };
     }
 
     match a.tag {
         DynamicType::None => 1,
-        DynamicType::Bool => unsafe { if a.data.bool_val == b.data.bool_val { 1 } else { 0 } },
-        DynamicType::Int => unsafe { if a.data.int_val == b.data.int_val { 1 } else { 0 } },
-        DynamicType::Float => unsafe { if (a.data.float_val - b.data.float_val).abs() < 1e-10 { 1 } else { 0 } },
-        DynamicType::BigInt => unsafe { crate::bolide_bigint_eq(a.data.bigint_ptr, b.data.bigint_ptr) },
-        DynamicType::Decimal => unsafe { crate::bolide_decimal_eq(a.data.decimal_ptr, b.data.decimal_ptr) },
-        DynamicType::String => unsafe { crate::bolide_string_eq(a.data.string_ptr, b.data.string_ptr) },
+        DynamicType::Bool => unsafe {
+            if a.data.bool_val == b.data.bool_val {
+                1
+            } else {
+                0
+            }
+        },
+        DynamicType::Int => unsafe {
+            if a.data.int_val == b.data.int_val {
+                1
+            } else {
+                0
+            }
+        },
+        DynamicType::Float => unsafe {
+            if (a.data.float_val - b.data.float_val).abs() < 1e-10 {
+                1
+            } else {
+                0
+            }
+        },
+        DynamicType::BigInt => unsafe {
+            crate::bolide_bigint_eq(a.data.bigint_ptr, b.data.bigint_ptr)
+        },
+        DynamicType::Decimal => unsafe {
+            crate::bolide_decimal_eq(a.data.decimal_ptr, b.data.decimal_ptr)
+        },
+        DynamicType::String => unsafe {
+            crate::bolide_string_eq(a.data.string_ptr, b.data.string_ptr)
+        },
         DynamicType::List => 0, // 列表比较暂不实现
     }
 }
 
 #[no_mangle]
 pub extern "C" fn bolide_dynamic_lt(a: *const BolideDynamic, b: *const BolideDynamic) -> i64 {
-    if a.is_null() || b.is_null() { return 0; }
+    if a.is_null() || b.is_null() {
+        return 0;
+    }
     let a = unsafe { &*a };
     let b = unsafe { &*b };
 
     match (a.tag, b.tag) {
-        (DynamicType::Int, DynamicType::Int) => unsafe { if a.data.int_val < b.data.int_val { 1 } else { 0 } },
-        (DynamicType::Float, DynamicType::Float) => unsafe { if a.data.float_val < b.data.float_val { 1 } else { 0 } },
-        (DynamicType::BigInt, DynamicType::BigInt) => unsafe { crate::bolide_bigint_lt(a.data.bigint_ptr, b.data.bigint_ptr) },
-        (DynamicType::Decimal, DynamicType::Decimal) => unsafe { crate::bolide_decimal_lt(a.data.decimal_ptr, b.data.decimal_ptr) },
-        _ => if a.to_float() < b.to_float() { 1 } else { 0 },
+        (DynamicType::Int, DynamicType::Int) => unsafe {
+            if a.data.int_val < b.data.int_val {
+                1
+            } else {
+                0
+            }
+        },
+        (DynamicType::Float, DynamicType::Float) => unsafe {
+            if a.data.float_val < b.data.float_val {
+                1
+            } else {
+                0
+            }
+        },
+        (DynamicType::BigInt, DynamicType::BigInt) => unsafe {
+            crate::bolide_bigint_lt(a.data.bigint_ptr, b.data.bigint_ptr)
+        },
+        (DynamicType::Decimal, DynamicType::Decimal) => unsafe {
+            crate::bolide_decimal_lt(a.data.decimal_ptr, b.data.decimal_ptr)
+        },
+        _ => {
+            if a.to_float() < b.to_float() {
+                1
+            } else {
+                0
+            }
+        }
     }
 }
 
 #[no_mangle]
 pub extern "C" fn bolide_dynamic_le(a: *const BolideDynamic, b: *const BolideDynamic) -> i64 {
-    if bolide_dynamic_lt(a, b) == 1 || bolide_dynamic_eq(a, b) == 1 { 1 } else { 0 }
+    if bolide_dynamic_lt(a, b) == 1 || bolide_dynamic_eq(a, b) == 1 {
+        1
+    } else {
+        0
+    }
 }
 
 #[no_mangle]
@@ -671,7 +807,11 @@ pub extern "C" fn bolide_dynamic_gt(a: *const BolideDynamic, b: *const BolideDyn
 
 #[no_mangle]
 pub extern "C" fn bolide_dynamic_ge(a: *const BolideDynamic, b: *const BolideDynamic) -> i64 {
-    if bolide_dynamic_gt(a, b) == 1 || bolide_dynamic_eq(a, b) == 1 { 1 } else { 0 }
+    if bolide_dynamic_gt(a, b) == 1 || bolide_dynamic_eq(a, b) == 1 {
+        1
+    } else {
+        0
+    }
 }
 
 // ==================== 测试 ====================

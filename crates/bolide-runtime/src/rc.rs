@@ -19,12 +19,11 @@ pub enum TypeTag {
     BigInt = 2,
     Decimal = 3,
     List = 4,
-    Object = 5,    // 用户自定义对象
-    Closure = 6,   // 闭包
-    Future = 7,    // Future/Promise
-    Dict = 8,      // 字典/哈希表
+    Object = 5,  // 用户自定义对象
+    Closure = 6, // 闭包
+    Future = 7,  // Future/Promise
+    Dict = 8,    // 字典/哈希表
 }
-
 
 /// 对象头，位于每个堆分配对象之前
 ///
@@ -496,7 +495,11 @@ pub extern "C" fn bolide_rc_is_moved(ptr: BolideRcPtr) -> i32 {
     }
     unsafe {
         let header = &*((ptr as *mut RcHeader).sub(1));
-        if header.is_moved() { 1 } else { 0 }
+        if header.is_moved() {
+            1
+        } else {
+            0
+        }
     }
 }
 
@@ -517,16 +520,20 @@ pub extern "C" fn bolide_rc_mark_moved(ptr: BolideRcPtr) {
 /// 根据类型标签释放数据
 unsafe fn drop_by_type(ptr: *mut c_void, type_tag: u8) {
     match type_tag {
-        1 => { // String
+        1 => {
+            // String
             crate::bolide_string_free(ptr as *mut crate::BolideString);
         }
-        2 => { // BigInt
+        2 => {
+            // BigInt
             crate::bolide_bigint_free(ptr as *mut crate::BolideBigInt);
         }
-        3 => { // Decimal
+        3 => {
+            // Decimal
             crate::bolide_decimal_free(ptr as *mut crate::BolideDecimal);
         }
-        4 => { // List
+        4 => {
+            // List
             crate::bolide_list_free(ptr as *mut crate::BolideList);
         }
         _ => {
@@ -542,7 +549,7 @@ fn get_type_size(type_tag: u8) -> usize {
         2 => std::mem::size_of::<crate::BolideBigInt>(),
         3 => std::mem::size_of::<crate::BolideDecimal>(),
         4 => std::mem::size_of::<crate::BolideList>(),
-        _ => 8,  // 默认指针大小
+        _ => 8, // 默认指针大小
     }
 }
 
@@ -553,12 +560,15 @@ fn get_type_size(type_tag: u8) -> usize {
 unsafe fn dealloc_rc_allocation(header_ptr: *mut RcHeader, type_tag: u8) {
     let data_size = {
         let size = (*header_ptr).alloc_size as usize;
-        if size > 0 { size } else { get_type_size(type_tag) }
+        if size > 0 {
+            size
+        } else {
+            get_type_size(type_tag)
+        }
     };
-    let layout = std::alloc::Layout::from_size_align(
-        std::mem::size_of::<RcHeader>() + data_size,
-        16
-    ).unwrap();
+    let layout =
+        std::alloc::Layout::from_size_align(std::mem::size_of::<RcHeader>() + data_size, 16)
+            .unwrap();
     std::alloc::dealloc(header_ptr as *mut u8, layout);
 }
 

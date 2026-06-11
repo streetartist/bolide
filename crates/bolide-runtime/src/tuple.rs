@@ -5,7 +5,7 @@
 //! - 索引访问
 //! - 打印
 
-use std::alloc::{Layout, alloc, dealloc};
+use std::alloc::{alloc, dealloc, Layout};
 
 /// 元组头部结构
 /// 元素数据紧随其后 (每个元素 8 字节)
@@ -19,16 +19,14 @@ impl BolideTuple {
     /// 获取元素指针
     fn data_ptr(&self) -> *const i64 {
         unsafe {
-            (self as *const Self as *const u8)
-                .add(std::mem::size_of::<BolideTuple>()) as *const i64
+            (self as *const Self as *const u8).add(std::mem::size_of::<BolideTuple>()) as *const i64
         }
     }
 
     /// 获取可变元素指针
     fn data_ptr_mut(&mut self) -> *mut i64 {
         unsafe {
-            (self as *mut Self as *mut u8)
-                .add(std::mem::size_of::<BolideTuple>()) as *mut i64
+            (self as *mut Self as *mut u8).add(std::mem::size_of::<BolideTuple>()) as *mut i64
         }
     }
 }
@@ -99,7 +97,12 @@ pub extern "C" fn bolide_tuple_free(ptr: *mut BolideTuple) {
 pub extern "C" fn bolide_tuple_debug_stats() {
     let alloc = TUPLE_ALLOC_COUNT.load(Ordering::SeqCst);
     let free = TUPLE_FREE_COUNT.load(Ordering::SeqCst);
-    println!("[Tuple Stats] alloc: {}, free: {}, leak: {}", alloc, free, alloc - free);
+    println!(
+        "[Tuple Stats] alloc: {}, free: {}, leak: {}",
+        alloc,
+        free,
+        alloc - free
+    );
 }
 
 // ==================== 元素访问 ====================

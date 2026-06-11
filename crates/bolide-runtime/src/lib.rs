@@ -14,36 +14,37 @@
 //! - `thread`: 线程和线程池
 //! - `channel`: 线程安全通道
 
+mod bigint;
+mod channel;
+mod coroutine;
+mod decimal;
+pub mod dict;
+mod dynamic;
+mod exception;
+mod ffi;
+pub mod list;
+mod object;
+mod print;
 mod rc;
 mod string;
-mod bigint;
-mod decimal;
-mod dynamic;
-pub mod list;
-pub mod dict;
-mod print;
 mod thread;
-mod channel;
-mod object;
-mod coroutine;
 mod tuple;
-mod ffi;
 
+pub use bigint::*;
+pub use channel::*;
+pub use coroutine::*;
+pub use decimal::*;
+pub use dict::*;
+pub use dynamic::*;
+pub use exception::*;
+pub use ffi::*;
+pub use list::*;
+pub use object::*;
+pub use print::*;
 pub use rc::*;
 pub use string::*;
-pub use bigint::*;
-pub use decimal::*;
-pub use dynamic::*;
-pub use list::*;
-pub use dict::*;
-pub use print::*;
 pub use thread::*;
-pub use channel::*;
-pub use object::*;
-pub use coroutine::*;
 pub use tuple::*;
-pub use ffi::*;
-
 
 use std::alloc::{alloc, dealloc, Layout};
 use std::os::raw::c_void;

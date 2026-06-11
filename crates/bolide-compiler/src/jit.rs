@@ -2,13 +2,16 @@
 //!
 //! 使用 Cranelift 实现的即时编译器
 
+use bolide_parser::{
+    Assign, BinOp, ClassDef, ClassField, Expr, ExternBlock, FuncDef, Param, ParamMode, Program,
+    Statement, Type as BolideType, UnaryOp, VarDecl,
+};
+use cranelift::prelude::isa::{CallConv, TargetIsa};
 use cranelift::prelude::*;
-use cranelift::prelude::isa::{TargetIsa, CallConv};
+use cranelift_codegen::ir::{FuncRef, StackSlotData, StackSlotKind, TrapCode};
 use cranelift_jit::{JITBuilder, JITModule};
-use cranelift_module::{DataDescription, Linkage, Module, FuncId};
-use cranelift_codegen::ir::{FuncRef, StackSlotData, StackSlotKind};
+use cranelift_module::{DataDescription, FuncId, Linkage, Module};
 use std::collections::{HashMap, HashSet};
-use bolide_parser::{Program, Statement, Expr, BinOp, UnaryOp, Type as BolideType, FuncDef, VarDecl, Assign, Param, ParamMode, ClassDef, ClassField, ExternBlock};
 
 /// Trampoline 信息
 struct TrampolineInfo {
@@ -22,7 +25,7 @@ struct TrampolineInfo {
 struct FieldInfo {
     name: String,
     ty: BolideType,
-    offset: usize,  // 字段在对象中的偏移（字节）
+    offset: usize, // 字段在对象中的偏移（字节）
 }
 
 /// 类信息
@@ -31,8 +34,8 @@ struct ClassInfo {
     name: String,
     parent: Option<String>,
     fields: Vec<FieldInfo>,
-    methods: Vec<String>,  // 方法名列表
-    size: usize,  // 对象数据大小（字节，不含头部）
+    methods: Vec<String>, // 方法名列表
+    size: usize,          // 对象数据大小（字节，不含头部）
 }
 
 /// JIT 编译器
@@ -69,7 +72,8 @@ pub struct JitCompiler {
     /// 全局变量名 -> 数据ID 映射
     global_data_ids: HashMap<String, cranelift_module::DataId>,
     /// 源文件所在目录（import 相对路径的解析基准）
-    base_dir: Option<String>,    /// 全局变量类型映射
+    base_dir: Option<String>,
+    /// 全局变量类型映射
     global_var_types: HashMap<String, BolideType>,
 }
 
@@ -77,7 +81,9 @@ impl JitCompiler {
     pub fn new() -> Self {
         // 开启 Cranelift 优化（默认 opt_level=none 不做任何优化）
         let mut flag_builder = settings::builder();
-        flag_builder.set("opt_level", "speed").expect("invalid opt_level");
+        flag_builder
+            .set("opt_level", "speed")
+            .expect("invalid opt_level");
         let isa_builder = cranelift_native::builder().expect("host machine is not supported");
         let isa = isa_builder
             .finish(settings::Flags::new(flag_builder))
@@ -86,83 +92,298 @@ impl JitCompiler {
 
         // 注册运行时函数 - 基本类型打印 (统一在 print.rs)
         builder.symbol("@_print_int", bolide_runtime::bolide_print_int as *const u8);
-        builder.symbol("@_print_float", bolide_runtime::bolide_print_float as *const u8);
-        builder.symbol("@_print_bool", bolide_runtime::bolide_print_bool as *const u8);
-        builder.symbol("@_print_bigint", bolide_runtime::bolide_print_bigint as *const u8);
-        builder.symbol("@_print_decimal", bolide_runtime::bolide_print_decimal as *const u8);
-        builder.symbol("@_print_string", bolide_runtime::bolide_print_string as *const u8);
-        builder.symbol("@_print_dynamic", bolide_runtime::bolide_print_dynamic as *const u8);
+        builder.symbol(
+            "@_print_float",
+            bolide_runtime::bolide_print_float as *const u8,
+        );
+        builder.symbol(
+            "@_print_bool",
+            bolide_runtime::bolide_print_bool as *const u8,
+        );
+        builder.symbol(
+            "@_print_bigint",
+            bolide_runtime::bolide_print_bigint as *const u8,
+        );
+        builder.symbol(
+            "@_print_decimal",
+            bolide_runtime::bolide_print_decimal as *const u8,
+        );
+        builder.symbol(
+            "@_print_string",
+            bolide_runtime::bolide_print_string as *const u8,
+        );
+        builder.symbol(
+            "@_print_dynamic",
+            bolide_runtime::bolide_print_dynamic as *const u8,
+        );
+        builder.symbol(
+            "@_print_int_inline",
+            bolide_runtime::bolide_print_int_inline as *const u8,
+        );
+        builder.symbol(
+            "@_print_float_inline",
+            bolide_runtime::bolide_print_float_inline as *const u8,
+        );
+        builder.symbol(
+            "@_print_bool_inline",
+            bolide_runtime::bolide_print_bool_inline as *const u8,
+        );
+        builder.symbol(
+            "@_print_bigint_inline",
+            bolide_runtime::bolide_print_bigint_inline as *const u8,
+        );
+        builder.symbol(
+            "@_print_decimal_inline",
+            bolide_runtime::bolide_print_decimal_inline as *const u8,
+        );
+        builder.symbol(
+            "@_print_string_inline",
+            bolide_runtime::bolide_print_string_inline as *const u8,
+        );
+        builder.symbol(
+            "@_print_dynamic_inline",
+            bolide_runtime::bolide_print_dynamic_inline as *const u8,
+        );
+        builder.symbol(
+            "@_print_tuple_start",
+            bolide_runtime::bolide_print_tuple_start as *const u8,
+        );
+        builder.symbol(
+            "@_print_tuple_separator",
+            bolide_runtime::bolide_print_tuple_separator as *const u8,
+        );
+        builder.symbol(
+            "@_print_tuple_end_inline",
+            bolide_runtime::bolide_print_tuple_end_inline as *const u8,
+        );
+        builder.symbol("@_println", bolide_runtime::bolide_println as *const u8);
 
         // 注册运行时函数 - 用户输入
         builder.symbol("@_input", bolide_runtime::bolide_input as *const u8);
-        builder.symbol("@_input_prompt", bolide_runtime::bolide_input_prompt as *const u8);
+        builder.symbol(
+            "@_input_prompt",
+            bolide_runtime::bolide_input_prompt as *const u8,
+        );
 
         // 注册运行时函数 - BigInt
-        builder.symbol("@_bigint_from_i64", bolide_runtime::bolide_bigint_from_i64 as *const u8);
-        builder.symbol("@_bigint_from_str", bolide_runtime::bolide_bigint_from_str as *const u8);
-        builder.symbol("@_bigint_add", bolide_runtime::bolide_bigint_add as *const u8);
-        builder.symbol("@_bigint_sub", bolide_runtime::bolide_bigint_sub as *const u8);
-        builder.symbol("@_bigint_mul", bolide_runtime::bolide_bigint_mul as *const u8);
-        builder.symbol("@_bigint_div", bolide_runtime::bolide_bigint_div as *const u8);
-        builder.symbol("@_bigint_rem", bolide_runtime::bolide_bigint_rem as *const u8);
-        builder.symbol("@_bigint_neg", bolide_runtime::bolide_bigint_neg as *const u8);
+        builder.symbol(
+            "@_bigint_from_i64",
+            bolide_runtime::bolide_bigint_from_i64 as *const u8,
+        );
+        builder.symbol(
+            "@_bigint_from_str",
+            bolide_runtime::bolide_bigint_from_str as *const u8,
+        );
+        builder.symbol(
+            "@_bigint_add",
+            bolide_runtime::bolide_bigint_add as *const u8,
+        );
+        builder.symbol(
+            "@_bigint_sub",
+            bolide_runtime::bolide_bigint_sub as *const u8,
+        );
+        builder.symbol(
+            "@_bigint_mul",
+            bolide_runtime::bolide_bigint_mul as *const u8,
+        );
+        builder.symbol(
+            "@_bigint_div",
+            bolide_runtime::bolide_bigint_div as *const u8,
+        );
+        builder.symbol(
+            "@_bigint_rem",
+            bolide_runtime::bolide_bigint_rem as *const u8,
+        );
+        builder.symbol(
+            "@_bigint_neg",
+            bolide_runtime::bolide_bigint_neg as *const u8,
+        );
         builder.symbol("@_bigint_eq", bolide_runtime::bolide_bigint_eq as *const u8);
         builder.symbol("@_bigint_lt", bolide_runtime::bolide_bigint_lt as *const u8);
         builder.symbol("@_bigint_le", bolide_runtime::bolide_bigint_le as *const u8);
         builder.symbol("@_bigint_gt", bolide_runtime::bolide_bigint_gt as *const u8);
         builder.symbol("@_bigint_ge", bolide_runtime::bolide_bigint_ge as *const u8);
-        builder.symbol("@_bigint_to_i64", bolide_runtime::bolide_bigint_to_i64 as *const u8);
-        builder.symbol("@_bigint_clone", bolide_runtime::bolide_bigint_clone as *const u8);
-        builder.symbol("@_bigint_debug_stats", bolide_runtime::bolide_bigint_debug_stats as *const u8);
+        builder.symbol(
+            "@_bigint_to_i64",
+            bolide_runtime::bolide_bigint_to_i64 as *const u8,
+        );
+        builder.symbol(
+            "@_bigint_clone",
+            bolide_runtime::bolide_bigint_clone as *const u8,
+        );
+        builder.symbol(
+            "@_bigint_debug_stats",
+            bolide_runtime::bolide_bigint_debug_stats as *const u8,
+        );
 
         // 注册运行时函数 - Decimal
-        builder.symbol("@_decimal_from_i64", bolide_runtime::bolide_decimal_from_i64 as *const u8);
-        builder.symbol("@_decimal_from_f64", bolide_runtime::bolide_decimal_from_f64 as *const u8);
-        builder.symbol("@_decimal_from_str", bolide_runtime::bolide_decimal_from_str as *const u8);
-        builder.symbol("@_decimal_add", bolide_runtime::bolide_decimal_add as *const u8);
-        builder.symbol("@_decimal_sub", bolide_runtime::bolide_decimal_sub as *const u8);
-        builder.symbol("@_decimal_mul", bolide_runtime::bolide_decimal_mul as *const u8);
-        builder.symbol("@_decimal_div", bolide_runtime::bolide_decimal_div as *const u8);
-        builder.symbol("@_decimal_neg", bolide_runtime::bolide_decimal_neg as *const u8);
-        builder.symbol("@_decimal_eq", bolide_runtime::bolide_decimal_eq as *const u8);
-        builder.symbol("@_decimal_lt", bolide_runtime::bolide_decimal_lt as *const u8);
-        builder.symbol("@_decimal_to_i64", bolide_runtime::bolide_decimal_to_i64 as *const u8);
-        builder.symbol("@_decimal_to_f64", bolide_runtime::bolide_decimal_to_f64 as *const u8);
-        builder.symbol("@_decimal_clone", bolide_runtime::bolide_decimal_clone as *const u8);
+        builder.symbol(
+            "@_decimal_from_i64",
+            bolide_runtime::bolide_decimal_from_i64 as *const u8,
+        );
+        builder.symbol(
+            "@_decimal_from_f64",
+            bolide_runtime::bolide_decimal_from_f64 as *const u8,
+        );
+        builder.symbol(
+            "@_decimal_from_str",
+            bolide_runtime::bolide_decimal_from_str as *const u8,
+        );
+        builder.symbol(
+            "@_decimal_add",
+            bolide_runtime::bolide_decimal_add as *const u8,
+        );
+        builder.symbol(
+            "@_decimal_sub",
+            bolide_runtime::bolide_decimal_sub as *const u8,
+        );
+        builder.symbol(
+            "@_decimal_mul",
+            bolide_runtime::bolide_decimal_mul as *const u8,
+        );
+        builder.symbol(
+            "@_decimal_div",
+            bolide_runtime::bolide_decimal_div as *const u8,
+        );
+        builder.symbol(
+            "@_decimal_neg",
+            bolide_runtime::bolide_decimal_neg as *const u8,
+        );
+        builder.symbol(
+            "@_decimal_eq",
+            bolide_runtime::bolide_decimal_eq as *const u8,
+        );
+        builder.symbol(
+            "@_decimal_lt",
+            bolide_runtime::bolide_decimal_lt as *const u8,
+        );
+        builder.symbol(
+            "@_decimal_to_i64",
+            bolide_runtime::bolide_decimal_to_i64 as *const u8,
+        );
+        builder.symbol(
+            "@_decimal_to_f64",
+            bolide_runtime::bolide_decimal_to_f64 as *const u8,
+        );
+        builder.symbol(
+            "@_decimal_clone",
+            bolide_runtime::bolide_decimal_clone as *const u8,
+        );
 
         // 注册运行时函数 - Dynamic
-        builder.symbol("@_dynamic_from_int", bolide_runtime::bolide_dynamic_from_int as *const u8);
-        builder.symbol("@_dynamic_from_float", bolide_runtime::bolide_dynamic_from_float as *const u8);
-        builder.symbol("@_dynamic_from_bool", bolide_runtime::bolide_dynamic_from_bool as *const u8);
-        builder.symbol("@_dynamic_from_string", bolide_runtime::bolide_dynamic_from_string as *const u8);
-        builder.symbol("@_dynamic_from_list", bolide_runtime::bolide_dynamic_from_list as *const u8);
-        builder.symbol("@_dynamic_from_bigint", bolide_runtime::bolide_dynamic_from_bigint as *const u8);
-        builder.symbol("@_dynamic_from_decimal", bolide_runtime::bolide_dynamic_from_decimal as *const u8);
-        builder.symbol("@_dynamic_add", bolide_runtime::bolide_dynamic_add as *const u8);
-        builder.symbol("@_dynamic_sub", bolide_runtime::bolide_dynamic_sub as *const u8);
-        builder.symbol("@_dynamic_mul", bolide_runtime::bolide_dynamic_mul as *const u8);
-        builder.symbol("@_dynamic_div", bolide_runtime::bolide_dynamic_div as *const u8);
-        builder.symbol("@_dynamic_neg", bolide_runtime::bolide_dynamic_neg as *const u8);
-        builder.symbol("@_dynamic_eq", bolide_runtime::bolide_dynamic_eq as *const u8);
-        builder.symbol("@_dynamic_lt", bolide_runtime::bolide_dynamic_lt as *const u8);
-        builder.symbol("@_dynamic_clone", bolide_runtime::bolide_dynamic_clone as *const u8);
+        builder.symbol(
+            "@_dynamic_from_int",
+            bolide_runtime::bolide_dynamic_from_int as *const u8,
+        );
+        builder.symbol(
+            "@_dynamic_from_float",
+            bolide_runtime::bolide_dynamic_from_float as *const u8,
+        );
+        builder.symbol(
+            "@_dynamic_from_bool",
+            bolide_runtime::bolide_dynamic_from_bool as *const u8,
+        );
+        builder.symbol(
+            "@_dynamic_from_string",
+            bolide_runtime::bolide_dynamic_from_string as *const u8,
+        );
+        builder.symbol(
+            "@_dynamic_from_list",
+            bolide_runtime::bolide_dynamic_from_list as *const u8,
+        );
+        builder.symbol(
+            "@_dynamic_from_bigint",
+            bolide_runtime::bolide_dynamic_from_bigint as *const u8,
+        );
+        builder.symbol(
+            "@_dynamic_from_decimal",
+            bolide_runtime::bolide_dynamic_from_decimal as *const u8,
+        );
+        builder.symbol(
+            "@_dynamic_add",
+            bolide_runtime::bolide_dynamic_add as *const u8,
+        );
+        builder.symbol(
+            "@_dynamic_sub",
+            bolide_runtime::bolide_dynamic_sub as *const u8,
+        );
+        builder.symbol(
+            "@_dynamic_mul",
+            bolide_runtime::bolide_dynamic_mul as *const u8,
+        );
+        builder.symbol(
+            "@_dynamic_div",
+            bolide_runtime::bolide_dynamic_div as *const u8,
+        );
+        builder.symbol(
+            "@_dynamic_neg",
+            bolide_runtime::bolide_dynamic_neg as *const u8,
+        );
+        builder.symbol(
+            "@_dynamic_eq",
+            bolide_runtime::bolide_dynamic_eq as *const u8,
+        );
+        builder.symbol(
+            "@_dynamic_lt",
+            bolide_runtime::bolide_dynamic_lt as *const u8,
+        );
+        builder.symbol(
+            "@_dynamic_clone",
+            bolide_runtime::bolide_dynamic_clone as *const u8,
+        );
 
         // 注册字符串函数
-        builder.symbol("@_bolide_string_new", bolide_runtime::bolide_string_new as *const u8);
-        builder.symbol("@_string_from_slice", bolide_runtime::bolide_string_from_slice as *const u8);
-        builder.symbol("@_string_literal", bolide_runtime::bolide_string_literal as *const u8);
-        builder.symbol("@_string_as_cstr", bolide_runtime::bolide_string_as_cstr as *const u8);
-        builder.symbol("@_string_concat", bolide_runtime::bolide_string_concat as *const u8);
+        builder.symbol(
+            "@_bolide_string_new",
+            bolide_runtime::bolide_string_new as *const u8,
+        );
+        builder.symbol(
+            "@_string_from_slice",
+            bolide_runtime::bolide_string_from_slice as *const u8,
+        );
+        builder.symbol(
+            "@_string_literal",
+            bolide_runtime::bolide_string_literal as *const u8,
+        );
+        builder.symbol(
+            "@_string_as_cstr",
+            bolide_runtime::bolide_string_as_cstr as *const u8,
+        );
+        builder.symbol(
+            "@_string_concat",
+            bolide_runtime::bolide_string_concat as *const u8,
+        );
         builder.symbol("@_string_eq", bolide_runtime::bolide_string_eq as *const u8);
 
         // 注册类型转换函数
-        builder.symbol("@_string_from_int", bolide_runtime::bolide_string_from_int as *const u8);
-        builder.symbol("@_string_from_float", bolide_runtime::bolide_string_from_float as *const u8);
-        builder.symbol("@_string_from_bool", bolide_runtime::bolide_string_from_bool as *const u8);
-        builder.symbol("@_string_from_bigint", bolide_runtime::bolide_string_from_bigint as *const u8);
-        builder.symbol("@_string_from_decimal", bolide_runtime::bolide_string_from_decimal as *const u8);
-        builder.symbol("@_string_to_int", bolide_runtime::bolide_string_to_int as *const u8);
-        builder.symbol("@_string_to_float", bolide_runtime::bolide_string_to_float as *const u8);
+        builder.symbol(
+            "@_string_from_int",
+            bolide_runtime::bolide_string_from_int as *const u8,
+        );
+        builder.symbol(
+            "@_string_from_float",
+            bolide_runtime::bolide_string_from_float as *const u8,
+        );
+        builder.symbol(
+            "@_string_from_bool",
+            bolide_runtime::bolide_string_from_bool as *const u8,
+        );
+        builder.symbol(
+            "@_string_from_bigint",
+            bolide_runtime::bolide_string_from_bigint as *const u8,
+        );
+        builder.symbol(
+            "@_string_from_decimal",
+            bolide_runtime::bolide_string_from_decimal as *const u8,
+        );
+        builder.symbol(
+            "@_string_to_int",
+            bolide_runtime::bolide_string_to_int as *const u8,
+        );
+        builder.symbol(
+            "@_string_to_float",
+            bolide_runtime::bolide_string_to_float as *const u8,
+        );
 
         // 注册内存分配函数
         builder.symbol("@_bolide_alloc", bolide_runtime::bolide_alloc as *const u8);
@@ -170,144 +391,439 @@ impl JitCompiler {
 
         // 注册对象运行时函数
         builder.symbol("@_object_alloc", bolide_runtime::object_alloc as *const u8);
-        builder.symbol("@_object_retain", bolide_runtime::object_retain as *const u8);
-        builder.symbol("@_object_release", bolide_runtime::object_release as *const u8);
+        builder.symbol(
+            "@_object_retain",
+            bolide_runtime::object_retain as *const u8,
+        );
+        builder.symbol(
+            "@_object_release",
+            bolide_runtime::object_release as *const u8,
+        );
         builder.symbol("@_object_clone", bolide_runtime::object_clone as *const u8);
-        builder.symbol("@_object_weak_retain", bolide_runtime::object_weak_retain as *const u8);
-        builder.symbol("@_object_weak_release", bolide_runtime::object_weak_release as *const u8);
-        builder.symbol("@_object_weak_clone", bolide_runtime::object_weak_clone as *const u8);
-        builder.symbol("@_object_assert_alive", bolide_runtime::object_assert_alive as *const u8);
-        builder.symbol("@_object_is_alive", bolide_runtime::object_is_alive as *const u8);
-        builder.symbol("@_object_ref_count", bolide_runtime::object_ref_count as *const u8);
+        builder.symbol(
+            "@_object_weak_retain",
+            bolide_runtime::object_weak_retain as *const u8,
+        );
+        builder.symbol(
+            "@_object_weak_release",
+            bolide_runtime::object_weak_release as *const u8,
+        );
+        builder.symbol(
+            "@_object_weak_clone",
+            bolide_runtime::object_weak_clone as *const u8,
+        );
+        builder.symbol(
+            "@_object_assert_alive",
+            bolide_runtime::object_assert_alive as *const u8,
+        );
+        builder.symbol(
+            "@_object_is_alive",
+            bolide_runtime::object_is_alive as *const u8,
+        );
+        builder.symbol(
+            "@_object_ref_count",
+            bolide_runtime::object_ref_count as *const u8,
+        );
 
         // 注册运行时函数 - 线程（无参版本）
-        builder.symbol("@_thread_spawn_int", bolide_runtime::bolide_thread_spawn_int as *const u8);
-        builder.symbol("@_thread_spawn_float", bolide_runtime::bolide_thread_spawn_float as *const u8);
-        builder.symbol("@_thread_spawn_ptr", bolide_runtime::bolide_thread_spawn_ptr as *const u8);
+        builder.symbol(
+            "@_thread_spawn_int",
+            bolide_runtime::bolide_thread_spawn_int as *const u8,
+        );
+        builder.symbol(
+            "@_thread_spawn_float",
+            bolide_runtime::bolide_thread_spawn_float as *const u8,
+        );
+        builder.symbol(
+            "@_thread_spawn_ptr",
+            bolide_runtime::bolide_thread_spawn_ptr as *const u8,
+        );
         // 注册运行时函数 - 线程（带环境版本，用于带参数的 spawn）
-        builder.symbol("@_thread_spawn_int_with_env", bolide_runtime::bolide_thread_spawn_int_with_env as *const u8);
-        builder.symbol("@_thread_spawn_float_with_env", bolide_runtime::bolide_thread_spawn_float_with_env as *const u8);
-        builder.symbol("@_thread_spawn_ptr_with_env", bolide_runtime::bolide_thread_spawn_ptr_with_env as *const u8);
-        builder.symbol("@_thread_join_int", bolide_runtime::bolide_thread_join_int as *const u8);
-        builder.symbol("@_thread_join_float", bolide_runtime::bolide_thread_join_float as *const u8);
-        builder.symbol("@_thread_join_ptr", bolide_runtime::bolide_thread_join_ptr as *const u8);
-        builder.symbol("@_thread_handle_free", bolide_runtime::bolide_thread_handle_free as *const u8);
-        builder.symbol("@_thread_cancel", bolide_runtime::bolide_thread_cancel as *const u8);
-        builder.symbol("@_thread_is_cancelled", bolide_runtime::bolide_thread_is_cancelled as *const u8);
+        builder.symbol(
+            "@_thread_spawn_int_with_env",
+            bolide_runtime::bolide_thread_spawn_int_with_env as *const u8,
+        );
+        builder.symbol(
+            "@_thread_spawn_float_with_env",
+            bolide_runtime::bolide_thread_spawn_float_with_env as *const u8,
+        );
+        builder.symbol(
+            "@_thread_spawn_ptr_with_env",
+            bolide_runtime::bolide_thread_spawn_ptr_with_env as *const u8,
+        );
+        builder.symbol(
+            "@_thread_join_int",
+            bolide_runtime::bolide_thread_join_int as *const u8,
+        );
+        builder.symbol(
+            "@_thread_join_float",
+            bolide_runtime::bolide_thread_join_float as *const u8,
+        );
+        builder.symbol(
+            "@_thread_join_ptr",
+            bolide_runtime::bolide_thread_join_ptr as *const u8,
+        );
+        builder.symbol(
+            "@_thread_handle_free",
+            bolide_runtime::bolide_thread_handle_free as *const u8,
+        );
+        builder.symbol(
+            "@_thread_cancel",
+            bolide_runtime::bolide_thread_cancel as *const u8,
+        );
+        builder.symbol(
+            "@_thread_is_cancelled",
+            bolide_runtime::bolide_thread_is_cancelled as *const u8,
+        );
 
         // 注册运行时函数 - 线程池（无参版本）
-        builder.symbol("@_pool_create", bolide_runtime::bolide_pool_create as *const u8);
-        builder.symbol("@_pool_enter", bolide_runtime::bolide_pool_enter as *const u8);
+        builder.symbol(
+            "@_pool_create",
+            bolide_runtime::bolide_pool_create as *const u8,
+        );
+        builder.symbol(
+            "@_pool_enter",
+            bolide_runtime::bolide_pool_enter as *const u8,
+        );
         builder.symbol("@_pool_exit", bolide_runtime::bolide_pool_exit as *const u8);
-        builder.symbol("@_pool_is_active", bolide_runtime::bolide_pool_is_active as *const u8);
-        builder.symbol("@_pool_spawn_int", bolide_runtime::bolide_pool_spawn_int as *const u8);
-        builder.symbol("@_pool_spawn_float", bolide_runtime::bolide_pool_spawn_float as *const u8);
-        builder.symbol("@_pool_spawn_ptr", bolide_runtime::bolide_pool_spawn_ptr as *const u8);
+        builder.symbol(
+            "@_pool_is_active",
+            bolide_runtime::bolide_pool_is_active as *const u8,
+        );
+        builder.symbol(
+            "@_pool_spawn_int",
+            bolide_runtime::bolide_pool_spawn_int as *const u8,
+        );
+        builder.symbol(
+            "@_pool_spawn_float",
+            bolide_runtime::bolide_pool_spawn_float as *const u8,
+        );
+        builder.symbol(
+            "@_pool_spawn_ptr",
+            bolide_runtime::bolide_pool_spawn_ptr as *const u8,
+        );
         // 注册运行时函数 - 线程池（带环境版本）
-        builder.symbol("@_pool_spawn_int_with_env", bolide_runtime::bolide_pool_spawn_int_with_env as *const u8);
-        builder.symbol("@_pool_spawn_float_with_env", bolide_runtime::bolide_pool_spawn_float_with_env as *const u8);
-        builder.symbol("@_pool_spawn_ptr_with_env", bolide_runtime::bolide_pool_spawn_ptr_with_env as *const u8);
-        builder.symbol("@_pool_join_int", bolide_runtime::bolide_pool_join_int as *const u8);
-        builder.symbol("@_pool_join_float", bolide_runtime::bolide_pool_join_float as *const u8);
-        builder.symbol("@_pool_join_ptr", bolide_runtime::bolide_pool_join_ptr as *const u8);
-        builder.symbol("@_pool_handle_free", bolide_runtime::bolide_pool_handle_free as *const u8);
-        builder.symbol("@_pool_destroy", bolide_runtime::bolide_pool_destroy as *const u8);
+        builder.symbol(
+            "@_pool_spawn_int_with_env",
+            bolide_runtime::bolide_pool_spawn_int_with_env as *const u8,
+        );
+        builder.symbol(
+            "@_pool_spawn_float_with_env",
+            bolide_runtime::bolide_pool_spawn_float_with_env as *const u8,
+        );
+        builder.symbol(
+            "@_pool_spawn_ptr_with_env",
+            bolide_runtime::bolide_pool_spawn_ptr_with_env as *const u8,
+        );
+        builder.symbol(
+            "@_pool_join_int",
+            bolide_runtime::bolide_pool_join_int as *const u8,
+        );
+        builder.symbol(
+            "@_pool_join_float",
+            bolide_runtime::bolide_pool_join_float as *const u8,
+        );
+        builder.symbol(
+            "@_pool_join_ptr",
+            bolide_runtime::bolide_pool_join_ptr as *const u8,
+        );
+        builder.symbol(
+            "@_pool_handle_free",
+            bolide_runtime::bolide_pool_handle_free as *const u8,
+        );
+        builder.symbol(
+            "@_pool_destroy",
+            bolide_runtime::bolide_pool_destroy as *const u8,
+        );
 
         // 注册运行时函数 - 通道
-        builder.symbol("@_channel_create", bolide_runtime::bolide_channel_create as *const u8);
-        builder.symbol("@_channel_create_buffered", bolide_runtime::bolide_channel_create_buffered as *const u8);
-        builder.symbol("@_channel_send", bolide_runtime::bolide_channel_send as *const u8);
-        builder.symbol("@_channel_recv", bolide_runtime::bolide_channel_recv as *const u8);
-        builder.symbol("@_channel_close", bolide_runtime::bolide_channel_close as *const u8);
-        builder.symbol("@_channel_free", bolide_runtime::bolide_channel_free as *const u8);
-        builder.symbol("@_channel_select", bolide_runtime::bolide_channel_select as *const u8);
+        builder.symbol(
+            "@_channel_create",
+            bolide_runtime::bolide_channel_create as *const u8,
+        );
+        builder.symbol(
+            "@_channel_create_buffered",
+            bolide_runtime::bolide_channel_create_buffered as *const u8,
+        );
+        builder.symbol(
+            "@_channel_send",
+            bolide_runtime::bolide_channel_send as *const u8,
+        );
+        builder.symbol(
+            "@_channel_recv",
+            bolide_runtime::bolide_channel_recv as *const u8,
+        );
+        builder.symbol(
+            "@_channel_close",
+            bolide_runtime::bolide_channel_close as *const u8,
+        );
+        builder.symbol(
+            "@_channel_free",
+            bolide_runtime::bolide_channel_free as *const u8,
+        );
+        builder.symbol(
+            "@_channel_select",
+            bolide_runtime::bolide_channel_select as *const u8,
+        );
 
         // 注册运行时函数 - 协程
-        builder.symbol("@_coroutine_spawn_int", bolide_runtime::bolide_coroutine_spawn_int as *const u8);
-        builder.symbol("@_coroutine_spawn_float", bolide_runtime::bolide_coroutine_spawn_float as *const u8);
-        builder.symbol("@_coroutine_spawn_ptr", bolide_runtime::bolide_coroutine_spawn_ptr as *const u8);
-        builder.symbol("@_coroutine_await_int", bolide_runtime::bolide_coroutine_await_int as *const u8);
-        builder.symbol("@_coroutine_await_float", bolide_runtime::bolide_coroutine_await_float as *const u8);
-        builder.symbol("@_coroutine_await_ptr", bolide_runtime::bolide_coroutine_await_ptr as *const u8);
-        builder.symbol("@_coroutine_cancel", bolide_runtime::bolide_coroutine_cancel as *const u8);
-        builder.symbol("@_coroutine_free", bolide_runtime::bolide_coroutine_free as *const u8);
-        builder.symbol("@_coroutine_spawn_int_with_env", bolide_runtime::bolide_coroutine_spawn_int_with_env as *const u8);
-        builder.symbol("@_coroutine_spawn_float_with_env", bolide_runtime::bolide_coroutine_spawn_float_with_env as *const u8);
-        builder.symbol("@_coroutine_spawn_ptr_with_env", bolide_runtime::bolide_coroutine_spawn_ptr_with_env as *const u8);
-        builder.symbol("@_scope_enter", bolide_runtime::bolide_scope_enter as *const u8);
-        builder.symbol("@_scope_register", bolide_runtime::bolide_scope_register as *const u8);
-        builder.symbol("@_scope_exit", bolide_runtime::bolide_scope_exit as *const u8);
+        builder.symbol(
+            "@_coroutine_spawn_int",
+            bolide_runtime::bolide_coroutine_spawn_int as *const u8,
+        );
+        builder.symbol(
+            "@_coroutine_spawn_float",
+            bolide_runtime::bolide_coroutine_spawn_float as *const u8,
+        );
+        builder.symbol(
+            "@_coroutine_spawn_ptr",
+            bolide_runtime::bolide_coroutine_spawn_ptr as *const u8,
+        );
+        builder.symbol(
+            "@_coroutine_await_int",
+            bolide_runtime::bolide_coroutine_await_int as *const u8,
+        );
+        builder.symbol(
+            "@_coroutine_await_float",
+            bolide_runtime::bolide_coroutine_await_float as *const u8,
+        );
+        builder.symbol(
+            "@_coroutine_await_ptr",
+            bolide_runtime::bolide_coroutine_await_ptr as *const u8,
+        );
+        builder.symbol(
+            "@_coroutine_cancel",
+            bolide_runtime::bolide_coroutine_cancel as *const u8,
+        );
+        builder.symbol(
+            "@_coroutine_free",
+            bolide_runtime::bolide_coroutine_free as *const u8,
+        );
+        builder.symbol(
+            "@_coroutine_spawn_int_with_env",
+            bolide_runtime::bolide_coroutine_spawn_int_with_env as *const u8,
+        );
+        builder.symbol(
+            "@_coroutine_spawn_float_with_env",
+            bolide_runtime::bolide_coroutine_spawn_float_with_env as *const u8,
+        );
+        builder.symbol(
+            "@_coroutine_spawn_ptr_with_env",
+            bolide_runtime::bolide_coroutine_spawn_ptr_with_env as *const u8,
+        );
+        builder.symbol(
+            "@_scope_enter",
+            bolide_runtime::bolide_scope_enter as *const u8,
+        );
+        builder.symbol(
+            "@_scope_register",
+            bolide_runtime::bolide_scope_register as *const u8,
+        );
+        builder.symbol(
+            "@_scope_exit",
+            bolide_runtime::bolide_scope_exit as *const u8,
+        );
 
         // 注册运行时函数 - select
-        builder.symbol("@_select_wait_first", bolide_runtime::bolide_select_wait_first as *const u8);
+        builder.symbol(
+            "@_select_wait_first",
+            bolide_runtime::bolide_select_wait_first as *const u8,
+        );
 
         // 注册运行时函数 - 元组
         builder.symbol("@_tuple_new", bolide_runtime::bolide_tuple_new as *const u8);
-        builder.symbol("@_tuple_free", bolide_runtime::bolide_tuple_free as *const u8);
+        builder.symbol(
+            "@_tuple_free",
+            bolide_runtime::bolide_tuple_free as *const u8,
+        );
         builder.symbol("@_tuple_set", bolide_runtime::bolide_tuple_set as *const u8);
         builder.symbol("@_tuple_get", bolide_runtime::bolide_tuple_get as *const u8);
         builder.symbol("@_tuple_len", bolide_runtime::bolide_tuple_len as *const u8);
-        builder.symbol("@_tuple_debug_stats", bolide_runtime::bolide_tuple_debug_stats as *const u8);
-        builder.symbol("@_print_tuple", bolide_runtime::bolide_print_tuple as *const u8);
+        builder.symbol(
+            "@_tuple_debug_stats",
+            bolide_runtime::bolide_tuple_debug_stats as *const u8,
+        );
+        builder.symbol(
+            "@_print_tuple",
+            bolide_runtime::bolide_print_tuple as *const u8,
+        );
 
         // FFI 运行时函数
-        builder.symbol("@_ffi_load_library", bolide_runtime::bolide_ffi_load_library as *const u8);
-        builder.symbol("@_ffi_get_symbol", bolide_runtime::bolide_ffi_get_symbol as *const u8);
-        builder.symbol("@_ffi_cleanup", bolide_runtime::bolide_ffi_cleanup as *const u8);
-        builder.symbol("@_test_callback", bolide_runtime::bolide_test_callback as *const u8);
+        builder.symbol(
+            "@_ffi_load_library",
+            bolide_runtime::bolide_ffi_load_library as *const u8,
+        );
+        builder.symbol(
+            "@_ffi_get_symbol",
+            bolide_runtime::bolide_ffi_get_symbol as *const u8,
+        );
+        builder.symbol(
+            "@_ffi_cleanup",
+            bolide_runtime::bolide_ffi_cleanup as *const u8,
+        );
+        builder.symbol(
+            "@_test_callback",
+            bolide_runtime::bolide_test_callback as *const u8,
+        );
         builder.symbol("@_map_int", bolide_runtime::bolide_map_int as *const u8);
 
         // 注册运行时函数 - RC 引用计数管理
-        builder.symbol("@_string_retain", bolide_runtime::bolide_string_retain as *const u8);
-        builder.symbol("@_string_release", bolide_runtime::bolide_string_release as *const u8);
-        builder.symbol("@_string_clone", bolide_runtime::bolide_string_clone as *const u8);
-        builder.symbol("@_bigint_retain", bolide_runtime::bolide_bigint_retain as *const u8);
-        builder.symbol("@_bigint_release", bolide_runtime::bolide_bigint_release as *const u8);
-        builder.symbol("@_decimal_retain", bolide_runtime::bolide_decimal_retain as *const u8);
-        builder.symbol("@_decimal_release", bolide_runtime::bolide_decimal_release as *const u8);
-        builder.symbol("@_list_retain", bolide_runtime::bolide_list_retain as *const u8);
-        builder.symbol("@_list_release", bolide_runtime::bolide_list_release as *const u8);
-        builder.symbol("@_list_clone", bolide_runtime::bolide_list_clone as *const u8);
+        builder.symbol(
+            "@_string_retain",
+            bolide_runtime::bolide_string_retain as *const u8,
+        );
+        builder.symbol(
+            "@_string_release",
+            bolide_runtime::bolide_string_release as *const u8,
+        );
+        builder.symbol(
+            "@_string_clone",
+            bolide_runtime::bolide_string_clone as *const u8,
+        );
+        builder.symbol(
+            "@_bigint_retain",
+            bolide_runtime::bolide_bigint_retain as *const u8,
+        );
+        builder.symbol(
+            "@_bigint_release",
+            bolide_runtime::bolide_bigint_release as *const u8,
+        );
+        builder.symbol(
+            "@_decimal_retain",
+            bolide_runtime::bolide_decimal_retain as *const u8,
+        );
+        builder.symbol(
+            "@_decimal_release",
+            bolide_runtime::bolide_decimal_release as *const u8,
+        );
+        builder.symbol(
+            "@_list_retain",
+            bolide_runtime::bolide_list_retain as *const u8,
+        );
+        builder.symbol(
+            "@_list_release",
+            bolide_runtime::bolide_list_release as *const u8,
+        );
+        builder.symbol(
+            "@_list_clone",
+            bolide_runtime::bolide_list_clone as *const u8,
+        );
         builder.symbol("@_list_new", bolide_runtime::bolide_list_new as *const u8);
         builder.symbol("@_list_push", bolide_runtime::bolide_list_push as *const u8);
         builder.symbol("@_list_pop", bolide_runtime::bolide_list_pop as *const u8);
         builder.symbol("@_list_len", bolide_runtime::bolide_list_len as *const u8);
         builder.symbol("@_list_get", bolide_runtime::bolide_list_get as *const u8);
         builder.symbol("@_list_set", bolide_runtime::bolide_list_set as *const u8);
-        builder.symbol("@_list_insert", bolide_runtime::bolide_list_insert as *const u8);
-        builder.symbol("@_list_remove", bolide_runtime::bolide_list_remove as *const u8);
-        builder.symbol("@_list_clear", bolide_runtime::bolide_list_clear as *const u8);
-        builder.symbol("@_list_reverse", bolide_runtime::bolide_list_reverse as *const u8);
-        builder.symbol("@_list_extend", bolide_runtime::bolide_list_extend as *const u8);
-        builder.symbol("@_list_contains", bolide_runtime::bolide_list_contains as *const u8);
-        builder.symbol("@_list_index_of", bolide_runtime::bolide_list_index_of as *const u8);
-        builder.symbol("@_list_count", bolide_runtime::bolide_list_count as *const u8);
+        builder.symbol(
+            "@_list_insert",
+            bolide_runtime::bolide_list_insert as *const u8,
+        );
+        builder.symbol(
+            "@_list_remove",
+            bolide_runtime::bolide_list_remove as *const u8,
+        );
+        builder.symbol(
+            "@_list_clear",
+            bolide_runtime::bolide_list_clear as *const u8,
+        );
+        builder.symbol(
+            "@_list_reverse",
+            bolide_runtime::bolide_list_reverse as *const u8,
+        );
+        builder.symbol(
+            "@_list_extend",
+            bolide_runtime::bolide_list_extend as *const u8,
+        );
+        builder.symbol(
+            "@_list_contains",
+            bolide_runtime::bolide_list_contains as *const u8,
+        );
+        builder.symbol(
+            "@_list_index_of",
+            bolide_runtime::bolide_list_index_of as *const u8,
+        );
+        builder.symbol(
+            "@_list_count",
+            bolide_runtime::bolide_list_count as *const u8,
+        );
         builder.symbol("@_list_sort", bolide_runtime::bolide_list_sort as *const u8);
-        builder.symbol("@_list_slice", bolide_runtime::bolide_list_slice as *const u8);
-        builder.symbol("@_list_is_empty", bolide_runtime::bolide_list_is_empty as *const u8);
-        builder.symbol("@_list_first", bolide_runtime::bolide_list_first as *const u8);
+        builder.symbol(
+            "@_list_slice",
+            bolide_runtime::bolide_list_slice as *const u8,
+        );
+        builder.symbol(
+            "@_list_is_empty",
+            bolide_runtime::bolide_list_is_empty as *const u8,
+        );
+        builder.symbol(
+            "@_list_first",
+            bolide_runtime::bolide_list_first as *const u8,
+        );
         builder.symbol("@_list_last", bolide_runtime::bolide_list_last as *const u8);
-        builder.symbol("@_print_list", bolide_runtime::bolide_print_list as *const u8);
+        builder.symbol(
+            "@_print_list",
+            bolide_runtime::bolide_print_list as *const u8,
+        );
         // Dict symbols
         builder.symbol("@_dict_new", bolide_runtime::bolide_dict_new as *const u8);
-        builder.symbol("@_dict_retain", bolide_runtime::bolide_dict_retain as *const u8);
-        builder.symbol("@_dict_release", bolide_runtime::bolide_dict_release as *const u8);
-        builder.symbol("@_dict_clone", bolide_runtime::bolide_dict_clone as *const u8);
+        builder.symbol(
+            "@_dict_retain",
+            bolide_runtime::bolide_dict_retain as *const u8,
+        );
+        builder.symbol(
+            "@_dict_release",
+            bolide_runtime::bolide_dict_release as *const u8,
+        );
+        builder.symbol(
+            "@_dict_clone",
+            bolide_runtime::bolide_dict_clone as *const u8,
+        );
         builder.symbol("@_dict_set", bolide_runtime::bolide_dict_set as *const u8);
         builder.symbol("@_dict_get", bolide_runtime::bolide_dict_get as *const u8);
-        builder.symbol("@_dict_contains", bolide_runtime::bolide_dict_contains as *const u8);
-        builder.symbol("@_dict_remove", bolide_runtime::bolide_dict_remove as *const u8);
+        builder.symbol(
+            "@_dict_contains",
+            bolide_runtime::bolide_dict_contains as *const u8,
+        );
+        builder.symbol(
+            "@_dict_remove",
+            bolide_runtime::bolide_dict_remove as *const u8,
+        );
         builder.symbol("@_dict_len", bolide_runtime::bolide_dict_len as *const u8);
-        builder.symbol("@_dict_is_empty", bolide_runtime::bolide_dict_is_empty as *const u8);
-        builder.symbol("@_dict_clear", bolide_runtime::bolide_dict_clear as *const u8);
+        builder.symbol(
+            "@_dict_is_empty",
+            bolide_runtime::bolide_dict_is_empty as *const u8,
+        );
+        builder.symbol(
+            "@_dict_clear",
+            bolide_runtime::bolide_dict_clear as *const u8,
+        );
         builder.symbol("@_dict_keys", bolide_runtime::bolide_dict_keys as *const u8);
-        builder.symbol("@_dict_values", bolide_runtime::bolide_dict_values as *const u8);
+        builder.symbol(
+            "@_dict_values",
+            bolide_runtime::bolide_dict_values as *const u8,
+        );
         builder.symbol("@_dict_iter", bolide_runtime::bolide_dict_iter as *const u8);
-        builder.symbol("@_print_dict", bolide_runtime::bolide_print_dict as *const u8);
-        builder.symbol("@_dynamic_retain", bolide_runtime::bolide_dynamic_retain as *const u8);
-        builder.symbol("@_dynamic_release", bolide_runtime::bolide_dynamic_release as *const u8);
-        builder.symbol("@_print_dynamic", bolide_runtime::bolide_print_dynamic as *const u8);
+        builder.symbol(
+            "@_print_dict",
+            bolide_runtime::bolide_print_dict as *const u8,
+        );
+        builder.symbol(
+            "@_dynamic_retain",
+            bolide_runtime::bolide_dynamic_retain as *const u8,
+        );
+        builder.symbol(
+            "@_dynamic_release",
+            bolide_runtime::bolide_dynamic_release as *const u8,
+        );
+        builder.symbol(
+            "@_print_dynamic",
+            bolide_runtime::bolide_print_dynamic as *const u8,
+        );
 
+        // 异常处理
+        builder.symbol("@_exception_set", bolide_runtime::bolide_exception_set as *const u8);
+        builder.symbol("@_exception_get", bolide_runtime::bolide_exception_get as *const u8);
+        builder.symbol("@_throw_uncaught", bolide_runtime::bolide_throw_uncaught as *const u8);
 
         let module = JITModule::new(builder);
         let ptr_type = module.target_config().pointer_type();
@@ -422,11 +938,14 @@ impl JitCompiler {
         self.declare_function(&main_func)?;
         self.compile_function(&main_func)?;
 
-        self.module.finalize_definitions()
+        self.module
+            .finalize_definitions()
             .map_err(|e| format!("Finalize error: {}", e))?;
 
         // 获取 __main__ 函数
-        let func_id = self.functions.get("__main__")
+        let func_id = self
+            .functions
+            .get("__main__")
             .ok_or("No __main__ function found")?;
         let main_ptr = self.module.get_finalized_function(*func_id);
         Ok(main_ptr)
@@ -444,18 +963,22 @@ impl JitCompiler {
 
         // 添加返回类型
         if let Some(ref ret_ty) = func.return_type {
-            sig.returns.push(AbiParam::new(self.bolide_type_to_cranelift(ret_ty)));
+            sig.returns
+                .push(AbiParam::new(self.bolide_type_to_cranelift(ret_ty)));
         }
 
-        let func_id = self.module
+        let func_id = self
+            .module
             .declare_function(&func.name, Linkage::Export, &sig)
             .map_err(|e| format!("Declare function error: {}", e))?;
 
         self.functions.insert(func.name.clone(), func_id);
         // 存储函数返回类型
-        self.func_return_types.insert(func.name.clone(), func.return_type.clone());
+        self.func_return_types
+            .insert(func.name.clone(), func.return_type.clone());
         // 存储函数参数
-        self.func_params.insert(func.name.clone(), func.params.clone());
+        self.func_params
+            .insert(func.name.clone(), func.params.clone());
         // 记录生命周期函数
         if func.lifetime_deps.is_some() {
             self.lifetime_funcs.insert(func.name.clone());
@@ -466,7 +989,8 @@ impl JitCompiler {
     /// 处理 import 语句，加载并合并导入的模块
     fn process_imports(&mut self, program: &Program) -> Result<Program, String> {
         let mut merged_statements = Vec::new();
-        let mut imported_files: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut imported_files: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
 
         // 先处理所有 import 语句
         let mut alias_pairs: Vec<(String, String)> = Vec::new();
@@ -509,7 +1033,11 @@ impl JitCompiler {
                                 // 重命名函数: func -> @module_func
                                 func.name = format!("@{}_{}", module_name, func.name);
                                 // 重写函数内部的类型引用
-                                Self::rewrite_func_class_refs(&mut func, &module_name, &class_names);
+                                Self::rewrite_func_class_refs(
+                                    &mut func,
+                                    &module_name,
+                                    &class_names,
+                                );
                                 merged_statements.push(Statement::FuncDef(func));
                             }
                             Statement::ClassDef(mut class) => {
@@ -518,7 +1046,11 @@ impl JitCompiler {
                                 class.name = format!("@{}_{}", module_name, old_name);
                                 // 重写方法内部的类型引用
                                 for method in &mut class.methods {
-                                    Self::rewrite_func_class_refs(method, &module_name, &class_names);
+                                    Self::rewrite_func_class_refs(
+                                        method,
+                                        &module_name,
+                                        &class_names,
+                                    );
                                 }
                                 merged_statements.push(Statement::ClassDef(class));
                             }
@@ -530,7 +1062,11 @@ impl JitCompiler {
                                 // 重命名模块级变量
                                 decl.name = format!("@{}_{}", module_name, decl.name);
                                 // 处理模块级变量声明
-                                Self::rewrite_var_decl_class_refs(&mut decl, &module_name, &class_names);
+                                Self::rewrite_var_decl_class_refs(
+                                    &mut decl,
+                                    &module_name,
+                                    &class_names,
+                                );
                                 merged_statements.push(Statement::VarDecl(decl));
                             }
                             _ => {} // 忽略其他顶层代码
@@ -549,7 +1085,9 @@ impl JitCompiler {
             merged_statements.push(stmt);
         }
 
-        Ok(Program { statements: merged_statements })
+        Ok(Program {
+            statements: merged_statements,
+        })
     }
 
     /// 将语句中的模块别名引用重写为真实模块名（alias.f -> module.f）
@@ -728,7 +1266,11 @@ impl JitCompiler {
     }
 
     /// 重写函数内部的类型引用，将模块内部类名转换为 @module_ClassName
-    fn rewrite_func_class_refs(func: &mut FuncDef, module_name: &str, class_names: &HashSet<String>) {
+    fn rewrite_func_class_refs(
+        func: &mut FuncDef,
+        module_name: &str,
+        class_names: &HashSet<String>,
+    ) {
         // 重写返回类型
         if let Some(ref mut ret_ty) = func.return_type {
             Self::rewrite_type_class_refs(ret_ty, module_name, class_names);
@@ -744,19 +1286,27 @@ impl JitCompiler {
     }
 
     /// 重写类型中的类引用
-    fn rewrite_type_class_refs(ty: &mut BolideType, module_name: &str, class_names: &HashSet<String>) {
+    fn rewrite_type_class_refs(
+        ty: &mut BolideType,
+        module_name: &str,
+        class_names: &HashSet<String>,
+    ) {
         match ty {
             BolideType::Custom(name) => {
                 if class_names.contains(name) {
                     *name = format!("@{}_{}", module_name, name);
                 }
             }
-            BolideType::List(inner) => Self::rewrite_type_class_refs(inner, module_name, class_names),
+            BolideType::List(inner) => {
+                Self::rewrite_type_class_refs(inner, module_name, class_names)
+            }
             BolideType::Dict(k, v) => {
                 Self::rewrite_type_class_refs(k, module_name, class_names);
                 Self::rewrite_type_class_refs(v, module_name, class_names);
             }
-            BolideType::Channel(inner) => Self::rewrite_type_class_refs(inner, module_name, class_names),
+            BolideType::Channel(inner) => {
+                Self::rewrite_type_class_refs(inner, module_name, class_names)
+            }
             BolideType::Tuple(types) => {
                 for t in types {
                     Self::rewrite_type_class_refs(t, module_name, class_names);
@@ -778,7 +1328,11 @@ impl JitCompiler {
     }
 
     /// 重写变量声明中的类引用
-    fn rewrite_var_decl_class_refs(decl: &mut VarDecl, module_name: &str, class_names: &HashSet<String>) {
+    fn rewrite_var_decl_class_refs(
+        decl: &mut VarDecl,
+        module_name: &str,
+        class_names: &HashSet<String>,
+    ) {
         if let Some(ref mut ty) = decl.ty {
             Self::rewrite_type_class_refs(ty, module_name, class_names);
         }
@@ -788,7 +1342,11 @@ impl JitCompiler {
     }
 
     /// 重写语句中的类引用
-    fn rewrite_stmt_class_refs(stmt: &mut Statement, module_name: &str, class_names: &HashSet<String>) {
+    fn rewrite_stmt_class_refs(
+        stmt: &mut Statement,
+        module_name: &str,
+        class_names: &HashSet<String>,
+    ) {
         match stmt {
             Statement::VarDecl(decl) => {
                 Self::rewrite_var_decl_class_refs(decl, module_name, class_names);
@@ -906,13 +1464,15 @@ impl JitCompiler {
                 };
 
                 // 为全局变量创建数据段（8 字节用于存储值）
-                let data_id = self.module
+                let data_id = self
+                    .module
                     .declare_data(&decl.name, Linkage::Local, true, false)
                     .map_err(|e| format!("Failed to declare global '{}': {}", decl.name, e))?;
 
                 // 初始化数据段为 0
                 self.data_desc.define_zeroinit(8);
-                self.module.define_data(data_id, &self.data_desc)
+                self.module
+                    .define_data(data_id, &self.data_desc)
                     .map_err(|e| format!("Failed to define global '{}': {}", decl.name, e))?;
                 self.data_desc.clear();
 
@@ -926,12 +1486,14 @@ impl JitCompiler {
                         Expr::Call(callee, _) => {
                             if let Expr::Ident(name) = callee.as_ref() {
                                 if self.async_funcs.contains(name) {
-                                    self.global_spawn_funcs.insert(decl.name.clone(), name.clone());
+                                    self.global_spawn_funcs
+                                        .insert(decl.name.clone(), name.clone());
                                 }
                             }
                         }
                         Expr::Spawn(fname, _) => {
-                            self.global_spawn_funcs.insert(decl.name.clone(), fname.clone());
+                            self.global_spawn_funcs
+                                .insert(decl.name.clone(), fname.clone());
                         }
                         _ => {}
                     }
@@ -974,15 +1536,20 @@ impl JitCompiler {
                     let mut k_ty = self.infer_expr_type_static(&entries[0].0);
                     let mut v_ty = self.infer_expr_type_static(&entries[0].1);
                     for (k, v) in entries.iter().skip(1) {
-                        if k_ty != self.infer_expr_type_static(k) { k_ty = BolideType::Dynamic; }
-                        if v_ty != self.infer_expr_type_static(v) { v_ty = BolideType::Dynamic; }
+                        if k_ty != self.infer_expr_type_static(k) {
+                            k_ty = BolideType::Dynamic;
+                        }
+                        if v_ty != self.infer_expr_type_static(v) {
+                            v_ty = BolideType::Dynamic;
+                        }
                     }
                     (k_ty, v_ty)
                 };
                 BolideType::Dict(Box::new(k_type), Box::new(v_type))
             }
             Expr::Tuple(exprs) => {
-                let types: Vec<BolideType> = exprs.iter()
+                let types: Vec<BolideType> = exprs
+                    .iter()
                     .map(|e| self.infer_expr_type_static(e))
                     .collect();
                 BolideType::Tuple(types)
@@ -1038,7 +1605,8 @@ impl JitCompiler {
             Expr::Await(inner) => self.infer_awaited_type_static(inner),
             // await all 返回元组，元素类型为各协程的返回类型
             Expr::AwaitAll(exprs) => {
-                let elem_types = exprs.iter()
+                let elem_types = exprs
+                    .iter()
                     .map(|e| self.infer_awaited_type_static(e))
                     .collect();
                 BolideType::Tuple(elem_types)
@@ -1063,7 +1631,9 @@ impl JitCompiler {
             // let f = fetch_a(); await f（全局 future 变量）
             Expr::Ident(var_name) => {
                 if let Some(func_name) = self.global_spawn_funcs.get(var_name) {
-                    return self.func_return_types.get(func_name)
+                    return self
+                        .func_return_types
+                        .get(func_name)
                         .cloned()
                         .flatten()
                         .unwrap_or(BolideType::Int);
@@ -1071,12 +1641,12 @@ impl JitCompiler {
                 BolideType::Int
             }
             // await spawn heavy(x)
-            Expr::Spawn(func_name, _) => {
-                self.func_return_types.get(func_name)
-                    .cloned()
-                    .flatten()
-                    .unwrap_or(BolideType::Int)
-            }
+            Expr::Spawn(func_name, _) => self
+                .func_return_types
+                .get(func_name)
+                .cloned()
+                .flatten()
+                .unwrap_or(BolideType::Int),
             _ => BolideType::Int,
         }
     }
@@ -1159,21 +1729,36 @@ impl JitCompiler {
     fn normalize_bolide_type(&self, ty: &BolideType) -> BolideType {
         match ty {
             BolideType::Custom(name) => BolideType::Custom(self.normalize_type_name(name)),
-            BolideType::List(inner) => BolideType::List(Box::new(self.normalize_bolide_type(inner))),
+            BolideType::List(inner) => {
+                BolideType::List(Box::new(self.normalize_bolide_type(inner)))
+            }
             BolideType::Dict(k, v) => BolideType::Dict(
                 Box::new(self.normalize_bolide_type(k)),
                 Box::new(self.normalize_bolide_type(v)),
             ),
             BolideType::Tuple(types) => BolideType::Tuple(
-                types.iter().map(|t| self.normalize_bolide_type(t)).collect()
+                types
+                    .iter()
+                    .map(|t| self.normalize_bolide_type(t))
+                    .collect(),
             ),
             BolideType::FuncSig(params, ret) => BolideType::FuncSig(
-                params.iter().map(|t| self.normalize_bolide_type(t)).collect(),
-                ret.as_ref().map(|t| Box::new(self.normalize_bolide_type(t))),
+                params
+                    .iter()
+                    .map(|t| self.normalize_bolide_type(t))
+                    .collect(),
+                ret.as_ref()
+                    .map(|t| Box::new(self.normalize_bolide_type(t))),
             ),
-            BolideType::Weak(inner) => BolideType::Weak(Box::new(self.normalize_bolide_type(inner))),
-            BolideType::Unowned(inner) => BolideType::Unowned(Box::new(self.normalize_bolide_type(inner))),
-            BolideType::Channel(inner) => BolideType::Channel(Box::new(self.normalize_bolide_type(inner))),
+            BolideType::Weak(inner) => {
+                BolideType::Weak(Box::new(self.normalize_bolide_type(inner)))
+            }
+            BolideType::Unowned(inner) => {
+                BolideType::Unowned(Box::new(self.normalize_bolide_type(inner)))
+            }
+            BolideType::Channel(inner) => {
+                BolideType::Channel(Box::new(self.normalize_bolide_type(inner)))
+            }
             _ => ty.clone(),
         }
     }
@@ -1203,57 +1788,111 @@ impl JitCompiler {
         // print_int(int) -> void
         let mut print_int_sig = self.module.make_signature();
         print_int_sig.params.push(AbiParam::new(types::I64));
-        let print_int_id = self.module
+        let print_int_id = self
+            .module
             .declare_function("@_print_int", Linkage::Import, &print_int_sig)
             .map_err(|e| format!("Declare print_int error: {}", e))?;
-        self.functions.insert("@_print_int".to_string(), print_int_id);
+        self.functions
+            .insert("@_print_int".to_string(), print_int_id);
 
         // print_float(float) -> void
         let mut print_float_sig = self.module.make_signature();
         print_float_sig.params.push(AbiParam::new(types::F64));
-        let print_float_id = self.module
+        let print_float_id = self
+            .module
             .declare_function("@_print_float", Linkage::Import, &print_float_sig)
             .map_err(|e| format!("Declare print_float error: {}", e))?;
-        self.functions.insert("@_print_float".to_string(), print_float_id);
+        self.functions
+            .insert("@_print_float".to_string(), print_float_id);
 
         // print_bool(int) -> void
         let mut print_bool_sig = self.module.make_signature();
         print_bool_sig.params.push(AbiParam::new(types::I64));
-        let print_bool_id = self.module
+        let print_bool_id = self
+            .module
             .declare_function("@_print_bool", Linkage::Import, &print_bool_sig)
             .map_err(|e| format!("Declare print_bool error: {}", e))?;
-        self.functions.insert("@_print_bool".to_string(), print_bool_id);
+        self.functions
+            .insert("@_print_bool".to_string(), print_bool_id);
 
         // print_bigint(ptr) -> void
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_print_bigint", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_print_bigint", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_print_bigint".to_string(), id);
 
         // print_decimal(ptr) -> void
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_print_decimal", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_print_decimal", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_print_decimal".to_string(), id);
 
         // print_string(ptr) -> void
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_print_string", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_print_string", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_print_string".to_string(), id);
+
+        let inline_prints = [
+            ("@_print_int_inline", types::I64),
+            ("@_print_float_inline", types::F64),
+            ("@_print_bool_inline", types::I64),
+            ("@_print_bigint_inline", ptr),
+            ("@_print_decimal_inline", ptr),
+            ("@_print_string_inline", ptr),
+            ("@_print_dynamic_inline", ptr),
+        ];
+        for (name, param_ty) in inline_prints {
+            let mut sig = self.module.make_signature();
+            sig.params.push(AbiParam::new(param_ty));
+            let id = self
+                .module
+                .declare_function(name, Linkage::Import, &sig)
+                .map_err(|e| format!("Declare {} error: {}", name, e))?;
+            self.functions.insert(name.to_string(), id);
+        }
+
+        for name in [
+            "@_print_tuple_start",
+            "@_print_tuple_separator",
+            "@_print_tuple_end_inline",
+            "@_println",
+        ] {
+            let sig = self.module.make_signature();
+            let id = self
+                .module
+                .declare_function(name, Linkage::Import, &sig)
+                .map_err(|e| format!("Declare {} error: {}", name, e))?;
+            self.functions.insert(name.to_string(), id);
+        }
 
         // ===== 用户输入函数 =====
         // input() -> ptr
         let mut sig = self.module.make_signature();
         sig.returns.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_input", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_input", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_input".to_string(), id);
 
         // input_prompt(ptr) -> ptr
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
         sig.returns.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_input_prompt", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_input_prompt", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_input_prompt".to_string(), id);
 
         // ===== 类型转换函数 =====
@@ -1261,49 +1900,72 @@ impl JitCompiler {
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(types::I64));
         sig.returns.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_string_from_int", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_string_from_int", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_string_from_int".to_string(), id);
 
         // string_from_float(f64) -> ptr
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(types::F64));
         sig.returns.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_string_from_float", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_string_from_float", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_string_from_float".to_string(), id);
 
         // string_from_bool(i64) -> ptr
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(types::I64));
         sig.returns.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_string_from_bool", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_string_from_bool", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_string_from_bool".to_string(), id);
 
         // string_from_bigint(ptr) -> ptr
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
         sig.returns.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_string_from_bigint", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
-        self.functions.insert("@_string_from_bigint".to_string(), id);
+        let id = self
+            .module
+            .declare_function("@_string_from_bigint", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
+        self.functions
+            .insert("@_string_from_bigint".to_string(), id);
 
         // string_from_decimal(ptr) -> ptr
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
         sig.returns.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_string_from_decimal", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
-        self.functions.insert("@_string_from_decimal".to_string(), id);
+        let id = self
+            .module
+            .declare_function("@_string_from_decimal", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
+        self.functions
+            .insert("@_string_from_decimal".to_string(), id);
 
         // string_to_int(ptr) -> i64
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
         sig.returns.push(AbiParam::new(types::I64));
-        let id = self.module.declare_function("@_string_to_int", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_string_to_int", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_string_to_int".to_string(), id);
 
         // string_to_float(ptr) -> f64
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
         sig.returns.push(AbiParam::new(types::F64));
-        let id = self.module.declare_function("@_string_to_float", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_string_to_float", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_string_to_float".to_string(), id);
 
         // ===== RC Release 函数 =====
@@ -1311,87 +1973,147 @@ impl JitCompiler {
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
         sig.returns.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_string_retain", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_string_retain", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_string_retain".to_string(), id);
 
         // string_release(ptr) -> void
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_string_release", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_string_release", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_string_release".to_string(), id);
 
         // bigint_release(ptr) -> void
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_bigint_release", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_bigint_release", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_bigint_release".to_string(), id);
 
         // decimal_release(ptr) -> void
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_decimal_release", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_decimal_release", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_decimal_release".to_string(), id);
 
         // list_release(ptr) -> void
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_list_release", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_list_release", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_list_release".to_string(), id);
 
         // dynamic_release(ptr) -> void
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_dynamic_release", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_dynamic_release", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_dynamic_release".to_string(), id);
+
+        // exception_set(ptr) -> void
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(ptr));
+        let id = self.module.declare_function("@_exception_set", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
+        self.functions.insert("@_exception_set".to_string(), id);
+
+        // exception_get() -> ptr
+        let mut sig = self.module.make_signature();
+        sig.returns.push(AbiParam::new(ptr));
+        let id = self.module.declare_function("@_exception_get", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
+        self.functions.insert("@_exception_get".to_string(), id);
+
+        // throw_uncaught(ptr) -> ! (noreturn)
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(ptr));
+        let id = self.module.declare_function("@_throw_uncaught", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
+        self.functions.insert("@_throw_uncaught".to_string(), id);
 
         // ===== RC Clone 函数 =====
         // string_clone(ptr) -> ptr
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
         sig.returns.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_string_clone", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_string_clone", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_string_clone".to_string(), id);
 
         // bigint_clone(ptr) -> ptr
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
         sig.returns.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_bigint_clone", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_bigint_clone", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_bigint_clone".to_string(), id);
 
         // decimal_clone(ptr) -> ptr
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
         sig.returns.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_decimal_clone", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_decimal_clone", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_decimal_clone".to_string(), id);
 
         // list_clone(ptr) -> ptr
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
         sig.returns.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_list_clone", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_list_clone", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_list_clone".to_string(), id);
 
         // list_new(elem_type: u8) -> ptr
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(types::I8));
         sig.returns.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_list_new", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_list_new", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_list_new".to_string(), id);
 
         // list_push(list: ptr, value: i64) -> void
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
         sig.params.push(AbiParam::new(types::I64));
-        let id = self.module.declare_function("@_list_push", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_list_push", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_list_push".to_string(), id);
 
         // list_len(list: ptr) -> i64
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
         sig.returns.push(AbiParam::new(types::I64));
-        let id = self.module.declare_function("@_list_len", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_list_len", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_list_len".to_string(), id);
 
         // list_get(list: ptr, index: i64) -> i64
@@ -1399,7 +2121,10 @@ impl JitCompiler {
         sig.params.push(AbiParam::new(ptr));
         sig.params.push(AbiParam::new(types::I64));
         sig.returns.push(AbiParam::new(types::I64));
-        let id = self.module.declare_function("@_list_get", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_list_get", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_list_get".to_string(), id);
 
         // list_set(list: ptr, index: i64, value: i64) -> i64
@@ -1408,14 +2133,20 @@ impl JitCompiler {
         sig.params.push(AbiParam::new(types::I64));
         sig.params.push(AbiParam::new(types::I64));
         sig.returns.push(AbiParam::new(types::I64));
-        let id = self.module.declare_function("@_list_set", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_list_set", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_list_set".to_string(), id);
 
         // list_pop(list: ptr) -> i64
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
         sig.returns.push(AbiParam::new(types::I64));
-        let id = self.module.declare_function("@_list_pop", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_list_pop", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_list_pop".to_string(), id);
 
         // list_insert(list: ptr, index: i64, value: i64) -> void
@@ -1423,7 +2154,10 @@ impl JitCompiler {
         sig.params.push(AbiParam::new(ptr));
         sig.params.push(AbiParam::new(types::I64));
         sig.params.push(AbiParam::new(types::I64));
-        let id = self.module.declare_function("@_list_insert", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_list_insert", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_list_insert".to_string(), id);
 
         // list_remove(list: ptr, index: i64) -> i64
@@ -1431,26 +2165,38 @@ impl JitCompiler {
         sig.params.push(AbiParam::new(ptr));
         sig.params.push(AbiParam::new(types::I64));
         sig.returns.push(AbiParam::new(types::I64));
-        let id = self.module.declare_function("@_list_remove", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_list_remove", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_list_remove".to_string(), id);
 
         // list_clear(list: ptr) -> void
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_list_clear", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_list_clear", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_list_clear".to_string(), id);
 
         // list_reverse(list: ptr) -> void
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_list_reverse", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_list_reverse", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_list_reverse".to_string(), id);
 
         // list_extend(list: ptr, other: ptr) -> void
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
         sig.params.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_list_extend", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_list_extend", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_list_extend".to_string(), id);
 
         // list_contains(list: ptr, value: i64) -> i64
@@ -1458,7 +2204,10 @@ impl JitCompiler {
         sig.params.push(AbiParam::new(ptr));
         sig.params.push(AbiParam::new(types::I64));
         sig.returns.push(AbiParam::new(types::I64));
-        let id = self.module.declare_function("@_list_contains", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_list_contains", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_list_contains".to_string(), id);
 
         // list_index_of(list: ptr, value: i64) -> i64
@@ -1466,7 +2215,10 @@ impl JitCompiler {
         sig.params.push(AbiParam::new(ptr));
         sig.params.push(AbiParam::new(types::I64));
         sig.returns.push(AbiParam::new(types::I64));
-        let id = self.module.declare_function("@_list_index_of", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_list_index_of", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_list_index_of".to_string(), id);
 
         // list_count(list: ptr, value: i64) -> i64
@@ -1474,13 +2226,19 @@ impl JitCompiler {
         sig.params.push(AbiParam::new(ptr));
         sig.params.push(AbiParam::new(types::I64));
         sig.returns.push(AbiParam::new(types::I64));
-        let id = self.module.declare_function("@_list_count", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_list_count", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_list_count".to_string(), id);
 
         // list_sort(list: ptr) -> void
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_list_sort", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_list_sort", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_list_sort".to_string(), id);
 
         // list_slice(list: ptr, start: i64, end: i64) -> ptr
@@ -1489,34 +2247,49 @@ impl JitCompiler {
         sig.params.push(AbiParam::new(types::I64));
         sig.params.push(AbiParam::new(types::I64));
         sig.returns.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_list_slice", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_list_slice", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_list_slice".to_string(), id);
 
         // list_is_empty(list: ptr) -> i64
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
         sig.returns.push(AbiParam::new(types::I64));
-        let id = self.module.declare_function("@_list_is_empty", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_list_is_empty", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_list_is_empty".to_string(), id);
 
         // list_first(list: ptr) -> i64
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
         sig.returns.push(AbiParam::new(types::I64));
-        let id = self.module.declare_function("@_list_first", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_list_first", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_list_first".to_string(), id);
 
         // list_last(list: ptr) -> i64
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
         sig.returns.push(AbiParam::new(types::I64));
-        let id = self.module.declare_function("@_list_last", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_list_last", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_list_last".to_string(), id);
 
         // print_list(list: ptr) -> void
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_print_list", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_print_list", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_print_list".to_string(), id);
 
         // ===== Dict 函数 =====
@@ -1525,26 +2298,38 @@ impl JitCompiler {
         sig.params.push(AbiParam::new(types::I8));
         sig.params.push(AbiParam::new(types::I8));
         sig.returns.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_dict_new", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_dict_new", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_dict_new".to_string(), id);
 
         // dict_retain(dict: ptr) -> void
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_dict_retain", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_dict_retain", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_dict_retain".to_string(), id);
 
         // dict_release(dict: ptr) -> void
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_dict_release", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_dict_release", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_dict_release".to_string(), id);
 
         // dict_clone(dict: ptr) -> ptr
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
         sig.returns.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_dict_clone", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_dict_clone", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_dict_clone".to_string(), id);
 
         // dict_set(dict: ptr, key: i64, value: i64) -> void
@@ -1552,7 +2337,10 @@ impl JitCompiler {
         sig.params.push(AbiParam::new(ptr));
         sig.params.push(AbiParam::new(types::I64));
         sig.params.push(AbiParam::new(types::I64));
-        let id = self.module.declare_function("@_dict_set", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_dict_set", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_dict_set".to_string(), id);
 
         // dict_get(dict: ptr, key: i64) -> i64
@@ -1560,7 +2348,10 @@ impl JitCompiler {
         sig.params.push(AbiParam::new(ptr));
         sig.params.push(AbiParam::new(types::I64));
         sig.returns.push(AbiParam::new(types::I64));
-        let id = self.module.declare_function("@_dict_get", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_dict_get", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_dict_get".to_string(), id);
 
         // dict_contains(dict: ptr, key: i64) -> i64
@@ -1568,7 +2359,10 @@ impl JitCompiler {
         sig.params.push(AbiParam::new(ptr));
         sig.params.push(AbiParam::new(types::I64));
         sig.returns.push(AbiParam::new(types::I64));
-        let id = self.module.declare_function("@_dict_contains", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_dict_contains", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_dict_contains".to_string(), id);
 
         // dict_remove(dict: ptr, key: i64) -> i64
@@ -1576,63 +2370,89 @@ impl JitCompiler {
         sig.params.push(AbiParam::new(ptr));
         sig.params.push(AbiParam::new(types::I64));
         sig.returns.push(AbiParam::new(types::I64));
-        let id = self.module.declare_function("@_dict_remove", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_dict_remove", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_dict_remove".to_string(), id);
 
         // dict_len(dict: ptr) -> i64
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
         sig.returns.push(AbiParam::new(types::I64));
-        let id = self.module.declare_function("@_dict_len", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_dict_len", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_dict_len".to_string(), id);
 
         // dict_is_empty(dict: ptr) -> i64
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
         sig.returns.push(AbiParam::new(types::I64));
-        let id = self.module.declare_function("@_dict_is_empty", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_dict_is_empty", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_dict_is_empty".to_string(), id);
 
         // dict_clear(dict: ptr) -> void
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_dict_clear", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_dict_clear", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_dict_clear".to_string(), id);
 
         // dict_keys(dict: ptr) -> ptr (list)
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
         sig.returns.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_dict_keys", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_dict_keys", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_dict_keys".to_string(), id);
 
         // dict_values(dict: ptr) -> ptr (list)
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
         sig.returns.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_dict_values", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_dict_values", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_dict_values".to_string(), id);
 
         // dict_iter(dict: ptr) -> ptr (list of keys for iteration)
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
         sig.returns.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_dict_iter", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_dict_iter", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_dict_iter".to_string(), id);
 
         // print_dict(dict: ptr) -> void
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_print_dict", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_print_dict", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_print_dict".to_string(), id);
 
         // dynamic_clone(ptr) -> ptr
 
-
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
         sig.returns.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_dynamic_clone", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_dynamic_clone", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_dynamic_clone".to_string(), id);
 
         // ===== BigInt 函数 =====
@@ -1640,7 +2460,10 @@ impl JitCompiler {
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(types::I64));
         sig.returns.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_bigint_from_i64", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_bigint_from_i64", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_bigint_from_i64".to_string(), id);
 
         // bigint_from_str(ptr, usize) -> ptr
@@ -1648,7 +2471,10 @@ impl JitCompiler {
         sig.params.push(AbiParam::new(ptr));
         sig.params.push(AbiParam::new(types::I64));
         sig.returns.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_bigint_from_str", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_bigint_from_str", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_bigint_from_str".to_string(), id);
 
         // bigint_add(ptr, ptr) -> ptr
@@ -1656,7 +2482,10 @@ impl JitCompiler {
         sig.params.push(AbiParam::new(ptr));
         sig.params.push(AbiParam::new(ptr));
         sig.returns.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_bigint_add", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_bigint_add", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_bigint_add".to_string(), id);
 
         // bigint_sub(ptr, ptr) -> ptr
@@ -1664,7 +2493,10 @@ impl JitCompiler {
         sig.params.push(AbiParam::new(ptr));
         sig.params.push(AbiParam::new(ptr));
         sig.returns.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_bigint_sub", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_bigint_sub", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_bigint_sub".to_string(), id);
 
         // bigint_mul(ptr, ptr) -> ptr
@@ -1672,7 +2504,10 @@ impl JitCompiler {
         sig.params.push(AbiParam::new(ptr));
         sig.params.push(AbiParam::new(ptr));
         sig.returns.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_bigint_mul", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_bigint_mul", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_bigint_mul".to_string(), id);
 
         // bigint_div(ptr, ptr) -> ptr
@@ -1680,7 +2515,10 @@ impl JitCompiler {
         sig.params.push(AbiParam::new(ptr));
         sig.params.push(AbiParam::new(ptr));
         sig.returns.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_bigint_div", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_bigint_div", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_bigint_div".to_string(), id);
 
         // bigint_eq(ptr, ptr) -> i64
@@ -1688,7 +2526,10 @@ impl JitCompiler {
         sig.params.push(AbiParam::new(ptr));
         sig.params.push(AbiParam::new(ptr));
         sig.returns.push(AbiParam::new(types::I64));
-        let id = self.module.declare_function("@_bigint_eq", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_bigint_eq", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_bigint_eq".to_string(), id);
 
         // bigint_lt(ptr, ptr) -> i64
@@ -1696,7 +2537,10 @@ impl JitCompiler {
         sig.params.push(AbiParam::new(ptr));
         sig.params.push(AbiParam::new(ptr));
         sig.returns.push(AbiParam::new(types::I64));
-        let id = self.module.declare_function("@_bigint_lt", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_bigint_lt", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_bigint_lt".to_string(), id);
 
         // bigint_le(ptr, ptr) -> i64
@@ -1704,34 +2548,50 @@ impl JitCompiler {
         sig.params.push(AbiParam::new(ptr));
         sig.params.push(AbiParam::new(ptr));
         sig.returns.push(AbiParam::new(types::I64));
-        let id = self.module.declare_function("@_bigint_le", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_bigint_le", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_bigint_le".to_string(), id);
 
         // bigint_to_i64(ptr) -> i64
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
         sig.returns.push(AbiParam::new(types::I64));
-        let id = self.module.declare_function("@_bigint_to_i64", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_bigint_to_i64", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_bigint_to_i64".to_string(), id);
 
         // bigint_debug_stats() -> void
         let mut sig = self.module.make_signature();
-        let id = self.module.declare_function("@_bigint_debug_stats", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
-        self.functions.insert("@_bigint_debug_stats".to_string(), id);
+        let id = self
+            .module
+            .declare_function("@_bigint_debug_stats", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
+        self.functions
+            .insert("@_bigint_debug_stats".to_string(), id);
 
         // ===== Decimal 函数 =====
         // decimal_from_i64(i64) -> ptr
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(types::I64));
         sig.returns.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_decimal_from_i64", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_decimal_from_i64", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_decimal_from_i64".to_string(), id);
 
         // decimal_from_f64(f64) -> ptr
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(types::F64));
         sig.returns.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_decimal_from_f64", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_decimal_from_f64", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_decimal_from_f64".to_string(), id);
 
         // decimal_from_str(ptr, usize) -> ptr
@@ -1739,7 +2599,10 @@ impl JitCompiler {
         sig.params.push(AbiParam::new(ptr));
         sig.params.push(AbiParam::new(types::I64));
         sig.returns.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_decimal_from_str", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_decimal_from_str", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_decimal_from_str".to_string(), id);
 
         // decimal_add(ptr, ptr) -> ptr
@@ -1747,7 +2610,10 @@ impl JitCompiler {
         sig.params.push(AbiParam::new(ptr));
         sig.params.push(AbiParam::new(ptr));
         sig.returns.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_decimal_add", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_decimal_add", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_decimal_add".to_string(), id);
 
         // decimal_sub(ptr, ptr) -> ptr
@@ -1755,7 +2621,10 @@ impl JitCompiler {
         sig.params.push(AbiParam::new(ptr));
         sig.params.push(AbiParam::new(ptr));
         sig.returns.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_decimal_sub", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_decimal_sub", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_decimal_sub".to_string(), id);
 
         // decimal_mul(ptr, ptr) -> ptr
@@ -1763,7 +2632,10 @@ impl JitCompiler {
         sig.params.push(AbiParam::new(ptr));
         sig.params.push(AbiParam::new(ptr));
         sig.returns.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_decimal_mul", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_decimal_mul", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_decimal_mul".to_string(), id);
 
         // decimal_div(ptr, ptr) -> ptr
@@ -1771,7 +2643,10 @@ impl JitCompiler {
         sig.params.push(AbiParam::new(ptr));
         sig.params.push(AbiParam::new(ptr));
         sig.returns.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_decimal_div", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_decimal_div", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_decimal_div".to_string(), id);
 
         // decimal_eq(ptr, ptr) -> i64
@@ -1779,7 +2654,10 @@ impl JitCompiler {
         sig.params.push(AbiParam::new(ptr));
         sig.params.push(AbiParam::new(ptr));
         sig.returns.push(AbiParam::new(types::I64));
-        let id = self.module.declare_function("@_decimal_eq", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_decimal_eq", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_decimal_eq".to_string(), id);
 
         // decimal_lt(ptr, ptr) -> i64
@@ -1787,21 +2665,30 @@ impl JitCompiler {
         sig.params.push(AbiParam::new(ptr));
         sig.params.push(AbiParam::new(ptr));
         sig.returns.push(AbiParam::new(types::I64));
-        let id = self.module.declare_function("@_decimal_lt", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_decimal_lt", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_decimal_lt".to_string(), id);
 
         // decimal_to_i64(ptr) -> i64
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
         sig.returns.push(AbiParam::new(types::I64));
-        let id = self.module.declare_function("@_decimal_to_i64", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_decimal_to_i64", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_decimal_to_i64".to_string(), id);
 
         // decimal_to_f64(ptr) -> f64
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
         sig.returns.push(AbiParam::new(types::F64));
-        let id = self.module.declare_function("@_decimal_to_f64", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_decimal_to_f64", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_decimal_to_f64".to_string(), id);
 
         // ===== Dynamic 函数 =====
@@ -1809,28 +2696,42 @@ impl JitCompiler {
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(types::I64));
         sig.returns.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_dynamic_from_int", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_dynamic_from_int", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_dynamic_from_int".to_string(), id);
 
         // dynamic_from_float(f64) -> ptr
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(types::F64));
         sig.returns.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_dynamic_from_float", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
-        self.functions.insert("@_dynamic_from_float".to_string(), id);
+        let id = self
+            .module
+            .declare_function("@_dynamic_from_float", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
+        self.functions
+            .insert("@_dynamic_from_float".to_string(), id);
 
         // dynamic_from_string(ptr) -> ptr
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
         sig.returns.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_dynamic_from_string", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
-        self.functions.insert("@_dynamic_from_string".to_string(), id);
+        let id = self
+            .module
+            .declare_function("@_dynamic_from_string", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
+        self.functions
+            .insert("@_dynamic_from_string".to_string(), id);
 
         // dynamic_from_list(ptr) -> ptr
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
         sig.returns.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_dynamic_from_list", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_dynamic_from_list", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_dynamic_from_list".to_string(), id);
 
         // dynamic_add(ptr, ptr) -> ptr
@@ -1838,7 +2739,10 @@ impl JitCompiler {
         sig.params.push(AbiParam::new(ptr));
         sig.params.push(AbiParam::new(ptr));
         sig.returns.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_dynamic_add", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_dynamic_add", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_dynamic_add".to_string(), id);
 
         // dynamic_sub(ptr, ptr) -> ptr
@@ -1846,7 +2750,10 @@ impl JitCompiler {
         sig.params.push(AbiParam::new(ptr));
         sig.params.push(AbiParam::new(ptr));
         sig.returns.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_dynamic_sub", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_dynamic_sub", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_dynamic_sub".to_string(), id);
 
         // dynamic_mul(ptr, ptr) -> ptr
@@ -1854,7 +2761,10 @@ impl JitCompiler {
         sig.params.push(AbiParam::new(ptr));
         sig.params.push(AbiParam::new(ptr));
         sig.returns.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_dynamic_mul", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_dynamic_mul", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_dynamic_mul".to_string(), id);
 
         // dynamic_div(ptr, ptr) -> ptr
@@ -1862,29 +2772,41 @@ impl JitCompiler {
         sig.params.push(AbiParam::new(ptr));
         sig.params.push(AbiParam::new(ptr));
         sig.returns.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_dynamic_div", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_dynamic_div", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_dynamic_div".to_string(), id);
 
         // print_dynamic(ptr) -> void
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_print_dynamic", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_print_dynamic", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_print_dynamic".to_string(), id);
 
         // dynamic_to_int(ptr) -> i64
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
         sig.returns.push(AbiParam::new(types::I64));
-        let id = self.module.declare_function("@_dynamic_to_int", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_dynamic_to_int", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_dynamic_to_int".to_string(), id);
 
         // ===== 字符串函数 =====
         // string_from_slice(ptr, i64) -> ptr
         let mut sig = self.module.make_signature();
-        sig.params.push(AbiParam::new(ptr));      // 字符串数据指针
+        sig.params.push(AbiParam::new(ptr)); // 字符串数据指针
         sig.params.push(AbiParam::new(types::I64)); // 长度
-        sig.returns.push(AbiParam::new(ptr));     // BolideString 指针
-        let id = self.module.declare_function("@_string_from_slice", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        sig.returns.push(AbiParam::new(ptr)); // BolideString 指针
+        let id = self
+            .module
+            .declare_function("@_string_from_slice", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_string_from_slice".to_string(), id);
 
         // string_literal(ptr, i64) -> ptr
@@ -1892,21 +2814,30 @@ impl JitCompiler {
         sig.params.push(AbiParam::new(ptr));
         sig.params.push(AbiParam::new(types::I64));
         sig.returns.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_string_literal", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_string_literal", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_string_literal".to_string(), id);
 
         // bolide_string_new(ptr) -> ptr  (char* -> BolideString*)
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
         sig.returns.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_bolide_string_new", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_bolide_string_new", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_bolide_string_new".to_string(), id);
 
         // string_as_cstr(ptr) -> ptr  (BolideString* -> char*)
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
         sig.returns.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_string_as_cstr", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_string_as_cstr", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_string_as_cstr".to_string(), id);
 
         // string_concat(ptr, ptr) -> ptr  (字符串拼接)
@@ -1914,7 +2845,10 @@ impl JitCompiler {
         sig.params.push(AbiParam::new(ptr));
         sig.params.push(AbiParam::new(ptr));
         sig.returns.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_string_concat", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_string_concat", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_string_concat".to_string(), id);
 
         // string_eq(ptr, ptr) -> i64  (字符串比较)
@@ -1922,7 +2856,10 @@ impl JitCompiler {
         sig.params.push(AbiParam::new(ptr));
         sig.params.push(AbiParam::new(ptr));
         sig.returns.push(AbiParam::new(types::I64));
-        let id = self.module.declare_function("@_string_eq", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_string_eq", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_string_eq".to_string(), id);
 
         // ===== 内存分配函数 =====
@@ -1930,228 +2867,346 @@ impl JitCompiler {
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(types::I64));
         sig.returns.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_bolide_alloc", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_bolide_alloc", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_bolide_alloc".to_string(), id);
 
         // bolide_free(ptr, i64)
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
         sig.params.push(AbiParam::new(types::I64));
-        let id = self.module.declare_function("@_bolide_free", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_bolide_free", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_bolide_free".to_string(), id);
 
         // ===== 线程函数（trampoline 方案） =====
         // thread_spawn_int(fn() -> i64) -> ptr
         let mut sig = self.module.make_signature();
-        sig.params.push(AbiParam::new(ptr));  // 函数指针
+        sig.params.push(AbiParam::new(ptr)); // 函数指针
         sig.returns.push(AbiParam::new(ptr)); // 线程句柄
-        let id = self.module.declare_function("@_thread_spawn_int", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_thread_spawn_int", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_thread_spawn_int".to_string(), id);
 
         // thread_spawn_float(fn() -> f64) -> ptr
-        let id = self.module.declare_function("@_thread_spawn_float", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
-        self.functions.insert("@_thread_spawn_float".to_string(), id);
+        let id = self
+            .module
+            .declare_function("@_thread_spawn_float", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
+        self.functions
+            .insert("@_thread_spawn_float".to_string(), id);
 
         // thread_spawn_ptr(fn() -> ptr) -> ptr
-        let id = self.module.declare_function("@_thread_spawn_ptr", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_thread_spawn_ptr", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_thread_spawn_ptr".to_string(), id);
 
         // ===== 带环境的线程函数 =====
         // thread_spawn_int_with_env(fn(ptr) -> i64, ptr) -> ptr
         let mut sig = self.module.make_signature();
-        sig.params.push(AbiParam::new(ptr));  // 函数指针
-        sig.params.push(AbiParam::new(ptr));  // 环境指针
+        sig.params.push(AbiParam::new(ptr)); // 函数指针
+        sig.params.push(AbiParam::new(ptr)); // 环境指针
         sig.returns.push(AbiParam::new(ptr)); // 线程句柄
-        let id = self.module.declare_function("@_thread_spawn_int_with_env", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
-        self.functions.insert("@_thread_spawn_int_with_env".to_string(), id);
+        let id = self
+            .module
+            .declare_function("@_thread_spawn_int_with_env", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
+        self.functions
+            .insert("@_thread_spawn_int_with_env".to_string(), id);
 
         // thread_spawn_float_with_env
-        let id = self.module.declare_function("@_thread_spawn_float_with_env", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
-        self.functions.insert("@_thread_spawn_float_with_env".to_string(), id);
+        let id = self
+            .module
+            .declare_function("@_thread_spawn_float_with_env", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
+        self.functions
+            .insert("@_thread_spawn_float_with_env".to_string(), id);
 
         // thread_spawn_ptr_with_env
-        let id = self.module.declare_function("@_thread_spawn_ptr_with_env", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
-        self.functions.insert("@_thread_spawn_ptr_with_env".to_string(), id);
+        let id = self
+            .module
+            .declare_function("@_thread_spawn_ptr_with_env", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
+        self.functions
+            .insert("@_thread_spawn_ptr_with_env".to_string(), id);
 
         // thread_join_int(ptr) -> i64
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
         sig.returns.push(AbiParam::new(types::I64));
-        let id = self.module.declare_function("@_thread_join_int", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_thread_join_int", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_thread_join_int".to_string(), id);
 
         // thread_join_float(ptr) -> f64
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
         sig.returns.push(AbiParam::new(types::F64));
-        let id = self.module.declare_function("@_thread_join_float", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_thread_join_float", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_thread_join_float".to_string(), id);
 
         // thread_join_ptr(ptr) -> ptr
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
         sig.returns.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_thread_join_ptr", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_thread_join_ptr", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_thread_join_ptr".to_string(), id);
 
         // thread_handle_free(ptr)
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_thread_handle_free", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
-        self.functions.insert("@_thread_handle_free".to_string(), id);
+        let id = self
+            .module
+            .declare_function("@_thread_handle_free", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
+        self.functions
+            .insert("@_thread_handle_free".to_string(), id);
 
         // thread_cancel(ptr)
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_thread_cancel", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_thread_cancel", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_thread_cancel".to_string(), id);
 
         // thread_is_cancelled(ptr) -> i64
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
         sig.returns.push(AbiParam::new(types::I64));
-        let id = self.module.declare_function("@_thread_is_cancelled", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
-        self.functions.insert("@_thread_is_cancelled".to_string(), id);
+        let id = self
+            .module
+            .declare_function("@_thread_is_cancelled", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
+        self.functions
+            .insert("@_thread_is_cancelled".to_string(), id);
 
         // ===== 线程池函数 =====
         // pool_create(i64) -> ptr
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(types::I64));
         sig.returns.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_pool_create", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_pool_create", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_pool_create".to_string(), id);
 
         // pool_enter(ptr)
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_pool_enter", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_pool_enter", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_pool_enter".to_string(), id);
 
         // pool_exit()
         let mut sig = self.module.make_signature();
-        let id = self.module.declare_function("@_pool_exit", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_pool_exit", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_pool_exit".to_string(), id);
 
         // pool_is_active() -> i64
         let mut sig = self.module.make_signature();
         sig.returns.push(AbiParam::new(types::I64));
-        let id = self.module.declare_function("@_pool_is_active", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_pool_is_active", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_pool_is_active".to_string(), id);
 
         // pool_spawn_int(fn() -> i64) -> ptr
         let mut sig = self.module.make_signature();
-        sig.params.push(AbiParam::new(ptr));  // 函数指针
+        sig.params.push(AbiParam::new(ptr)); // 函数指针
         sig.returns.push(AbiParam::new(ptr)); // 任务句柄
-        let id = self.module.declare_function("@_pool_spawn_int", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_pool_spawn_int", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_pool_spawn_int".to_string(), id);
 
         // pool_spawn_float
-        let id = self.module.declare_function("@_pool_spawn_float", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_pool_spawn_float", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_pool_spawn_float".to_string(), id);
 
         // pool_spawn_ptr
-        let id = self.module.declare_function("@_pool_spawn_ptr", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_pool_spawn_ptr", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_pool_spawn_ptr".to_string(), id);
 
         // ===== 带环境的线程池函数 =====
         // pool_spawn_int_with_env(fn(ptr) -> i64, ptr) -> ptr
         let mut sig = self.module.make_signature();
-        sig.params.push(AbiParam::new(ptr));  // 函数指针
-        sig.params.push(AbiParam::new(ptr));  // 环境指针
+        sig.params.push(AbiParam::new(ptr)); // 函数指针
+        sig.params.push(AbiParam::new(ptr)); // 环境指针
         sig.returns.push(AbiParam::new(ptr)); // 任务句柄
-        let id = self.module.declare_function("@_pool_spawn_int_with_env", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
-        self.functions.insert("@_pool_spawn_int_with_env".to_string(), id);
+        let id = self
+            .module
+            .declare_function("@_pool_spawn_int_with_env", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
+        self.functions
+            .insert("@_pool_spawn_int_with_env".to_string(), id);
 
         // pool_spawn_float_with_env
-        let id = self.module.declare_function("@_pool_spawn_float_with_env", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
-        self.functions.insert("@_pool_spawn_float_with_env".to_string(), id);
+        let id = self
+            .module
+            .declare_function("@_pool_spawn_float_with_env", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
+        self.functions
+            .insert("@_pool_spawn_float_with_env".to_string(), id);
 
         // pool_spawn_ptr_with_env
-        let id = self.module.declare_function("@_pool_spawn_ptr_with_env", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
-        self.functions.insert("@_pool_spawn_ptr_with_env".to_string(), id);
+        let id = self
+            .module
+            .declare_function("@_pool_spawn_ptr_with_env", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
+        self.functions
+            .insert("@_pool_spawn_ptr_with_env".to_string(), id);
 
         // pool_join_int(ptr) -> i64
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
         sig.returns.push(AbiParam::new(types::I64));
-        let id = self.module.declare_function("@_pool_join_int", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_pool_join_int", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_pool_join_int".to_string(), id);
 
         // pool_join_float(ptr) -> f64
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
         sig.returns.push(AbiParam::new(types::F64));
-        let id = self.module.declare_function("@_pool_join_float", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_pool_join_float", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_pool_join_float".to_string(), id);
 
         // pool_join_ptr(ptr) -> ptr
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
         sig.returns.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_pool_join_ptr", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_pool_join_ptr", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_pool_join_ptr".to_string(), id);
 
         // pool_handle_free(ptr)
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_pool_handle_free", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_pool_handle_free", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_pool_handle_free".to_string(), id);
 
         // pool_destroy(ptr)
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_pool_destroy", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_pool_destroy", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_pool_destroy".to_string(), id);
 
         // ===== 通道函数 =====
         // channel_create() -> ptr
         let mut sig = self.module.make_signature();
         sig.returns.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_channel_create", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_channel_create", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_channel_create".to_string(), id);
 
         // channel_create_buffered(i64) -> ptr
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(types::I64));
         sig.returns.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_channel_create_buffered", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
-        self.functions.insert("@_channel_create_buffered".to_string(), id);
+        let id = self
+            .module
+            .declare_function("@_channel_create_buffered", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
+        self.functions
+            .insert("@_channel_create_buffered".to_string(), id);
 
         // channel_send(ptr, i64) -> i64
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
         sig.params.push(AbiParam::new(types::I64));
         sig.returns.push(AbiParam::new(types::I64));
-        let id = self.module.declare_function("@_channel_send", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_channel_send", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_channel_send".to_string(), id);
 
         // channel_recv(ptr) -> i64
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
         sig.returns.push(AbiParam::new(types::I64));
-        let id = self.module.declare_function("@_channel_recv", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_channel_recv", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_channel_recv".to_string(), id);
 
         // channel_close(ptr)
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_channel_close", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_channel_close", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_channel_close".to_string(), id);
 
         // channel_free(ptr)
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_channel_free", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_channel_free", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_channel_free".to_string(), id);
 
         // channel_select(channels_ptr, count, timeout_ms, value_ptr) -> i64
         let mut sig = self.module.make_signature();
-        sig.params.push(AbiParam::new(ptr));       // channels array pointer
+        sig.params.push(AbiParam::new(ptr)); // channels array pointer
         sig.params.push(AbiParam::new(types::I64)); // count
         sig.params.push(AbiParam::new(types::I64)); // timeout_ms
-        sig.params.push(AbiParam::new(ptr));       // value output pointer
+        sig.params.push(AbiParam::new(ptr)); // value output pointer
         sig.returns.push(AbiParam::new(types::I64)); // selected index
-        let id = self.module.declare_function("@_channel_select", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_channel_select", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_channel_select".to_string(), id);
 
         // ===== 协程函数 =====
@@ -2159,41 +3214,74 @@ impl JitCompiler {
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
         sig.returns.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_coroutine_spawn_int", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
-        self.functions.insert("@_coroutine_spawn_int".to_string(), id);
+        let id = self
+            .module
+            .declare_function("@_coroutine_spawn_int", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
+        self.functions
+            .insert("@_coroutine_spawn_int".to_string(), id);
 
         // coroutine_spawn_float(func_ptr) -> ptr
-        let id = self.module.declare_function("@_coroutine_spawn_float", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
-        self.functions.insert("@_coroutine_spawn_float".to_string(), id);
+        let id = self
+            .module
+            .declare_function("@_coroutine_spawn_float", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
+        self.functions
+            .insert("@_coroutine_spawn_float".to_string(), id);
 
         // coroutine_spawn_ptr(func_ptr) -> ptr
-        let id = self.module.declare_function("@_coroutine_spawn_ptr", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
-        self.functions.insert("@_coroutine_spawn_ptr".to_string(), id);
+        let id = self
+            .module
+            .declare_function("@_coroutine_spawn_ptr", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
+        self.functions
+            .insert("@_coroutine_spawn_ptr".to_string(), id);
 
         // coroutine_spawn_*_with_env(func_ptr, env) -> ptr
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
         sig.params.push(AbiParam::new(ptr));
         sig.returns.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_coroutine_spawn_int_with_env", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
-        self.functions.insert("@_coroutine_spawn_int_with_env".to_string(), id);
-        let id = self.module.declare_function("@_coroutine_spawn_float_with_env", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
-        self.functions.insert("@_coroutine_spawn_float_with_env".to_string(), id);
-        let id = self.module.declare_function("@_coroutine_spawn_ptr_with_env", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
-        self.functions.insert("@_coroutine_spawn_ptr_with_env".to_string(), id);
+        let id = self
+            .module
+            .declare_function("@_coroutine_spawn_int_with_env", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
+        self.functions
+            .insert("@_coroutine_spawn_int_with_env".to_string(), id);
+        let id = self
+            .module
+            .declare_function("@_coroutine_spawn_float_with_env", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
+        self.functions
+            .insert("@_coroutine_spawn_float_with_env".to_string(), id);
+        let id = self
+            .module
+            .declare_function("@_coroutine_spawn_ptr_with_env", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
+        self.functions
+            .insert("@_coroutine_spawn_ptr_with_env".to_string(), id);
 
         // scope_enter(), scope_register(ptr), scope_exit()
         let mut sig = self.module.make_signature();
-        let id = self.module.declare_function("@_scope_enter", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_scope_enter", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_scope_enter".to_string(), id);
 
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_scope_register", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_scope_register", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_scope_register".to_string(), id);
 
         let mut sig = self.module.make_signature();
-        let id = self.module.declare_function("@_scope_exit", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_scope_exit", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_scope_exit".to_string(), id);
 
         // select_wait_first(futures_ptr, count) -> i64
@@ -2201,38 +3289,59 @@ impl JitCompiler {
         sig.params.push(AbiParam::new(ptr));
         sig.params.push(AbiParam::new(types::I64));
         sig.returns.push(AbiParam::new(types::I64));
-        let id = self.module.declare_function("@_select_wait_first", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_select_wait_first", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_select_wait_first".to_string(), id);
 
         // coroutine_await_int(future_ptr) -> i64
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
         sig.returns.push(AbiParam::new(types::I64));
-        let id = self.module.declare_function("@_coroutine_await_int", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
-        self.functions.insert("@_coroutine_await_int".to_string(), id);
+        let id = self
+            .module
+            .declare_function("@_coroutine_await_int", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
+        self.functions
+            .insert("@_coroutine_await_int".to_string(), id);
 
         // coroutine_await_float(future_ptr) -> f64
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
         sig.returns.push(AbiParam::new(types::F64));
-        let id = self.module.declare_function("@_coroutine_await_float", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
-        self.functions.insert("@_coroutine_await_float".to_string(), id);
+        let id = self
+            .module
+            .declare_function("@_coroutine_await_float", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
+        self.functions
+            .insert("@_coroutine_await_float".to_string(), id);
 
         // coroutine_await_ptr(future_ptr) -> ptr
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
         sig.returns.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_coroutine_await_ptr", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
-        self.functions.insert("@_coroutine_await_ptr".to_string(), id);
+        let id = self
+            .module
+            .declare_function("@_coroutine_await_ptr", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
+        self.functions
+            .insert("@_coroutine_await_ptr".to_string(), id);
 
         // coroutine_cancel(future_ptr)
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_coroutine_cancel", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_coroutine_cancel", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_coroutine_cancel".to_string(), id);
 
         // coroutine_free(future_ptr)
-        let id = self.module.declare_function("@_coroutine_free", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_coroutine_free", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_coroutine_free".to_string(), id);
 
         // ===== Tuple 函数 =====
@@ -2240,13 +3349,19 @@ impl JitCompiler {
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(types::I64));
         sig.returns.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_tuple_new", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_tuple_new", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_tuple_new".to_string(), id);
 
         // tuple_free(ptr)
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_tuple_free", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_tuple_free", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_tuple_free".to_string(), id);
 
         // tuple_set(ptr, index, value)
@@ -2254,7 +3369,10 @@ impl JitCompiler {
         sig.params.push(AbiParam::new(ptr));
         sig.params.push(AbiParam::new(types::I64));
         sig.params.push(AbiParam::new(types::I64));
-        let id = self.module.declare_function("@_tuple_set", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_tuple_set", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_tuple_set".to_string(), id);
 
         // tuple_get(ptr, index) -> i64
@@ -2262,25 +3380,37 @@ impl JitCompiler {
         sig.params.push(AbiParam::new(ptr));
         sig.params.push(AbiParam::new(types::I64));
         sig.returns.push(AbiParam::new(types::I64));
-        let id = self.module.declare_function("@_tuple_get", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_tuple_get", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_tuple_get".to_string(), id);
 
         // tuple_len(ptr) -> i64
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
         sig.returns.push(AbiParam::new(types::I64));
-        let id = self.module.declare_function("@_tuple_len", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_tuple_len", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_tuple_len".to_string(), id);
 
         // print_tuple(ptr)
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_print_tuple", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_print_tuple", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_print_tuple".to_string(), id);
 
         // tuple_debug_stats()
         let mut sig = self.module.make_signature();
-        let id = self.module.declare_function("@_tuple_debug_stats", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_tuple_debug_stats", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_tuple_debug_stats".to_string(), id);
 
         // ===== FFI 函数 =====
@@ -2288,7 +3418,10 @@ impl JitCompiler {
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
         sig.returns.push(AbiParam::new(types::I64));
-        let id = self.module.declare_function("@_ffi_load_library", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_ffi_load_library", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_ffi_load_library".to_string(), id);
 
         // ffi_get_symbol(lib_path_ptr, symbol_name_ptr) -> ptr
@@ -2296,24 +3429,33 @@ impl JitCompiler {
         sig.params.push(AbiParam::new(ptr));
         sig.params.push(AbiParam::new(ptr));
         sig.returns.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_ffi_get_symbol", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_ffi_get_symbol", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_ffi_get_symbol".to_string(), id);
 
         // test_callback(callback, a, b) -> i64
         let mut sig = self.module.make_signature();
-        sig.params.push(AbiParam::new(ptr));  // callback
+        sig.params.push(AbiParam::new(ptr)); // callback
         sig.params.push(AbiParam::new(types::I64));
         sig.params.push(AbiParam::new(types::I64));
         sig.returns.push(AbiParam::new(types::I64));
-        let id = self.module.declare_function("@_test_callback", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_test_callback", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_test_callback".to_string(), id);
 
         // map_int(callback, value) -> i64
         let mut sig = self.module.make_signature();
-        sig.params.push(AbiParam::new(ptr));  // callback
+        sig.params.push(AbiParam::new(ptr)); // callback
         sig.params.push(AbiParam::new(types::I64));
         sig.returns.push(AbiParam::new(types::I64));
-        let id = self.module.declare_function("@_map_int", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_map_int", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_map_int".to_string(), id);
 
         // ===== Object 函数 =====
@@ -2321,65 +3463,98 @@ impl JitCompiler {
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(types::I64));
         sig.returns.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_object_alloc", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_object_alloc", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_object_alloc".to_string(), id);
 
         // object_release(ptr)
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_object_release", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_object_release", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_object_release".to_string(), id);
 
         // object_retain(ptr)
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_object_retain", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_object_retain", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_object_retain".to_string(), id);
 
         // object_clone(ptr) -> ptr
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
         sig.returns.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_object_clone", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_object_clone", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_object_clone".to_string(), id);
 
         // object_weak_retain(ptr)
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_object_weak_retain", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
-        self.functions.insert("@_object_weak_retain".to_string(), id);
+        let id = self
+            .module
+            .declare_function("@_object_weak_retain", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
+        self.functions
+            .insert("@_object_weak_retain".to_string(), id);
 
         // object_weak_release(ptr)
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_object_weak_release", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
-        self.functions.insert("@_object_weak_release".to_string(), id);
+        let id = self
+            .module
+            .declare_function("@_object_weak_release", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
+        self.functions
+            .insert("@_object_weak_release".to_string(), id);
 
         // object_weak_clone(ptr) -> ptr
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
         sig.returns.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_object_weak_clone", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_object_weak_clone", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_object_weak_clone".to_string(), id);
 
         // object_assert_alive(ptr)
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
-        let id = self.module.declare_function("@_object_assert_alive", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
-        self.functions.insert("@_object_assert_alive".to_string(), id);
+        let id = self
+            .module
+            .declare_function("@_object_assert_alive", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
+        self.functions
+            .insert("@_object_assert_alive".to_string(), id);
 
         // object_is_alive(ptr) -> i64
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
         sig.returns.push(AbiParam::new(types::I64));
-        let id = self.module.declare_function("@_object_is_alive", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_object_is_alive", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_object_is_alive".to_string(), id);
 
         // object_ref_count(ptr) -> i64
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
         sig.returns.push(AbiParam::new(types::I64));
-        let id = self.module.declare_function("@_object_ref_count", Linkage::Import, &sig).map_err(|e| format!("{}", e))?;
+        let id = self
+            .module
+            .declare_function("@_object_ref_count", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_object_ref_count".to_string(), id);
 
         Ok(())
@@ -2387,11 +3562,15 @@ impl JitCompiler {
 
     /// 编译函数（第二遍）
     fn compile_function(&mut self, func: &FuncDef) -> Result<(), String> {
-        let func_id = *self.functions.get(&func.name)
+        let func_id = *self
+            .functions
+            .get(&func.name)
             .ok_or_else(|| format!("Function {} not declared", func.name))?;
 
         // 预先计算参数类型
-        let param_types: Vec<types::Type> = func.params.iter()
+        let param_types: Vec<types::Type> = func
+            .params
+            .iter()
             .map(|p| self.bolide_type_to_cranelift(&p.ty))
             .collect();
 
@@ -2401,7 +3580,8 @@ impl JitCompiler {
             sig.params.push(AbiParam::new(*ty));
         }
         if let Some(ref ret_ty) = func.return_type {
-            sig.returns.push(AbiParam::new(self.bolide_type_to_cranelift(ret_ty)));
+            sig.returns
+                .push(AbiParam::new(self.bolide_type_to_cranelift(ret_ty)));
         }
 
         self.ctx.func.signature = sig;
@@ -2472,7 +3652,10 @@ impl JitCompiler {
 
         for (i, param) in func.params.iter().enumerate() {
             // 记录参数的 Bolide 类型
-            compile_ctx.var_types.insert(param.name.clone(), compile_ctx.normalize_bolide_type(&param.ty));
+            compile_ctx.var_types.insert(
+                param.name.clone(),
+                compile_ctx.normalize_bolide_type(&param.ty),
+            );
 
             match param.mode {
                 ParamMode::Borrow => {
@@ -2486,17 +3669,25 @@ impl JitCompiler {
                     compile_ctx.builder.def_var(var, params[i]);
                     // 对于需要 RC 管理的类型，注册到 rc_variables
                     if CompileContext::is_rc_type(&param.ty) {
-                        compile_ctx.rc_variables.push((param.name.clone(), param.ty.clone()));
+                        compile_ctx
+                            .rc_variables
+                            .push((param.name.clone(), param.ty.clone()));
                     }
                 }
                 ParamMode::Ref => {
                     // Ref 参数：参数是指针地址，需要解引用
                     let ptr_addr = params[i];
-                    let val = compile_ctx.builder.ins().load(ptr_type, MemFlags::new(), ptr_addr, 0);
+                    let val =
+                        compile_ctx
+                            .builder
+                            .ins()
+                            .load(ptr_type, MemFlags::new(), ptr_addr, 0);
                     let var = compile_ctx.declare_variable(&param.name, param_types[i]);
                     compile_ctx.builder.def_var(var, val);
                     // 记录 Ref 参数，以便在函数返回前写回
-                    compile_ctx.ref_params.push((param.name.clone(), var, ptr_addr));
+                    compile_ctx
+                        .ref_params
+                        .push((param.name.clone(), var, ptr_addr));
                 }
             }
         }
@@ -2539,8 +3730,9 @@ impl JitCompiler {
         builder.finalize();
 
         // 定义函数
-        self.module.define_function(func_id, &mut self.ctx)
-            .map_err(|e| format!("Define function error: {}", e))?;
+        self.module
+            .define_function(func_id, &mut self.ctx)
+            .map_err(|e| format!("Define function error: {:?}", e))?;
         self.module.clear_context(&mut self.ctx);
 
         Ok(())
@@ -2637,7 +3829,12 @@ impl JitCompiler {
                 // 只有带参数的 spawn 需要 trampoline
                 if !args.is_empty() {
                     // 检查目标函数存在且有参数
-                    if self.func_params.get(func_name).map(|p| !p.is_empty()).unwrap_or(false) {
+                    if self
+                        .func_params
+                        .get(func_name)
+                        .map(|p| !p.is_empty())
+                        .unwrap_or(false)
+                    {
                         targets.push(func_name.clone());
                     }
                 }
@@ -2656,7 +3853,12 @@ impl JitCompiler {
                 // 检查是否是 async 函数调用
                 if let Expr::Ident(func_name) = callee.as_ref() {
                     if self.async_funcs.contains(func_name) && !args.is_empty() {
-                        if self.func_params.get(func_name).map(|p| !p.is_empty()).unwrap_or(false) {
+                        if self
+                            .func_params
+                            .get(func_name)
+                            .map(|p| !p.is_empty())
+                            .unwrap_or(false)
+                        {
                             targets.push(func_name.clone());
                         }
                     }
@@ -2692,10 +3894,14 @@ impl JitCompiler {
 
     /// 创建单个 trampoline 函数
     fn create_trampoline(&mut self, target_func_name: &str) -> Result<(), String> {
-        let params = self.func_params.get(target_func_name)
+        let params = self
+            .func_params
+            .get(target_func_name)
             .ok_or_else(|| format!("Function {} not found", target_func_name))?
             .clone();
-        let return_type = self.func_return_types.get(target_func_name)
+        let return_type = self
+            .func_return_types
+            .get(target_func_name)
             .ok_or_else(|| format!("Function {} return type not found", target_func_name))?
             .clone();
 
@@ -2704,27 +3910,35 @@ impl JitCompiler {
         let param_types: Vec<BolideType> = params.iter().map(|p| p.ty.clone()).collect();
 
         // 生成 trampoline 名称
-        let trampoline_name = format!("__trampoline_{}_{}", target_func_name, self.trampoline_counter);
+        let trampoline_name = format!(
+            "__trampoline_{}_{}",
+            target_func_name, self.trampoline_counter
+        );
         self.trampoline_counter += 1;
 
         // 声明 trampoline 签名: (env: ptr) -> return_type
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(self.ptr_type));
         if let Some(ref ret_ty) = return_type {
-            sig.returns.push(AbiParam::new(self.bolide_type_to_cranelift(ret_ty)));
+            sig.returns
+                .push(AbiParam::new(self.bolide_type_to_cranelift(ret_ty)));
         }
 
-        let trampoline_id = self.module
+        let trampoline_id = self
+            .module
             .declare_function(&trampoline_name, Linkage::Local, &sig)
             .map_err(|e| format!("Declare trampoline error: {}", e))?;
 
         // 预先计算参数的 Cranelift 类型（避免借用冲突）
-        let cranelift_param_types: Vec<types::Type> = params.iter()
+        let cranelift_param_types: Vec<types::Type> = params
+            .iter()
             .map(|p| self.bolide_type_to_cranelift(&p.ty))
             .collect();
 
         // 获取目标函数 ID
-        let target_func_id = *self.functions.get(target_func_name)
+        let target_func_id = *self
+            .functions
+            .get(target_func_name)
             .ok_or_else(|| format!("Target function {} not declared", target_func_name))?;
 
         // 构建 trampoline 函数体
@@ -2743,13 +3957,17 @@ impl JitCompiler {
         let env_ptr = builder.block_params(entry_block)[0];
 
         // 获取目标函数引用
-        let target_func_ref = self.module.declare_func_in_func(target_func_id, builder.func);
+        let target_func_ref = self
+            .module
+            .declare_func_in_func(target_func_id, builder.func);
 
         // 从 env 中加载参数
         let mut call_args = Vec::new();
         for (i, cranelift_type) in cranelift_param_types.iter().enumerate() {
             let offset = (i * 8) as i32;
-            let val = builder.ins().load(*cranelift_type, MemFlags::trusted(), env_ptr, offset);
+            let val = builder
+                .ins()
+                .load(*cranelift_type, MemFlags::trusted(), env_ptr, offset);
             call_args.push(val);
         }
 
@@ -2759,7 +3977,11 @@ impl JitCompiler {
         // 返回结果（先复制结果值以避免借用冲突）
         let result_val = {
             let results = builder.inst_results(call);
-            if results.is_empty() { None } else { Some(results[0]) }
+            if results.is_empty() {
+                None
+            } else {
+                Some(results[0])
+            }
         };
 
         // 释放 RC 类型参数（spawn 时 clone 的副本）
@@ -2789,16 +4011,20 @@ impl JitCompiler {
         builder.finalize();
 
         // 定义 trampoline 函数
-        self.module.define_function(trampoline_id, &mut self.ctx)
+        self.module
+            .define_function(trampoline_id, &mut self.ctx)
             .map_err(|e| format!("Define trampoline error: {}", e))?;
         self.module.clear_context(&mut self.ctx);
 
         // 存储 trampoline 信息
-        self.trampolines.insert(target_func_name.to_string(), TrampolineInfo {
-            func_id: trampoline_id,
-            param_types,
-            env_size,
-        });
+        self.trampolines.insert(
+            target_func_name.to_string(),
+            TrampolineInfo {
+                func_id: trampoline_id,
+                param_types,
+                env_size,
+            },
+        );
 
         self.functions.insert(trampoline_name, trampoline_id);
 
@@ -2817,11 +4043,11 @@ impl JitCompiler {
             BolideType::Ptr => self.ptr_type,
             BolideType::Channel(_) => self.ptr_type,
             BolideType::Future => self.ptr_type,
-            BolideType::Func => self.ptr_type,  // 函数指针
-            BolideType::FuncSig(_, _) => self.ptr_type,  // 带签名的函数指针
+            BolideType::Func => self.ptr_type,          // 函数指针
+            BolideType::FuncSig(_, _) => self.ptr_type, // 带签名的函数指针
             BolideType::List(_) => self.ptr_type,
-            BolideType::Dict(_, _) => self.ptr_type,  // 字典作为指针
-            BolideType::Tuple(_) => self.ptr_type,  // 元组作为指针
+            BolideType::Dict(_, _) => self.ptr_type, // 字典作为指针
+            BolideType::Tuple(_) => self.ptr_type,   // 元组作为指针
 
             BolideType::Custom(_) => self.ptr_type,
             BolideType::Weak(inner) => self.bolide_type_to_cranelift(inner),
@@ -2860,7 +4086,8 @@ impl JitCompiler {
             return Ok(());
         }
 
-        let class_def = class_defs.get(name)
+        let class_def = class_defs
+            .get(name)
             .ok_or_else(|| format!("Class not found: {}", name))?;
 
         // 先处理父类
@@ -2902,9 +4129,7 @@ impl JitCompiler {
             offset += 8;
         }
 
-        let methods: Vec<String> = class_def.methods.iter()
-            .map(|m| m.name.clone())
-            .collect();
+        let methods: Vec<String> = class_def.methods.iter().map(|m| m.name.clone()).collect();
 
         Ok(ClassInfo {
             name: class_def.name.clone(),
@@ -2917,13 +4142,15 @@ impl JitCompiler {
 
     /// 声明类构造函数
     fn declare_class_constructor(&mut self, class_name: &str) -> Result<(), String> {
-        let class_info = self.classes.get(class_name)
+        let class_info = self
+            .classes
+            .get(class_name)
             .ok_or_else(|| format!("Class not found: {}", class_name))?
             .clone();
 
         // 构造函数签名: ClassName(field1, field2, ...) -> ptr
         let mut sig = self.module.make_signature();
-        
+
         // 添加字段参数（按字段声明顺序）
         for field in &class_info.fields {
             let ty = self.bolide_type_to_cranelift(&field.ty);
@@ -2932,15 +4159,21 @@ impl JitCompiler {
         sig.returns.push(AbiParam::new(self.ptr_type));
 
         let func_name = class_name.to_string();
-        let func_id = self.module
+        let func_id = self
+            .module
             .declare_function(&func_name, Linkage::Export, &sig)
             .map_err(|e| format!("Declare constructor error: {}", e))?;
 
         self.functions.insert(func_name.clone(), func_id);
-        self.func_return_types.insert(func_name.clone(), Some(BolideType::Custom(class_name.to_string())));
-        
+        self.func_return_types.insert(
+            func_name.clone(),
+            Some(BolideType::Custom(class_name.to_string())),
+        );
+
         // 存储构造函数参数信息
-        let params: Vec<Param> = class_info.fields.iter()
+        let params: Vec<Param> = class_info
+            .fields
+            .iter()
             .map(|f| Param {
                 name: f.name.clone(),
                 ty: f.ty.clone(),
@@ -2954,11 +4187,15 @@ impl JitCompiler {
 
     /// 编译类构造函数
     fn compile_class_constructor(&mut self, class_name: &str) -> Result<(), String> {
-        let class_info = self.classes.get(class_name)
+        let class_info = self
+            .classes
+            .get(class_name)
             .ok_or_else(|| format!("Class not found: {}", class_name))?
             .clone();
 
-        let func_id = *self.functions.get(class_name)
+        let func_id = *self
+            .functions
+            .get(class_name)
             .ok_or_else(|| format!("Constructor not declared: {}", class_name))?;
 
         // 创建函数签名（与 declare 一致）
@@ -2986,9 +4223,13 @@ impl JitCompiler {
         let params: Vec<Value> = builder.block_params(entry_block).to_vec();
 
         // 导入 object_alloc 函数
-        let object_alloc_id = *self.functions.get("@_object_alloc")
+        let object_alloc_id = *self
+            .functions
+            .get("@_object_alloc")
             .ok_or("object_alloc not found")?;
-        let object_alloc_ref = self.module.declare_func_in_func(object_alloc_id, builder.func);
+        let object_alloc_ref = self
+            .module
+            .declare_func_in_func(object_alloc_id, builder.func);
 
         // 调用 object_alloc(size) 分配内存
         let size_val = builder.ins().iconst(types::I64, class_info.size as i64);
@@ -3012,7 +4253,8 @@ impl JitCompiler {
         builder.finalize();
 
         // 编译函数
-        self.module.define_function(func_id, &mut self.ctx)
+        self.module
+            .define_function(func_id, &mut self.ctx)
             .map_err(|e| format!("Define constructor error: {}", e))?;
         self.module.clear_context(&mut self.ctx);
 
@@ -3037,15 +4279,18 @@ impl JitCompiler {
                     }
                     // 返回类型
                     if let Some(ref ret_ty) = method.return_type {
-                        sig.returns.push(AbiParam::new(self.bolide_type_to_cranelift(ret_ty)));
+                        sig.returns
+                            .push(AbiParam::new(self.bolide_type_to_cranelift(ret_ty)));
                     }
 
-                    let func_id = self.module
+                    let func_id = self
+                        .module
                         .declare_function(&method_name, Linkage::Export, &sig)
                         .map_err(|e| format!("Declare method error: {}", e))?;
 
                     self.functions.insert(method_name.clone(), func_id);
-                    self.func_return_types.insert(method_name.clone(), method.return_type.clone());
+                    self.func_return_types
+                        .insert(method_name.clone(), method.return_type.clone());
 
                     // 存储方法参数（包含隐式 self）
                     let mut params_with_self = vec![Param {
@@ -3071,11 +4316,14 @@ impl JitCompiler {
                     // 创建带 self 参数的方法定义
                     let mut method_with_self = method.clone();
                     method_with_self.name = method_name;
-                    method_with_self.params.insert(0, Param {
-                        name: "self".to_string(),
-                        ty: BolideType::Custom(class_def.name.clone()),
-                        mode: ParamMode::Borrow,
-                    });
+                    method_with_self.params.insert(
+                        0,
+                        Param {
+                            name: "self".to_string(),
+                            ty: BolideType::Custom(class_def.name.clone()),
+                            mode: ParamMode::Borrow,
+                        },
+                    );
 
                     self.compile_function(&method_with_self)?;
                 }
@@ -3089,10 +4337,8 @@ impl JitCompiler {
         let lib_path = &eb.lib_path;
         for decl in &eb.declarations {
             if let bolide_parser::ExternDecl::Function(func) = decl {
-                self.extern_funcs.insert(
-                    func.name.clone(),
-                    (lib_path.clone(), func.clone())
-                );
+                self.extern_funcs
+                    .insert(func.name.clone(), (lib_path.clone(), func.clone()));
             }
         }
         Ok(())
@@ -3166,6 +4412,8 @@ struct CompileContext<'a, 'b> {
     weak_variables: HashSet<String>,
     /// 循环块栈：(continue 目标块, break 目标块)，用于编译 break/continue
     loop_stack: Vec<(Block, Block)>,
+    /// catch 落点栈：每个 try 块的 catch_block，用于编译 throw（同函数内直接跳转）
+    catch_stack: Vec<Block>,
 }
 
 impl<'a, 'b> CompileContext<'a, 'b> {
@@ -3223,6 +4471,7 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             borrowed_vars: HashMap::new(),
             weak_variables: HashSet::new(),
             loop_stack: Vec::new(),
+            catch_stack: Vec::new(),
         }
     }
 
@@ -3245,21 +4494,36 @@ impl<'a, 'b> CompileContext<'a, 'b> {
     fn normalize_bolide_type(&self, ty: &BolideType) -> BolideType {
         match ty {
             BolideType::Custom(name) => BolideType::Custom(self.normalize_type_name(name)),
-            BolideType::List(inner) => BolideType::List(Box::new(self.normalize_bolide_type(inner))),
+            BolideType::List(inner) => {
+                BolideType::List(Box::new(self.normalize_bolide_type(inner)))
+            }
             BolideType::Dict(k, v) => BolideType::Dict(
                 Box::new(self.normalize_bolide_type(k)),
                 Box::new(self.normalize_bolide_type(v)),
             ),
             BolideType::Tuple(types) => BolideType::Tuple(
-                types.iter().map(|t| self.normalize_bolide_type(t)).collect()
+                types
+                    .iter()
+                    .map(|t| self.normalize_bolide_type(t))
+                    .collect(),
             ),
             BolideType::FuncSig(params, ret) => BolideType::FuncSig(
-                params.iter().map(|t| self.normalize_bolide_type(t)).collect(),
-                ret.as_ref().map(|t| Box::new(self.normalize_bolide_type(t))),
+                params
+                    .iter()
+                    .map(|t| self.normalize_bolide_type(t))
+                    .collect(),
+                ret.as_ref()
+                    .map(|t| Box::new(self.normalize_bolide_type(t))),
             ),
-            BolideType::Weak(inner) => BolideType::Weak(Box::new(self.normalize_bolide_type(inner))),
-            BolideType::Unowned(inner) => BolideType::Unowned(Box::new(self.normalize_bolide_type(inner))),
-            BolideType::Channel(inner) => BolideType::Channel(Box::new(self.normalize_bolide_type(inner))),
+            BolideType::Weak(inner) => {
+                BolideType::Weak(Box::new(self.normalize_bolide_type(inner)))
+            }
+            BolideType::Unowned(inner) => {
+                BolideType::Unowned(Box::new(self.normalize_bolide_type(inner)))
+            }
+            BolideType::Channel(inner) => {
+                BolideType::Channel(Box::new(self.normalize_bolide_type(inner)))
+            }
             _ => ty.clone(),
         }
     }
@@ -3281,12 +4545,8 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                 }
                 None
             }
-            Expr::Member(base, _) => {
-                self.check_lifetime_source(base)
-            }
-            Expr::Index(base, _) => {
-                self.check_lifetime_source(base)
-            }
+            Expr::Member(base, _) => self.check_lifetime_source(base),
+            Expr::Index(base, _) => self.check_lifetime_source(base),
             _ => None,
         }
     }
@@ -3343,7 +4603,9 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         let current_depth = self.scope_depth;
 
         // 找出当前作用域声明的变量
-        let vars_in_scope: Vec<String> = self.var_scope_depth.iter()
+        let vars_in_scope: Vec<String> = self
+            .var_scope_depth
+            .iter()
             .filter(|(_, &depth)| depth == current_depth)
             .map(|(name, _)| name.clone())
             .collect();
@@ -3376,7 +4638,9 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             // await fetch_a() / await all { fetch_a(), ... }
             Expr::Call(callee, _) => {
                 if let Expr::Ident(func_name) = callee.as_ref() {
-                    return self.func_return_types.get(func_name)
+                    return self
+                        .func_return_types
+                        .get(func_name)
                         .cloned()
                         .flatten()
                         .unwrap_or(BolideType::Int);
@@ -3386,7 +4650,9 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             // let f: future = fetch_a(); await f
             Expr::Ident(var_name) => {
                 if let Some(func_name) = self.spawn_func_map.get(var_name) {
-                    return self.func_return_types.get(func_name)
+                    return self
+                        .func_return_types
+                        .get(func_name)
                         .cloned()
                         .flatten()
                         .unwrap_or(BolideType::Int);
@@ -3394,12 +4660,12 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                 BolideType::Int
             }
             // await spawn heavy(x)
-            Expr::Spawn(func_name, _) => {
-                self.func_return_types.get(func_name)
-                    .cloned()
-                    .flatten()
-                    .unwrap_or(BolideType::Int)
-            }
+            Expr::Spawn(func_name, _) => self
+                .func_return_types
+                .get(func_name)
+                .cloned()
+                .flatten()
+                .unwrap_or(BolideType::Int),
             _ => BolideType::Int,
         }
     }
@@ -3412,7 +4678,9 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         if let Some(&data_id) = self.global_data_ids.get(name) {
             let gv = self.module.declare_data_in_func(data_id, self.builder.func);
             let addr = self.builder.ins().global_value(self.ptr_type, gv);
-            let load_ty = self.global_var_types.get(name)
+            let load_ty = self
+                .global_var_types
+                .get(name)
                 .map(|t| self.bolide_type_to_cranelift(t))
                 .unwrap_or(self.ptr_type);
             return Ok(self.builder.ins().load(load_ty, MemFlags::new(), addr, 0));
@@ -3422,13 +4690,15 @@ impl<'a, 'b> CompileContext<'a, 'b> {
 
     /// 记录变量声明的作用域
     fn record_var_scope(&mut self, var_name: &str) {
-        self.var_scope_depth.insert(var_name.to_string(), self.scope_depth);
+        self.var_scope_depth
+            .insert(var_name.to_string(), self.scope_depth);
     }
 
     /// 记录借用关系
     fn record_borrow(&mut self, borrower: &str, source: &str) {
         let source_depth = self.var_scope_depth.get(source).copied().unwrap_or(0);
-        self.borrowed_vars.insert(borrower.to_string(), (source.to_string(), source_depth));
+        self.borrowed_vars
+            .insert(borrower.to_string(), (source.to_string(), source_depth));
     }
 
     /// from 借用逃逸检查：借用值不拥有对象，
@@ -3449,7 +4719,9 @@ impl<'a, 'b> CompileContext<'a, 'b> {
     /// from 借用来源检查：借用存活期间禁止对来源变量重新赋值
     /// （旧对象会被释放，借用方将悬空）
     fn check_borrow_source_assign(&self, var_name: &str) -> Result<(), String> {
-        if let Some((borrower, _)) = self.borrowed_vars.iter()
+        if let Some((borrower, _)) = self
+            .borrowed_vars
+            .iter()
             .find(|(_, (src, _))| src == var_name)
         {
             return Err(format!(
@@ -3527,18 +4799,20 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             // weak/unowned 类引用本身需要弱引用计数管理：
             // 创建时 weak+1 保住对象头，作用域结束时 weak-1，
             // 这样对象死亡后访问可被检测（trap）而不是 use-after-free
-            BolideType::Weak(inner) | BolideType::Unowned(inner) =>
-                matches!(inner.as_ref(), BolideType::Custom(_)),
-            _ => matches!(ty,
-                BolideType::Str |
-                BolideType::BigInt |
-                BolideType::Decimal |
-                BolideType::List(_) |
-                BolideType::Dict(_, _) |
-                BolideType::Dynamic |
-                BolideType::Custom(_) |
-                BolideType::Tuple(_)
-            )
+            BolideType::Weak(inner) | BolideType::Unowned(inner) => {
+                matches!(inner.as_ref(), BolideType::Custom(_))
+            }
+            _ => matches!(
+                ty,
+                BolideType::Str
+                    | BolideType::BigInt
+                    | BolideType::Decimal
+                    | BolideType::List(_)
+                    | BolideType::Dict(_, _)
+                    | BolideType::Dynamic
+                    | BolideType::Custom(_)
+                    | BolideType::Tuple(_)
+            ),
         }
     }
 
@@ -3563,7 +4837,9 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             // weak/unowned 释放的是弱引用计数（不触碰强引用）
             BolideType::Weak(inner) | BolideType::Unowned(inner)
                 if matches!(inner.as_ref(), BolideType::Custom(_)) =>
-                Some("@_object_weak_release"),
+            {
+                Some("@_object_weak_release")
+            }
             _ => None,
         }
     }
@@ -3581,7 +4857,9 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             // weak/unowned 克隆只增加弱引用计数（不增加强引用）
             BolideType::Weak(inner) | BolideType::Unowned(inner)
                 if matches!(inner.as_ref(), BolideType::Custom(_)) =>
-                Some("@_object_weak_clone"),
+            {
+                Some("@_object_weak_clone")
+            }
             _ => None,
         }
     }
@@ -3594,7 +4872,9 @@ impl<'a, 'b> CompileContext<'a, 'b> {
     /// 为所有 RC 变量生成 release 调用，可以排除指定变量
     fn emit_rc_cleanup_except(&mut self, except_var: Option<&str>) {
         // 收集需要释放的变量（避免借用冲突）
-        let vars_to_release: Vec<_> = self.rc_variables.iter()
+        let vars_to_release: Vec<_> = self
+            .rc_variables
+            .iter()
             .filter_map(|(name, ty)| {
                 // 跳过被排除的变量
                 if let Some(except) = except_var {
@@ -3619,7 +4899,8 @@ impl<'a, 'b> CompileContext<'a, 'b> {
     /// 释放所有全局 RC 变量（在 __main__ 返回前调用，避免退出时泄漏）
     fn emit_global_rc_cleanup(&mut self) {
         let ptr_type = self.ptr_type;
-        let mut to_release: Vec<(Value, BolideType, cranelift_codegen::ir::GlobalValue)> = Vec::new();
+        let mut to_release: Vec<(Value, BolideType, cranelift_codegen::ir::GlobalValue)> =
+            Vec::new();
 
         for (name, ty) in self.global_var_types.iter() {
             if Self::is_rc_type(ty) {
@@ -3640,7 +4921,9 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             let release_block = self.builder.create_block();
             let skip_block = self.builder.create_block();
 
-            self.builder.ins().brif(is_null, skip_block, &[], release_block, &[]);
+            self.builder
+                .ins()
+                .brif(is_null, skip_block, &[], release_block, &[]);
 
             self.builder.switch_to_block(release_block);
             self.builder.seal_block(release_block);
@@ -3673,7 +4956,9 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             }
         } else if let BolideType::Custom(ref class_name) = ty {
             // 自定义类型（Class）
-            let has_rc_fields = self.classes.get(class_name)
+            let has_rc_fields = self
+                .classes
+                .get(class_name)
                 .map(|ci| ci.fields.iter().any(|f| Self::is_rc_type(&f.ty)))
                 .unwrap_or(false);
 
@@ -3689,7 +4974,9 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                 let release_block = self.builder.create_block();
                 let done_block = self.builder.create_block();
 
-                self.builder.ins().brif(is_null, done_block, &[], check_block, &[]);
+                self.builder
+                    .ins()
+                    .brif(is_null, done_block, &[], check_block, &[]);
 
                 // check_block: 仅当 strong_count == 1（即将销毁）时清理字段
                 self.builder.switch_to_block(check_block);
@@ -3699,7 +4986,9 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                     let count = self.builder.inst_results(call)[0];
                     let one = self.builder.ins().iconst(types::I64, 1);
                     let is_last = self.builder.ins().icmp(IntCC::Equal, count, one);
-                    self.builder.ins().brif(is_last, fields_block, &[], release_block, &[]);
+                    self.builder
+                        .ins()
+                        .brif(is_last, fields_block, &[], release_block, &[]);
                 } else {
                     self.builder.ins().jump(release_block, &[]);
                 }
@@ -3743,8 +5032,12 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                 if Self::is_rc_type(&field.ty) {
                     if let Some(func_name) = Self::get_release_func_name(&field.ty) {
                         if let Some(&func_ref) = self.func_refs.get(func_name) {
-                            let field_ptr = self.builder.ins().iadd_imm(obj_ptr, field.offset as i64);
-                            let field_val = self.builder.ins().load(types::I64, MemFlags::new(), field_ptr, 0);
+                            let field_ptr =
+                                self.builder.ins().iadd_imm(obj_ptr, field.offset as i64);
+                            let field_val =
+                                self.builder
+                                    .ins()
+                                    .load(types::I64, MemFlags::new(), field_ptr, 0);
                             self.builder.ins().call(func_ref, &[field_val]);
                         }
                     }
@@ -3839,15 +5132,17 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                 Ok(false)
             }
             Statement::Break => {
-                let (_, break_block) = *self.loop_stack.last()
-                    .ok_or("'break' outside of a loop")?;
+                let (_, break_block) =
+                    *self.loop_stack.last().ok_or("'break' outside of a loop")?;
                 // 跳出前释放当前语句产生的临时 RC 值
                 self.release_temp_rc_values();
                 self.builder.ins().jump(break_block, &[]);
                 Ok(true)
             }
             Statement::Continue => {
-                let (continue_block, _) = *self.loop_stack.last()
+                let (continue_block, _) = *self
+                    .loop_stack
+                    .last()
                     .ok_or("'continue' outside of a loop")?;
                 self.release_temp_rc_values();
                 self.builder.ins().jump(continue_block, &[]);
@@ -3864,6 +5159,93 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             Statement::AsyncSelect(select_stmt) => {
                 self.compile_async_select(select_stmt)?;
                 Ok(false)
+            }
+            Statement::Throw(expr) => {
+                // 计算异常值，存入 thread-local，然后直接跳转到最近的 catch 落点。
+                // 无 setjmp/longjmp：异常值经内存传递，控制流是普通分支，SSA 安全。
+                let val = self.compile_expr(expr)?;
+                let set_fn = *self.func_refs.get("@_exception_set")
+                    .ok_or("exception_set not found")?;
+                self.builder.ins().call(set_fn, &[val]);
+
+                if let Some(&catch_block) = self.catch_stack.last() {
+                    // 同函数内有 try：直接跳到 catch 落点
+                    self.builder.ins().jump(catch_block, &[]);
+                } else {
+                    // 无 catch 落点：未捕获，调用 runtime 打印并退出
+                    let uncaught_fn = *self.func_refs.get("@_throw_uncaught")
+                        .ok_or("throw_uncaught not found")?;
+                    self.builder.ins().call(uncaught_fn, &[val]);
+                    self.builder.ins().trap(TrapCode::unwrap_user(1));
+                }
+                Ok(true)
+            }
+            Statement::Try(try_stmt) => {
+                let catch_clauses = try_stmt.catch_clauses.clone();
+                let try_body = try_stmt.try_body.clone();
+                let ptr_type = self.ptr_type;
+
+                let catch_block = self.builder.create_block();
+                let after_try = self.builder.create_block();
+
+                // 1. Try body —— 期间将 catch_block 压栈，使内部 throw 跳到这里
+                self.catch_stack.push(catch_block);
+                let mut try_diverted = false;
+                for s in &try_body {
+                    if try_diverted { break; }
+                    try_diverted = self.compile_stmt(s)?;
+                }
+                self.catch_stack.pop();
+                if !try_diverted {
+                    self.builder.ins().jump(after_try, &[]);
+                }
+
+                // 2. Catch block
+                self.builder.switch_to_block(catch_block);
+                self.builder.seal_block(catch_block);
+
+                let ex_get_fn = *self.func_refs.get("@_exception_get")
+                    .ok_or("exception_get not found")?;
+                let ex_call = self.builder.ins().call(ex_get_fn, &[]);
+                let ex_ptr = self.builder.inst_results(ex_call)[0];
+
+                let mut catch_diverted = false;
+                if let Some(first_catch) = catch_clauses.first() {
+                    let catch_var = self.declare_variable(&first_catch.var, ptr_type);
+                    self.builder.def_var(catch_var, ex_ptr);
+                    self.var_types.insert(first_catch.var.clone(), BolideType::Ptr);
+
+                    for s in &first_catch.body {
+                        if catch_diverted { break; }
+                        catch_diverted = self.compile_stmt(s)?;
+                    }
+                } else {
+                    // 无 catch 子句：重新抛出（跳到外层 catch 或未捕获）
+                    if let Some(&outer_catch) = self.catch_stack.last() {
+                        let set_fn = *self.func_refs.get("@_exception_set")
+                            .ok_or("exception_set not found")?;
+                        self.builder.ins().call(set_fn, &[ex_ptr]);
+                        self.builder.ins().jump(outer_catch, &[]);
+                    } else {
+                        let uncaught_fn = *self.func_refs.get("@_throw_uncaught")
+                            .ok_or("throw_uncaught not found")?;
+                        self.builder.ins().call(uncaught_fn, &[ex_ptr]);
+                        self.builder.ins().trap(TrapCode::unwrap_user(1));
+                    }
+                    catch_diverted = true;
+                }
+                if !catch_diverted {
+                    self.builder.ins().jump(after_try, &[]);
+                }
+
+                // 3. After try
+                let both_diverged = try_diverted && catch_diverted;
+                self.builder.switch_to_block(after_try);
+                self.builder.seal_block(after_try);
+                if both_diverged {
+                    self.builder.ins().trap(TrapCode::unwrap_user(1));
+                }
+                Ok(both_diverged)
             }
             Statement::FuncDef(_) => Ok(false),
             Statement::ClassDef(_) => Ok(false),
@@ -3892,7 +5274,12 @@ impl<'a, 'b> CompileContext<'a, 'b> {
     }
 
     /// 编译索引赋值 (list[i] = value)
-    fn compile_index_assign(&mut self, base: &Expr, index: &Expr, value: &Expr) -> Result<(), String> {
+    fn compile_index_assign(
+        &mut self,
+        base: &Expr,
+        index: &Expr,
+        value: &Expr,
+    ) -> Result<(), String> {
         // from 借用检查：借用值禁止存入容器
         self.check_borrow_escape(value, "index assignment")?;
 
@@ -3904,31 +5291,53 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         match base_type {
             BolideType::List(ref elem_ty) => {
                 // Int/Float/Bool 内联：单次 store，无运行时调用
-                if matches!(elem_ty.as_ref(), BolideType::Int | BolideType::Float | BolideType::Bool) {
-                    return self.emit_list_set_inline(base_val, index_val, value_val, elem_ty.as_ref());
+                if matches!(
+                    elem_ty.as_ref(),
+                    BolideType::Int | BolideType::Float | BolideType::Bool
+                ) {
+                    return self.emit_list_set_inline(
+                        base_val,
+                        index_val,
+                        value_val,
+                        elem_ty.as_ref(),
+                    );
                 }
-                let list_set = *self.func_refs.get("@_list_set")
+                let list_set = *self
+                    .func_refs
+                    .get("@_list_set")
                     .ok_or("list_set not found")?;
-                self.builder.ins().call(list_set, &[base_val, index_val, value_val]);
+                self.builder
+                    .ins()
+                    .call(list_set, &[base_val, index_val, value_val]);
                 Ok(())
             }
             BolideType::Dict(_, _) => {
-                let dict_set = *self.func_refs.get("@_dict_set")
+                let dict_set = *self
+                    .func_refs
+                    .get("@_dict_set")
                     .ok_or("dict_set not found")?;
-                self.builder.ins().call(dict_set, &[base_val, index_val, value_val]);
+                self.builder
+                    .ins()
+                    .call(dict_set, &[base_val, index_val, value_val]);
                 Ok(())
             }
 
             BolideType::Tuple(_) => {
-                let tuple_set = *self.func_refs.get("@_tuple_set")
+                let tuple_set = *self
+                    .func_refs
+                    .get("@_tuple_set")
                     .ok_or("tuple_set not found")?;
-                self.builder.ins().call(tuple_set, &[base_val, index_val, value_val]);
+                self.builder
+                    .ins()
+                    .call(tuple_set, &[base_val, index_val, value_val]);
                 Ok(())
             }
-            _ => Err(format!("Index assignment not supported for type: {:?}", base_type)),
+            _ => Err(format!(
+                "Index assignment not supported for type: {:?}",
+                base_type
+            )),
         }
     }
-
 
     /// 编译变量赋值
     fn compile_var_assign(&mut self, var_name: &str, value: &Expr) -> Result<(), String> {
@@ -4007,14 +5416,14 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         if let Some(&data_id) = self.global_data_ids.get(var_name) {
             // 获取全局变量的类型
             let global_ty = self.global_var_types.get(var_name).cloned();
-            
+
             // 获取全局变量的地址
             let gv = self.module.declare_data_in_func(data_id, self.builder.func);
             let addr = self.builder.ins().global_value(self.ptr_type, gv);
-            
+
             // 先编译新值表达式(这样可以正确读取旧值, 例如 expr = expr + "1")
             let val = self.compile_expr(value)?;
-            
+
             // 如果是 RC 类型，需要处理引用计数
             if let Some(ref ty) = global_ty {
                 if Self::is_rc_type(ty) {
@@ -4024,7 +5433,10 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                         // 值是临时的，移除临时标记，全局变量接管所有权
                         self.remove_temp_rc_value(val);
                         // 释放旧值（新值已经计算完成）
-                        let old_val = self.builder.ins().load(self.ptr_type, MemFlags::new(), addr, 0);
+                        let old_val =
+                            self.builder
+                                .ins()
+                                .load(self.ptr_type, MemFlags::new(), addr, 0);
                         self.emit_release(old_val, ty);
                         // 存储新值
                         self.builder.ins().store(MemFlags::new(), val, addr, 0);
@@ -4036,10 +5448,17 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                                 let call = self.builder.ins().call(func_ref, &[val]);
                                 let cloned_val = self.builder.inst_results(call)[0];
                                 // 释放旧值
-                                let old_val = self.builder.ins().load(self.ptr_type, MemFlags::new(), addr, 0);
+                                let old_val = self.builder.ins().load(
+                                    self.ptr_type,
+                                    MemFlags::new(),
+                                    addr,
+                                    0,
+                                );
                                 self.emit_release(old_val, ty);
                                 // 存储新值
-                                self.builder.ins().store(MemFlags::new(), cloned_val, addr, 0);
+                                self.builder
+                                    .ins()
+                                    .store(MemFlags::new(), cloned_val, addr, 0);
                             } else {
                                 self.builder.ins().store(MemFlags::new(), val, addr, 0);
                             }
@@ -4069,7 +5488,12 @@ impl<'a, 'b> CompileContext<'a, 'b> {
 
         Err(format!("Undefined variable: {}", var_name))
     }
-    fn compile_member_assign(&mut self, base: &Expr, member: &str, value: &Expr) -> Result<(), String> {
+    fn compile_member_assign(
+        &mut self,
+        base: &Expr,
+        member: &str,
+        value: &Expr,
+    ) -> Result<(), String> {
         // from 借用检查：借用值禁止存入对象字段
         self.check_borrow_escape(value, "field assignment")?;
 
@@ -4081,12 +5505,16 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         };
 
         // 获取类信息
-        let class_info = self.classes.get(&class_name)
+        let class_info = self
+            .classes
+            .get(&class_name)
             .ok_or_else(|| format!("Class not found: {}", class_name))?
             .clone();
 
         // 查找字段
-        let field = class_info.fields.iter()
+        let field = class_info
+            .fields
+            .iter()
             .find(|f| f.name == member)
             .ok_or_else(|| format!("Field '{}' not found in class '{}'", member, class_name))?;
 
@@ -4104,7 +5532,10 @@ impl<'a, 'b> CompileContext<'a, 'b> {
 
         // 如果字段是 RC 类型，先释放旧值再写入新值
         if Self::is_rc_type(&field_ty) {
-            let old_val = self.builder.ins().load(self.ptr_type, MemFlags::new(), field_ptr, 0);
+            let old_val = self
+                .builder
+                .ins()
+                .load(self.ptr_type, MemFlags::new(), field_ptr, 0);
             self.emit_release(old_val, &field_ty);
         }
 
@@ -4122,7 +5553,9 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                         let call = self.builder.ins().call(func_ref, &[val]);
                         // val was replaced by cloned; use cloned result for store
                         let cloned = self.builder.inst_results(call)[0];
-                        self.builder.ins().store(MemFlags::new(), cloned, field_ptr, 0);
+                        self.builder
+                            .ins()
+                            .store(MemFlags::new(), cloned, field_ptr, 0);
                         return Ok(());
                     }
                 }
@@ -4153,13 +5586,15 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         if let Some(ref value) = decl.value {
             match value {
                 Expr::Spawn(func_name, _) => {
-                    self.spawn_func_map.insert(decl.name.clone(), func_name.clone());
+                    self.spawn_func_map
+                        .insert(decl.name.clone(), func_name.clone());
                 }
                 Expr::Call(func_expr, _) => {
                     // 检查是否是异步函数调用
                     if let Expr::Ident(func_name) = func_expr.as_ref() {
                         if self.async_funcs.contains(func_name) {
-                            self.spawn_func_map.insert(decl.name.clone(), func_name.clone());
+                            self.spawn_func_map
+                                .insert(decl.name.clone(), func_name.clone());
                         }
                     }
                 }
@@ -4179,7 +5614,8 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         }
 
         // 记录局部变量的 Bolide 类型（需要规范化类型名称）
-        self.var_types.insert(decl.name.clone(), self.normalize_bolide_type(&bolide_ty));
+        self.var_types
+            .insert(decl.name.clone(), self.normalize_bolide_type(&bolide_ty));
 
         // 记录变量的作用域深度
         self.record_var_scope(&decl.name);
@@ -4202,7 +5638,9 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                 let release_block = self.builder.create_block();
                 let continue_block = self.builder.create_block();
 
-                self.builder.ins().brif(is_null, continue_block, &[], release_block, &[]);
+                self.builder
+                    .ins()
+                    .brif(is_null, continue_block, &[], release_block, &[]);
 
                 // release_block: 释放旧值
                 self.builder.switch_to_block(release_block);
@@ -4224,7 +5662,9 @@ impl<'a, 'b> CompileContext<'a, 'b> {
 
         if let Some(ref value) = decl.value {
             // 空列表字面量需用类型标注确定元素类型
-            let val = if matches!(value, Expr::List(items) if items.is_empty()) && matches!(&bolide_ty, BolideType::List(_)) {
+            let val = if matches!(value, Expr::List(items) if items.is_empty())
+                && matches!(&bolide_ty, BolideType::List(_))
+            {
                 self.compile_list_with_hint(&[], Some(&bolide_ty))?
             } else {
                 self.compile_expr(value)?
@@ -4287,7 +5727,9 @@ impl<'a, 'b> CompileContext<'a, 'b> {
 
         // 跟踪 RC 变量，用于作用域结束时释放（避免重复添加）
         // 但如果值来自生命周期函数调用，则跳过 RC 跟踪（返回的是借用而非拥有的值）
-        let is_from_lifetime_func = decl.value.as_ref()
+        let is_from_lifetime_func = decl
+            .value
+            .as_ref()
             .map(|v| self.is_lifetime_func_call(v))
             .unwrap_or(false);
 
@@ -4326,7 +5768,7 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             // 先编译返回表达式
             let val = self.compile_expr(e)?;
             let val_ty = self.infer_expr_type(e);
-            
+
             // 最终使用的返回值（可能会因为 retain 而改变指针）
             let mut final_val = val;
 
@@ -4355,35 +5797,40 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             if !self.uses_lifetime_mode() {
                 // 如果是 RC 类型
                 if Self::is_rc_type(&val_ty) {
-                     let is_temp = self.temp_rc_values.iter().any(|(v, _)| *v == val);
-                     if is_temp {
-                         // 如果返回的是临时 RC 值，从临时列表中移除（调用者将接管所有权）
-                         self.remove_temp_rc_value(val);
-                     } else {
-                         // 如果不是临时值
-                         if let Some(ref name) = return_var_name {
-                             // 借用（borrow/ref）参数归调用方所有，返回时必须 clone 一份
-                             // 交给调用方独立持有（否则与调用方释放路径产生悬空指针）
-                             let is_caller_owned_param = self.func_params
-                                 .get(&self.current_func_name)
-                                 .map(|ps| ps.iter().any(|p| p.name == *name
-                                     && matches!(p.mode, ParamMode::Borrow | ParamMode::Ref)))
-                                 .unwrap_or(false);
-                             if is_caller_owned_param {
-                                 if let Some(new_val) = self.emit_retain(val, &val_ty) {
-                                     final_val = new_val;
-                                 }
-                             }
-                             // 本地变量 (Ident)：cleanup_except 会跳过它，不需要 retain
-                         } else {
-                             // 如果是其他表达式 (如 Index, Member)，是从某个容器借用的
-                             // cleanup 会释放容器，导致该值也被释放
-                             // 所以这里必须 retain (clone) 一份，使 count +1
-                             if let Some(new_val) = self.emit_retain(val, &val_ty) {
-                                 final_val = new_val;
-                             }
-                         }
-                     }
+                    let is_temp = self.temp_rc_values.iter().any(|(v, _)| *v == val);
+                    if is_temp {
+                        // 如果返回的是临时 RC 值，从临时列表中移除（调用者将接管所有权）
+                        self.remove_temp_rc_value(val);
+                    } else {
+                        // 如果不是临时值
+                        if let Some(ref name) = return_var_name {
+                            // 借用（borrow/ref）参数归调用方所有，返回时必须 clone 一份
+                            // 交给调用方独立持有（否则与调用方释放路径产生悬空指针）
+                            let is_caller_owned_param = self
+                                .func_params
+                                .get(&self.current_func_name)
+                                .map(|ps| {
+                                    ps.iter().any(|p| {
+                                        p.name == *name
+                                            && matches!(p.mode, ParamMode::Borrow | ParamMode::Ref)
+                                    })
+                                })
+                                .unwrap_or(false);
+                            if is_caller_owned_param {
+                                if let Some(new_val) = self.emit_retain(val, &val_ty) {
+                                    final_val = new_val;
+                                }
+                            }
+                            // 本地变量 (Ident)：cleanup_except 会跳过它，不需要 retain
+                        } else {
+                            // 如果是其他表达式 (如 Index, Member)，是从某个容器借用的
+                            // cleanup 会释放容器，导致该值也被释放
+                            // 所以这里必须 retain (clone) 一份，使 count +1
+                            if let Some(new_val) = self.emit_retain(val, &val_ty) {
+                                final_val = new_val;
+                            }
+                        }
+                    }
                 }
 
                 // 释放所有临时 RC 值（那些没有被返回的）
@@ -4426,12 +5873,12 @@ impl<'a, 'b> CompileContext<'a, 'b> {
     /// 统一的 retain 辅助函数
     fn emit_retain(&mut self, val: Value, ty: &BolideType) -> Option<Value> {
         if let Some(clone_func) = Self::get_clone_func_name(ty) {
-             if let Some(&func_ref) = self.func_refs.get(clone_func) {
-                 let call = self.builder.ins().call(func_ref, &[val]);
-                 Some(self.builder.inst_results(call)[0])
-             } else {
-                 None
-             }
+            if let Some(&func_ref) = self.func_refs.get(clone_func) {
+                let call = self.builder.ins().call(func_ref, &[val]);
+                Some(self.builder.inst_results(call)[0])
+            } else {
+                None
+            }
         } else {
             None
         }
@@ -4441,7 +5888,9 @@ impl<'a, 'b> CompileContext<'a, 'b> {
     fn write_back_ref_params(&mut self) {
         for (_, var, ptr_addr) in &self.ref_params.clone() {
             let current_val = self.builder.use_var(*var);
-            self.builder.ins().store(MemFlags::new(), current_val, *ptr_addr, 0);
+            self.builder
+                .ins()
+                .store(MemFlags::new(), current_val, *ptr_addr, 0);
         }
     }
 
@@ -4456,17 +5905,21 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         let else_block = self.builder.create_block();
         let merge_block = self.builder.create_block();
 
-        self.builder.ins().brif(cond, then_block, &[], else_block, &[]);
+        self.builder
+            .ins()
+            .brif(cond, then_block, &[], else_block, &[]);
 
         self.builder.switch_to_block(then_block);
         self.builder.seal_block(then_block);
-        self.enter_scope();  // 进入 then 作用域
+        self.enter_scope(); // 进入 then 作用域
         let mut then_terminated = false;
         for stmt in &if_stmt.then_body {
-            if then_terminated { break; }
+            if then_terminated {
+                break;
+            }
             then_terminated = self.compile_stmt(stmt)?;
         }
-        self.leave_scope()?;  // 离开 then 作用域
+        self.leave_scope()?; // 离开 then 作用域
         if !then_terminated {
             self.builder.ins().jump(merge_block, &[]);
         }
@@ -4477,13 +5930,15 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         let else_terminated = if !if_stmt.elif_branches.is_empty() {
             self.compile_elif_chain(&if_stmt.elif_branches, &if_stmt.else_body, merge_block)?
         } else if let Some(ref else_body) = if_stmt.else_body {
-            self.enter_scope();  // 进入 else 作用域
+            self.enter_scope(); // 进入 else 作用域
             let mut terminated = false;
             for stmt in else_body {
-                if terminated { break; }
+                if terminated {
+                    break;
+                }
                 terminated = self.compile_stmt(stmt)?;
             }
-            self.leave_scope()?;  // 离开 else 作用域
+            self.leave_scope()?; // 离开 else 作用域
             if !terminated {
                 self.builder.ins().jump(merge_block, &[]);
             }
@@ -4509,7 +5964,9 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             if let Some(ref body) = else_body {
                 let mut terminated = false;
                 for stmt in body {
-                    if terminated { break; }
+                    if terminated {
+                        break;
+                    }
                     terminated = self.compile_stmt(stmt)?;
                 }
                 if !terminated {
@@ -4528,13 +5985,17 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         let then_block = self.builder.create_block();
         let else_block = self.builder.create_block();
 
-        self.builder.ins().brif(cond, then_block, &[], else_block, &[]);
+        self.builder
+            .ins()
+            .brif(cond, then_block, &[], else_block, &[]);
 
         self.builder.switch_to_block(then_block);
         self.builder.seal_block(then_block);
         let mut then_terminated = false;
         for stmt in then_body {
-            if then_terminated { break; }
+            if then_terminated {
+                break;
+            }
             then_terminated = self.compile_stmt(stmt)?;
         }
         if !then_terminated {
@@ -4577,21 +6038,25 @@ impl<'a, 'b> CompileContext<'a, 'b> {
 
         self.builder.switch_to_block(header_block);
         let cond = self.compile_expr(&while_stmt.condition)?;
-        self.builder.ins().brif(cond, body_block, &[], exit_block, &[]);
+        self.builder
+            .ins()
+            .brif(cond, body_block, &[], exit_block, &[]);
 
         // 第二遍：正常编译循环体
         self.builder.switch_to_block(body_block);
         self.builder.seal_block(body_block);
-        self.enter_scope();  // 进入循环体作用域
-        // while: continue → 重新检查条件（header）；break → exit
+        self.enter_scope(); // 进入循环体作用域
+                            // while: continue → 重新检查条件（header）；break → exit
         self.loop_stack.push((header_block, exit_block));
         let mut terminated = false;
         for stmt in &while_stmt.body {
-            if terminated { break; }
+            if terminated {
+                break;
+            }
             terminated = self.compile_stmt(stmt)?;
         }
         self.loop_stack.pop();
-        self.leave_scope()?;  // 离开循环体作用域
+        self.leave_scope()?; // 离开循环体作用域
         if !terminated {
             self.builder.ins().jump(header_block, &[]);
         }
@@ -4610,7 +6075,9 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                 let is_null = self.builder.ins().icmp(IntCC::Equal, val, null_val);
                 let release_block = self.builder.create_block();
                 let skip_block = self.builder.create_block();
-                self.builder.ins().brif(is_null, skip_block, &[], release_block, &[]);
+                self.builder
+                    .ins()
+                    .brif(is_null, skip_block, &[], release_block, &[]);
                 self.builder.switch_to_block(release_block);
                 self.builder.seal_block(release_block);
                 self.emit_release(val, var_ty);
@@ -4632,7 +6099,7 @@ impl<'a, 'b> CompileContext<'a, 'b> {
     fn compile_for(&mut self, for_stmt: &bolide_parser::ForStmt) -> Result<(), String> {
         let vars = &for_stmt.vars;
         if vars.is_empty() {
-             return Err("For loop must have at least one variable".to_string());
+            return Err("For loop must have at least one variable".to_string());
         }
 
         // 检查是否是 range(n) 调用
@@ -4646,15 +6113,14 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                 }
             }
         }
-        
+
         // 检查是否是字典迭代
         if let BolideType::Dict(_, _) = self.infer_expr_type(&for_stmt.iter) {
-             return self.compile_for_dict(vars, &for_stmt.iter, &for_stmt.body);
+            return self.compile_for_dict(vars, &for_stmt.iter, &for_stmt.body);
         }
 
         // 否则当作列表迭代（支持解构）
         self.compile_for_list(vars, &for_stmt.iter, &for_stmt.body)
-
     }
 
     /// 编译 for i in range(...) { ... }
@@ -4662,7 +6128,12 @@ impl<'a, 'b> CompileContext<'a, 'b> {
     /// - range(end): 0 到 end-1
     /// - range(start, end): start 到 end-1
     /// - range(start, end, step): start 到 end-1，步长为 step
-    fn compile_for_range(&mut self, var_name: &str, args: &[Expr], body: &[Statement]) -> Result<(), String> {
+    fn compile_for_range(
+        &mut self,
+        var_name: &str,
+        args: &[Expr],
+        body: &[Statement],
+    ) -> Result<(), String> {
         // 解析 range 参数
         let (start_val, end_val, step_val, is_negative_step) = match args.len() {
             1 => {
@@ -4683,7 +6154,11 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                 let step = self.compile_expr(&args[2])?;
                 // 检查是否可能是负步长 (编译时无法确定，运行时处理)
                 // 对于常量步长，可以优化
-                let is_neg = if let Expr::Int(n) = &args[2] { *n < 0 } else { false };
+                let is_neg = if let Expr::Int(n) = &args[2] {
+                    *n < 0
+                } else {
+                    false
+                };
                 (start, end, step, is_neg)
             }
             _ => return Err("range() expects 1, 2, or 3 arguments".to_string()),
@@ -4724,12 +6199,18 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         // 根据步长方向选择比较条件
         let cond = if is_negative_step {
             // 负步长: i > end
-            self.builder.ins().icmp(IntCC::SignedGreaterThan, current_val, end_val)
+            self.builder
+                .ins()
+                .icmp(IntCC::SignedGreaterThan, current_val, end_val)
         } else {
             // 正步长: i < end
-            self.builder.ins().icmp(IntCC::SignedLessThan, current_val, end_val)
+            self.builder
+                .ins()
+                .icmp(IntCC::SignedLessThan, current_val, end_val)
         };
-        self.builder.ins().brif(cond, body_block, &[], exit_block, &[]);
+        self.builder
+            .ins()
+            .brif(cond, body_block, &[], exit_block, &[]);
 
         // 循环体
         self.builder.switch_to_block(body_block);
@@ -4738,7 +6219,9 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         self.loop_stack.push((latch_block, exit_block));
         let mut terminated = false;
         for stmt in body {
-            if terminated { break; }
+            if terminated {
+                break;
+            }
             terminated = self.compile_stmt(stmt)?;
         }
         self.loop_stack.pop();
@@ -4766,14 +6249,16 @@ impl<'a, 'b> CompileContext<'a, 'b> {
     /// 编译 for item in list { ... }
     /// 编译列表迭代逻辑 (通用)
     fn compile_list_iteration_loop(
-        &mut self, 
-        vars: &[String], 
-        list_ptr: Value, 
-        elem_type: BolideType, 
-        body: &[Statement]
+        &mut self,
+        vars: &[String],
+        list_ptr: Value,
+        elem_type: BolideType,
+        body: &[Statement],
     ) -> Result<(), String> {
         // 获取列表长度: list_len(list_ptr)
-        let list_len_ref = *self.func_refs.get("@_list_len")
+        let list_len_ref = *self
+            .func_refs
+            .get("@_list_len")
             .ok_or("list_len not found")?;
         let len_call = self.builder.ins().call(list_len_ref, &[list_ptr]);
         let list_length = self.builder.inst_results(len_call)[0];
@@ -4790,16 +6275,17 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         // 创建循环变量 (如果是单个变量)
         let loop_var = if vars.len() == 1 {
             let v = self.declare_variable(&vars[0], types::I64); // 注意: declare_variable 需要具体类型吗? 这里的declare 是JIT internal mapping.
-            // Wait: declare_variable in jit.rs assigns Slot.
-            // Previous code:
-            // let loop_var = self.declare_variable(var_name, types::I64); -- TYPE I64?
-            // Element can be Ptr or I64.
-            // If elem_type is Ptr, we should declare valid Cranelift type.
-            // Step 630 line 3414: types::I64. (Maybe everything is I64/Ptr=I64 in current impl).
-            // I'll stick to I64.
+                                                                 // Wait: declare_variable in jit.rs assigns Slot.
+                                                                 // Previous code:
+                                                                 // let loop_var = self.declare_variable(var_name, types::I64); -- TYPE I64?
+                                                                 // Element can be Ptr or I64.
+                                                                 // If elem_type is Ptr, we should declare valid Cranelift type.
+                                                                 // Step 630 line 3414: types::I64. (Maybe everything is I64/Ptr=I64 in current impl).
+                                                                 // I'll stick to I64.
             self.builder.def_var(v, zero);
             // 注册类型
-            self.var_types.insert(vars[0].to_string(), elem_type.clone());
+            self.var_types
+                .insert(vars[0].to_string(), elem_type.clone());
             Some(v)
         } else {
             None // Destructuring handled inside body
@@ -4831,49 +6317,74 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         // 循环头: 检查条件 (idx < length)
         self.builder.switch_to_block(header_block);
         let current_idx = self.builder.use_var(idx_var);
-        let cond = self.builder.ins().icmp(IntCC::SignedLessThan, current_idx, list_length);
-        self.builder.ins().brif(cond, body_block, &[], exit_block, &[]);
+        let cond = self
+            .builder
+            .ins()
+            .icmp(IntCC::SignedLessThan, current_idx, list_length);
+        self.builder
+            .ins()
+            .brif(cond, body_block, &[], exit_block, &[]);
 
         // 循环体
         self.builder.switch_to_block(body_block);
         self.builder.seal_block(body_block);
 
         // 获取当前元素: list_get(list_ptr, idx)
-        let list_get_ref = *self.func_refs.get("@_list_get")
+        let list_get_ref = *self
+            .func_refs
+            .get("@_list_get")
             .ok_or("list_get not found")?;
         let idx_val = self.builder.use_var(idx_var);
         let get_call = self.builder.ins().call(list_get_ref, &[list_ptr, idx_val]);
         let elem_val = self.builder.inst_results(get_call)[0];
-        
+
         if vars.len() == 1 {
-             if let Some(v) = loop_var {
-                 self.builder.def_var(v, elem_val);
-             }
+            if let Some(v) = loop_var {
+                self.builder.def_var(v, elem_val);
+            }
         } else {
             // 解构 (Destructuring)
             match elem_type {
-                BolideType::List(inner_type) => { // List unpacking
-                    let list_get_ref = *self.func_refs.get("@_list_get").ok_or("list_get not found")?;
+                BolideType::List(inner_type) => {
+                    // List unpacking
+                    let list_get_ref = *self
+                        .func_refs
+                        .get("@_list_get")
+                        .ok_or("list_get not found")?;
                     for (i, var_name) in vars.iter().enumerate() {
                         let idx_const = self.builder.ins().iconst(types::I64, i as i64);
-                        let call = self.builder.ins().call(list_get_ref, &[elem_val, idx_const]);
+                        let call = self
+                            .builder
+                            .ins()
+                            .call(list_get_ref, &[elem_val, idx_const]);
                         let val = self.builder.inst_results(call)[0];
                         self.define_variable(var_name, val, *inner_type.clone())?;
                     }
                 }
-                BolideType::Tuple(inner_types) => { // Tuple unpacking
-                    let tuple_get_ref = *self.func_refs.get("@_tuple_get").ok_or("tuple_get not found")?;
+                BolideType::Tuple(inner_types) => {
+                    // Tuple unpacking
+                    let tuple_get_ref = *self
+                        .func_refs
+                        .get("@_tuple_get")
+                        .ok_or("tuple_get not found")?;
                     // Ensure vars count matches tuple size? or min?
                     for (i, var_name) in vars.iter().enumerate() {
-                         let idx_const = self.builder.ins().iconst(types::I64, i as i64);
-                         let call = self.builder.ins().call(tuple_get_ref, &[elem_val, idx_const]);
-                         let val = self.builder.inst_results(call)[0];
-                         
-                         let ty = if i < inner_types.len() { inner_types[i].clone() } else { BolideType::Int }; // Fallback
-                         self.define_variable(var_name, val, ty)?;
+                        let idx_const = self.builder.ins().iconst(types::I64, i as i64);
+                        let call = self
+                            .builder
+                            .ins()
+                            .call(tuple_get_ref, &[elem_val, idx_const]);
+                        let val = self.builder.inst_results(call)[0];
+
+                        let ty = if i < inner_types.len() {
+                            inner_types[i].clone()
+                        } else {
+                            BolideType::Int
+                        }; // Fallback
+                        self.define_variable(var_name, val, ty)?;
                     }
                 }
-                _ => return Err(format!("Cannot unpack type {:?} in for loop", elem_type))
+                _ => return Err(format!("Cannot unpack type {:?} in for loop", elem_type)),
             }
         }
 
@@ -4881,7 +6392,9 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         self.loop_stack.push((latch_block, exit_block));
         let mut terminated = false;
         for stmt in body {
-            if terminated { break; }
+            if terminated {
+                break;
+            }
             terminated = self.compile_stmt(stmt)?;
         }
         self.loop_stack.pop();
@@ -4907,7 +6420,12 @@ impl<'a, 'b> CompileContext<'a, 'b> {
     }
 
     /// 编译 for item in list { ... }
-    fn compile_for_list(&mut self, vars: &[String], iter_expr: &Expr, body: &[Statement]) -> Result<(), String> {
+    fn compile_for_list(
+        &mut self,
+        vars: &[String],
+        iter_expr: &Expr,
+        body: &[Statement],
+    ) -> Result<(), String> {
         let list_ptr = self.compile_expr(iter_expr)?;
         let elem_type = match self.infer_expr_type(iter_expr) {
             BolideType::List(inner) => *inner,
@@ -4917,13 +6435,21 @@ impl<'a, 'b> CompileContext<'a, 'b> {
     }
 
     /// 编译 for key in dict { ... }
-    fn compile_for_dict(&mut self, vars: &[String], iter_expr: &Expr, body: &[Statement]) -> Result<(), String> {
+    fn compile_for_dict(
+        &mut self,
+        vars: &[String],
+        iter_expr: &Expr,
+        body: &[Statement],
+    ) -> Result<(), String> {
         let dict_ptr = self.compile_expr(iter_expr)?;
-        
-        let dict_iter = *self.func_refs.get("@_dict_iter").ok_or("dict_iter not found")?;
+
+        let dict_iter = *self
+            .func_refs
+            .get("@_dict_iter")
+            .ok_or("dict_iter not found")?;
         let call = self.builder.ins().call(dict_iter, &[dict_ptr]);
         let keys_list_ptr = self.builder.inst_results(call)[0];
-        
+
         let (key_type, val_type) = match self.infer_expr_type(iter_expr) {
             BolideType::Dict(k, v) => (*k, *v),
             _ => (BolideType::Int, BolideType::Int),
@@ -4932,14 +6458,17 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         if vars.len() == 2 {
             // 优化: for k, v in d. 直接在循环中获取 value，避免创建 items 列表
             // 复用 list 迭代逻辑，但需要自定义 body 来注入 "let v = d[k]"
-            
+
             // 我们不能直接修改 AST body，所以我们需要手动构建循环逻辑
             // 或者，我们可以生成一个新的 Statement 列表，把 v 的定义加进去
             // 但是 AST Statement 是结构体，需要构建。
             // 更简单的方法是: 手动编写 loop 逻辑 (inline)
-            
+
             // 1. 获取 length (keys list)
-            let list_len_ref = *self.func_refs.get("@_list_len").ok_or("list_len not found")?;
+            let list_len_ref = *self
+                .func_refs
+                .get("@_list_len")
+                .ok_or("list_len not found")?;
             let len_call = self.builder.ins().call(list_len_ref, &[keys_list_ptr]);
             let list_length = self.builder.inst_results(len_call)[0];
 
@@ -4957,25 +6486,39 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             // Header
             self.builder.switch_to_block(header_block);
             let current_idx = self.builder.use_var(idx_var);
-            let cond = self.builder.ins().icmp(IntCC::SignedLessThan, current_idx, list_length);
-            self.builder.ins().brif(cond, body_block, &[], exit_block, &[]);
+            let cond = self
+                .builder
+                .ins()
+                .icmp(IntCC::SignedLessThan, current_idx, list_length);
+            self.builder
+                .ins()
+                .brif(cond, body_block, &[], exit_block, &[]);
 
             // Body
             self.builder.switch_to_block(body_block);
             self.builder.seal_block(body_block);
 
             // Get Key
-            let list_get_ref = *self.func_refs.get("@_list_get").ok_or("list_get not found")?;
-            let get_key_call = self.builder.ins().call(list_get_ref, &[keys_list_ptr, current_idx]);
+            let list_get_ref = *self
+                .func_refs
+                .get("@_list_get")
+                .ok_or("list_get not found")?;
+            let get_key_call = self
+                .builder
+                .ins()
+                .call(list_get_ref, &[keys_list_ptr, current_idx]);
             let key_val = self.builder.inst_results(get_key_call)[0];
-            
+
             self.define_variable(&vars[0], key_val, key_type.clone())?;
 
             // Get Value: val = dict_get(dict_ptr, key)
-            let dict_get_ref = *self.func_refs.get("@_dict_get").ok_or("dict_get not found")?;
+            let dict_get_ref = *self
+                .func_refs
+                .get("@_dict_get")
+                .ok_or("dict_get not found")?;
             let get_val_call = self.builder.ins().call(dict_get_ref, &[dict_ptr, key_val]);
             let val_val = self.builder.inst_results(get_val_call)[0];
-            
+
             self.define_variable(&vars[1], val_val, val_type.clone())?;
 
             // Compile body
@@ -4983,14 +6526,16 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             self.loop_stack.push((latch_block, exit_block));
             let mut terminated = false;
             for stmt in body {
-                if terminated { break; }
+                if terminated {
+                    break;
+                }
                 terminated = self.compile_stmt(stmt)?;
             }
             self.loop_stack.pop();
             self.leave_scope()?;
 
             if !terminated {
-                 self.builder.ins().jump(latch_block, &[]);
+                self.builder.ins().jump(latch_block, &[]);
             }
 
             // latch: 递增索引后回到 header
@@ -5004,14 +6549,16 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             self.builder.seal_block(header_block);
             self.builder.switch_to_block(exit_block);
             self.builder.seal_block(exit_block);
-
         } else {
             // 单变量迭代 (Keys)
             self.compile_list_iteration_loop(vars, keys_list_ptr, key_type, body)?;
         }
 
         // Release keys list
-        let release_fn = *self.func_refs.get("@_list_release").ok_or("list_release not found")?;
+        let release_fn = *self
+            .func_refs
+            .get("@_list_release")
+            .ok_or("list_release not found")?;
         self.builder.ins().call(release_fn, &[keys_list_ptr]);
 
         Ok(())
@@ -5022,16 +6569,19 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         match expr {
             Expr::Int(n) => Ok(self.builder.ins().iconst(types::I64, *n)),
             Expr::Float(f) => Ok(self.builder.ins().f64const(*f)),
-            Expr::Bool(b) => Ok(self.builder.ins().iconst(types::I64, if *b { 1 } else { 0 })),
+            Expr::Bool(b) => Ok(self
+                .builder
+                .ins()
+                .iconst(types::I64, if *b { 1 } else { 0 })),
             Expr::String(s) => {
                 // JIT 与生成代码同进程：编译期直接完成 interning，
                 // 运行期只做一次 retain（替代原先每次求值的哈希查找）
-                let interned = bolide_runtime::bolide_string_literal(
-                    s.as_ptr() as *const i8,
-                    s.len(),
-                );
+                let interned =
+                    bolide_runtime::bolide_string_literal(s.as_ptr() as *const i8, s.len());
 
-                let retain_ref = *self.func_refs.get("@_string_retain")
+                let retain_ref = *self
+                    .func_refs
+                    .get("@_string_retain")
                     .ok_or("string_retain not found")?;
 
                 let ptr_val = self.builder.ins().iconst(self.ptr_type, interned as i64);
@@ -5057,12 +6607,13 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         }
     }
 
-
     /// 编译 BigInt 字面量
     fn compile_bigint_literal(&mut self, s: &str) -> Result<Value, String> {
         // 尝试作为 i64 解析，如果成功则用 bigint_from_i64
         let result = if let Ok(n) = s.parse::<i64>() {
-            let func_ref = *self.func_refs.get("@_bigint_from_i64")
+            let func_ref = *self
+                .func_refs
+                .get("@_bigint_from_i64")
                 .ok_or("bigint_from_i64 not found")?;
             let val = self.builder.ins().iconst(types::I64, n);
             let call = self.builder.ins().call(func_ref, &[val]);
@@ -5070,7 +6621,9 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             results[0]
         } else {
             // 用字符串方式创建 BigInt（超出 i64 范围的大数）
-            let func_ref = *self.func_refs.get("@_bigint_from_str")
+            let func_ref = *self
+                .func_refs
+                .get("@_bigint_from_str")
                 .ok_or("bigint_from_str not found")?;
 
             // 将字符串字面量泄露到堆上，确保在程序生命周期内有效
@@ -5094,7 +6647,9 @@ impl<'a, 'b> CompileContext<'a, 'b> {
     fn compile_decimal_literal(&mut self, s: &str) -> Result<Value, String> {
         // 尝试作为 f64 解析
         if let Ok(f) = s.parse::<f64>() {
-            let func_ref = *self.func_refs.get("@_decimal_from_f64")
+            let func_ref = *self
+                .func_refs
+                .get("@_decimal_from_f64")
                 .ok_or("decimal_from_f64 not found")?;
             let val = self.builder.ins().f64const(f);
             let call = self.builder.ins().call(func_ref, &[val]);
@@ -5112,7 +6667,10 @@ impl<'a, 'b> CompileContext<'a, 'b> {
     fn compile_ident(&mut self, name: &str) -> Result<Value, String> {
         // 检查变量是否已被移动
         if self.moved_variables.contains(name) {
-            return Err(format!("Variable '{}' has been moved and cannot be used", name));
+            return Err(format!(
+                "Variable '{}' has been moved and cannot be used",
+                name
+            ));
         }
 
         // 先查找变量
@@ -5124,7 +6682,9 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             if self.weak_variables.contains(name) {
                 if let Some(var_ty) = self.var_types.get(name) {
                     let inner_ty = match var_ty {
-                        BolideType::Weak(inner) | BolideType::Unowned(inner) => inner.as_ref().clone(),
+                        BolideType::Weak(inner) | BolideType::Unowned(inner) => {
+                            inner.as_ref().clone()
+                        }
                         other => other.clone(),
                     };
                     // 只对类实例进行存活检查
@@ -5146,7 +6706,9 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             let gv = self.module.declare_data_in_func(data_id, self.builder.func);
             let addr = self.builder.ins().global_value(self.ptr_type, gv);
             // 按全局变量的实际类型加载（float 全局必须加载为 F64）
-            let load_ty = self.global_var_types.get(name)
+            let load_ty = self
+                .global_var_types
+                .get(name)
                 .map(|t| self.bolide_type_to_cranelift(t))
                 .unwrap_or(self.ptr_type);
             let val = self.builder.ins().load(load_ty, MemFlags::new(), addr, 0);
@@ -5200,19 +6762,25 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         // 字符串拼接
         if matches!(left_ty, BolideType::Str) && matches!(right_ty, BolideType::Str) {
             if matches!(op, BinOp::Add) {
-                let func_ref = *self.func_refs.get("@_string_concat")
+                let func_ref = *self
+                    .func_refs
+                    .get("@_string_concat")
                     .ok_or("string_concat not found")?;
                 let call = self.builder.ins().call(func_ref, &[lhs, rhs]);
                 let result = self.builder.inst_results(call)[0];
                 self.track_temp_rc_value(result, &BolideType::Str);
                 return Ok(result);
             } else if matches!(op, BinOp::Eq) {
-                let func_ref = *self.func_refs.get("@_string_eq")
+                let func_ref = *self
+                    .func_refs
+                    .get("@_string_eq")
                     .ok_or("string_eq not found")?;
                 let call = self.builder.ins().call(func_ref, &[lhs, rhs]);
                 return Ok(self.builder.inst_results(call)[0]);
             } else if matches!(op, BinOp::Ne) {
-                let func_ref = *self.func_refs.get("@_string_eq")
+                let func_ref = *self
+                    .func_refs
+                    .get("@_string_eq")
                     .ok_or("string_eq not found")?;
                 let call = self.builder.ins().call(func_ref, &[lhs, rhs]);
                 let eq_result = self.builder.inst_results(call)[0];
@@ -5224,7 +6792,8 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         }
 
         // Float 运算
-        let is_float = matches!(left_ty, BolideType::Float) || matches!(right_ty, BolideType::Float);
+        let is_float =
+            matches!(left_ty, BolideType::Float) || matches!(right_ty, BolideType::Float);
         let result = if is_float {
             // Float 运算
             match op {
@@ -5260,7 +6829,10 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                     self.builder.ins().uextend(types::I64, cmp)
                 }
                 BinOp::Ge => {
-                    let cmp = self.builder.ins().fcmp(FloatCC::GreaterThanOrEqual, lhs, rhs);
+                    let cmp = self
+                        .builder
+                        .ins()
+                        .fcmp(FloatCC::GreaterThanOrEqual, lhs, rhs);
                     self.builder.ins().uextend(types::I64, cmp)
                 }
                 BinOp::And | BinOp::Or => {
@@ -5289,7 +6861,10 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                     self.builder.ins().uextend(types::I64, cmp)
                 }
                 BinOp::Le => {
-                    let cmp = self.builder.ins().icmp(IntCC::SignedLessThanOrEqual, lhs, rhs);
+                    let cmp = self
+                        .builder
+                        .ins()
+                        .icmp(IntCC::SignedLessThanOrEqual, lhs, rhs);
                     self.builder.ins().uextend(types::I64, cmp)
                 }
                 BinOp::Gt => {
@@ -5297,7 +6872,10 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                     self.builder.ins().uextend(types::I64, cmp)
                 }
                 BinOp::Ge => {
-                    let cmp = self.builder.ins().icmp(IntCC::SignedGreaterThanOrEqual, lhs, rhs);
+                    let cmp = self
+                        .builder
+                        .ins()
+                        .icmp(IntCC::SignedGreaterThanOrEqual, lhs, rhs);
                     self.builder.ins().uextend(types::I64, cmp)
                 }
 
@@ -5310,9 +6888,17 @@ impl<'a, 'b> CompileContext<'a, 'b> {
     }
 
     /// 编译 BigInt 二元操作
-    fn compile_bigint_binop(&mut self, lhs: Value, op: &BinOp, rhs: Value) -> Result<Value, String> {
+    fn compile_bigint_binop(
+        &mut self,
+        lhs: Value,
+        op: &BinOp,
+        rhs: Value,
+    ) -> Result<Value, String> {
         // 算术运算返回新的 BigInt，需要跟踪为临时值
-        let is_arithmetic = matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod);
+        let is_arithmetic = matches!(
+            op,
+            BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod
+        );
 
         let func_name = match op {
             BinOp::Add => "@_bigint_add",
@@ -5323,7 +6909,9 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             BinOp::Eq => "@_bigint_eq",
             BinOp::Ne => {
                 // ne = !eq
-                let eq_ref = *self.func_refs.get("@_bigint_eq")
+                let eq_ref = *self
+                    .func_refs
+                    .get("@_bigint_eq")
                     .ok_or("bigint_eq not found")?;
                 let call = self.builder.ins().call(eq_ref, &[lhs, rhs]);
                 let eq_result = self.builder.inst_results(call)[0];
@@ -5339,7 +6927,9 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             }
         };
 
-        let func_ref = *self.func_refs.get(func_name)
+        let func_ref = *self
+            .func_refs
+            .get(func_name)
             .ok_or_else(|| format!("{} not found", func_name))?;
         let call = self.builder.ins().call(func_ref, &[lhs, rhs]);
         let result = self.builder.inst_results(call)[0];
@@ -5353,9 +6943,17 @@ impl<'a, 'b> CompileContext<'a, 'b> {
     }
 
     /// 编译 Decimal 二元操作
-    fn compile_decimal_binop(&mut self, lhs: Value, op: &BinOp, rhs: Value) -> Result<Value, String> {
+    fn compile_decimal_binop(
+        &mut self,
+        lhs: Value,
+        op: &BinOp,
+        rhs: Value,
+    ) -> Result<Value, String> {
         // 算术运算返回新的 Decimal，需要跟踪为临时值
-        let is_arithmetic = matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod);
+        let is_arithmetic = matches!(
+            op,
+            BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod
+        );
 
         let func_name = match op {
             BinOp::Add => "@_decimal_add",
@@ -5366,7 +6964,9 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             BinOp::Eq => "@_decimal_eq",
             BinOp::Ne => {
                 // ne = !eq
-                let eq_ref = *self.func_refs.get("@_decimal_eq")
+                let eq_ref = *self
+                    .func_refs
+                    .get("@_decimal_eq")
                     .ok_or("decimal_eq not found")?;
                 let call = self.builder.ins().call(eq_ref, &[lhs, rhs]);
                 let eq_result = self.builder.inst_results(call)[0];
@@ -5382,7 +6982,9 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             }
         };
 
-        let func_ref = *self.func_refs.get(func_name)
+        let func_ref = *self
+            .func_refs
+            .get(func_name)
             .ok_or_else(|| format!("{} not found", func_name))?;
         let call = self.builder.ins().call(func_ref, &[lhs, rhs]);
         let result = self.builder.inst_results(call)[0];
@@ -5424,10 +7026,12 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         &mut self,
         var_name: &str,
         args: &[Expr],
-        func_sig: Option<(Vec<BolideType>, Option<Box<BolideType>>)>
+        func_sig: Option<(Vec<BolideType>, Option<Box<BolideType>>)>,
     ) -> Result<Value, String> {
         // 获取函数指针
-        let var = *self.variables.get(var_name)
+        let var = *self
+            .variables
+            .get(var_name)
             .ok_or_else(|| format!("Undefined function variable: {}", var_name))?;
         let func_ptr = self.builder.use_var(var);
 
@@ -5447,26 +7051,32 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         // 使用签名中的参数类型
         if let Some((param_types, _)) = &func_sig {
             for ty in param_types {
-                sig.params.push(AbiParam::new(self.bolide_type_to_cranelift(ty)));
+                sig.params
+                    .push(AbiParam::new(self.bolide_type_to_cranelift(ty)));
             }
         } else {
             // 无签名时从参数推断
             for arg in args {
                 let ty = self.infer_expr_type(arg);
-                sig.params.push(AbiParam::new(self.bolide_type_to_cranelift(&ty)));
+                sig.params
+                    .push(AbiParam::new(self.bolide_type_to_cranelift(&ty)));
             }
         }
 
         // 使用签名中的返回类型
         if let Some((_, Some(ret_type))) = &func_sig {
-            sig.returns.push(AbiParam::new(self.bolide_type_to_cranelift(ret_type)));
+            sig.returns
+                .push(AbiParam::new(self.bolide_type_to_cranelift(ret_type)));
         } else {
             // 无返回类型时默认 i64
             sig.returns.push(AbiParam::new(types::I64));
         }
 
         let sig_ref = self.builder.import_signature(sig);
-        let call = self.builder.ins().call_indirect(sig_ref, func_ptr, &arg_values);
+        let call = self
+            .builder
+            .ins()
+            .call_indirect(sig_ref, func_ptr, &arg_values);
         let result = self.builder.inst_results(call)[0];
 
         // 如果返回类型是 RC 类型，track 为临时值
@@ -5485,7 +7095,9 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         if let Expr::Ident(name) = callee {
             if name == "print" && args.len() == 1 {
                 if self.infer_expr_type(&args[0]) == BolideType::Dynamic {
-                    let func = *self.func_refs.get("@_print_dynamic")
+                    let func = *self
+                        .func_refs
+                        .get("@_print_dynamic")
                         .ok_or("print_dynamic not found")?;
                     let val = self.compile_expr(&args[0])?;
                     self.builder.ins().call(func, &[val]);
@@ -5515,7 +7127,11 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                 match &var_type {
                     BolideType::Func => return self.compile_indirect_call(name, args, None),
                     BolideType::FuncSig(param_types, ret_type) => {
-                        return self.compile_indirect_call(name, args, Some((param_types.clone(), ret_type.clone())));
+                        return self.compile_indirect_call(
+                            name,
+                            args,
+                            Some((param_types.clone(), ret_type.clone())),
+                        );
                     }
                     _ => {}
                 }
@@ -5569,14 +7185,18 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             }
             // bigint_debug_stats - 调试用
             "bigint_debug_stats" => {
-                let func_ref = *self.func_refs.get("@_bigint_debug_stats")
+                let func_ref = *self
+                    .func_refs
+                    .get("@_bigint_debug_stats")
                     .ok_or("bigint_debug_stats not found")?;
                 self.builder.ins().call(func_ref, &[]);
                 return Ok(self.builder.ins().iconst(types::I64, 0));
             }
             // tuple_debug_stats - 调试用
             "tuple_debug_stats" => {
-                let func_ref = *self.func_refs.get("@_tuple_debug_stats")
+                let func_ref = *self
+                    .func_refs
+                    .get("@_tuple_debug_stats")
                     .ok_or("tuple_debug_stats not found")?;
                 self.builder.ins().call(func_ref, &[]);
                 return Ok(self.builder.ins().iconst(types::I64, 0));
@@ -5586,7 +7206,6 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                 return self.compile_input(args);
             }
             _ => {}
-
         }
 
         // 检查是否是 async 函数
@@ -5599,11 +7218,15 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             return self.compile_extern_call(&lib_path, &extern_func, args);
         }
 
-        let func_ref = *self.func_refs.get(&func_name)
+        let func_ref = *self
+            .func_refs
+            .get(&func_name)
             .ok_or_else(|| format!("Undefined function: {}", func_name))?;
 
         // 获取函数参数信息
-        let param_modes: Vec<ParamMode> = self.func_params.get(&func_name)
+        let param_modes: Vec<ParamMode> = self
+            .func_params
+            .get(&func_name)
             .map(|params| params.iter().map(|p| p.mode).collect())
             .unwrap_or_else(|| vec![ParamMode::Borrow; args.len()]);
 
@@ -5647,13 +7270,15 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                             // 创建栈槽存储变量值
                             let slot = self.builder.create_sized_stack_slot(StackSlotData::new(
                                 StackSlotKind::ExplicitSlot,
-                                8,  // 指针大小
+                                8, // 指针大小
                                 0,
                             ));
                             let slot_addr = self.builder.ins().stack_addr(self.ptr_type, slot, 0);
 
                             // 将当前值存入栈槽
-                            self.builder.ins().store(MemFlags::new(), current_val, slot_addr, 0);
+                            self.builder
+                                .ins()
+                                .store(MemFlags::new(), current_val, slot_addr, 0);
 
                             arg_values.push(slot_addr);
 
@@ -5664,7 +7289,10 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                             let gv = self.module.declare_data_in_func(data_id, self.builder.func);
                             let addr = self.builder.ins().global_value(self.ptr_type, gv);
                             // 记录旧值，调用后由调用方释放（与局部变量语义一致）
-                            let old_val = self.builder.ins().load(self.ptr_type, MemFlags::new(), addr, 0);
+                            let old_val =
+                                self.builder
+                                    .ins()
+                                    .load(self.ptr_type, MemFlags::new(), addr, 0);
                             global_ref_olds.insert(i, old_val);
                             arg_values.push(addr);
                         } else {
@@ -5706,7 +7334,10 @@ impl<'a, 'b> CompileContext<'a, 'b> {
 
                     // arg_values[i] 是栈槽地址，从中读取新值
                     let slot_addr = arg_values[i];
-                    let new_val = self.builder.ins().load(self.ptr_type, MemFlags::new(), slot_addr, 0);
+                    let new_val =
+                        self.builder
+                            .ins()
+                            .load(self.ptr_type, MemFlags::new(), slot_addr, 0);
 
                     if let Some(&var) = self.variables.get(var_name) {
                         // 释放旧值（调用者原本拥有的对象）
@@ -5759,33 +7390,39 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         let val = self.compile_expr(&args[0])?;
 
         match arg_type {
-            BolideType::Int => Ok(val),  // 恒等转换
+            BolideType::Int => Ok(val), // 恒等转换
             BolideType::Float => {
                 // float -> int: 截断
                 Ok(self.builder.ins().fcvt_to_sint(types::I64, val))
             }
             BolideType::Str => {
                 // str -> int: 调用 string_to_int
-                let func_ref = *self.func_refs.get("@_string_to_int")
+                let func_ref = *self
+                    .func_refs
+                    .get("@_string_to_int")
                     .ok_or("string_to_int not found")?;
                 let call = self.builder.ins().call(func_ref, &[val]);
                 Ok(self.builder.inst_results(call)[0])
             }
             BolideType::BigInt => {
                 // bigint -> int: 调用 bigint_to_i64
-                let func_ref = *self.func_refs.get("@_bigint_to_i64")
+                let func_ref = *self
+                    .func_refs
+                    .get("@_bigint_to_i64")
                     .ok_or("bigint_to_i64 not found")?;
                 let call = self.builder.ins().call(func_ref, &[val]);
                 Ok(self.builder.inst_results(call)[0])
             }
             BolideType::Decimal => {
                 // decimal -> int: 调用 decimal_to_i64
-                let func_ref = *self.func_refs.get("@_decimal_to_i64")
+                let func_ref = *self
+                    .func_refs
+                    .get("@_decimal_to_i64")
                     .ok_or("decimal_to_i64 not found")?;
                 let call = self.builder.ins().call(func_ref, &[val]);
                 Ok(self.builder.inst_results(call)[0])
             }
-            _ => Err(format!("Cannot convert {:?} to int", arg_type))
+            _ => Err(format!("Cannot convert {:?} to int", arg_type)),
         }
     }
 
@@ -5798,26 +7435,30 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         let val = self.compile_expr(&args[0])?;
 
         match arg_type {
-            BolideType::Float => Ok(val),  // 恒等转换
+            BolideType::Float => Ok(val), // 恒等转换
             BolideType::Int => {
                 // int -> float
                 Ok(self.builder.ins().fcvt_from_sint(types::F64, val))
             }
             BolideType::Str => {
                 // str -> float: 调用 string_to_float
-                let func_ref = *self.func_refs.get("@_string_to_float")
+                let func_ref = *self
+                    .func_refs
+                    .get("@_string_to_float")
                     .ok_or("string_to_float not found")?;
                 let call = self.builder.ins().call(func_ref, &[val]);
                 Ok(self.builder.inst_results(call)[0])
             }
             BolideType::Decimal => {
                 // decimal -> float: 调用 decimal_to_f64
-                let func_ref = *self.func_refs.get("@_decimal_to_f64")
+                let func_ref = *self
+                    .func_refs
+                    .get("@_decimal_to_f64")
                     .ok_or("decimal_to_f64 not found")?;
                 let call = self.builder.ins().call(func_ref, &[val]);
                 Ok(self.builder.inst_results(call)[0])
             }
-            _ => Err(format!("Cannot convert {:?} to float", arg_type))
+            _ => Err(format!("Cannot convert {:?} to float", arg_type)),
         }
     }
 
@@ -5830,38 +7471,48 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         let val = self.compile_expr(&args[0])?;
 
         let result = match arg_type {
-            BolideType::Str => return Ok(val),  // 恒等转换
+            BolideType::Str => return Ok(val), // 恒等转换
             BolideType::Int => {
-                let func_ref = *self.func_refs.get("@_string_from_int")
+                let func_ref = *self
+                    .func_refs
+                    .get("@_string_from_int")
                     .ok_or("string_from_int not found")?;
                 let call = self.builder.ins().call(func_ref, &[val]);
                 self.builder.inst_results(call)[0]
             }
             BolideType::Float => {
-                let func_ref = *self.func_refs.get("@_string_from_float")
+                let func_ref = *self
+                    .func_refs
+                    .get("@_string_from_float")
                     .ok_or("string_from_float not found")?;
                 let call = self.builder.ins().call(func_ref, &[val]);
                 self.builder.inst_results(call)[0]
             }
             BolideType::Bool => {
-                let func_ref = *self.func_refs.get("@_string_from_bool")
+                let func_ref = *self
+                    .func_refs
+                    .get("@_string_from_bool")
                     .ok_or("string_from_bool not found")?;
                 let call = self.builder.ins().call(func_ref, &[val]);
                 self.builder.inst_results(call)[0]
             }
             BolideType::BigInt => {
-                let func_ref = *self.func_refs.get("@_string_from_bigint")
+                let func_ref = *self
+                    .func_refs
+                    .get("@_string_from_bigint")
                     .ok_or("string_from_bigint not found")?;
                 let call = self.builder.ins().call(func_ref, &[val]);
                 self.builder.inst_results(call)[0]
             }
             BolideType::Decimal => {
-                let func_ref = *self.func_refs.get("@_string_from_decimal")
+                let func_ref = *self
+                    .func_refs
+                    .get("@_string_from_decimal")
                     .ok_or("string_from_decimal not found")?;
                 let call = self.builder.ins().call(func_ref, &[val]);
                 self.builder.inst_results(call)[0]
             }
-            _ => return Err(format!("Cannot convert {:?} to str", arg_type))
+            _ => return Err(format!("Cannot convert {:?} to str", arg_type)),
         };
 
         // 返回的字符串需要 RC 跟踪
@@ -5878,16 +7529,18 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         let val = self.compile_expr(&args[0])?;
 
         match arg_type {
-            BolideType::BigInt => Ok(val),  // 恒等转换
+            BolideType::BigInt => Ok(val), // 恒等转换
             BolideType::Int => {
-                let func_ref = *self.func_refs.get("@_bigint_from_i64")
+                let func_ref = *self
+                    .func_refs
+                    .get("@_bigint_from_i64")
                     .ok_or("bigint_from_i64 not found")?;
                 let call = self.builder.ins().call(func_ref, &[val]);
                 let result = self.builder.inst_results(call)[0];
                 self.track_temp_rc_value(result, &BolideType::BigInt);
                 Ok(result)
             }
-            _ => Err(format!("Cannot convert {:?} to bigint", arg_type))
+            _ => Err(format!("Cannot convert {:?} to bigint", arg_type)),
         }
     }
 
@@ -5900,9 +7553,11 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         let val = self.compile_expr(&args[0])?;
 
         match arg_type {
-            BolideType::Decimal => Ok(val),  // 恒等转换
+            BolideType::Decimal => Ok(val), // 恒等转换
             BolideType::Int => {
-                let func_ref = *self.func_refs.get("@_decimal_from_i64")
+                let func_ref = *self
+                    .func_refs
+                    .get("@_decimal_from_i64")
                     .ok_or("decimal_from_i64 not found")?;
                 let call = self.builder.ins().call(func_ref, &[val]);
                 let result = self.builder.inst_results(call)[0];
@@ -5910,14 +7565,16 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                 Ok(result)
             }
             BolideType::Float => {
-                let func_ref = *self.func_refs.get("@_decimal_from_f64")
+                let func_ref = *self
+                    .func_refs
+                    .get("@_decimal_from_f64")
                     .ok_or("decimal_from_f64 not found")?;
                 let call = self.builder.ins().call(func_ref, &[val]);
                 let result = self.builder.inst_results(call)[0];
                 self.track_temp_rc_value(result, &BolideType::Decimal);
                 Ok(result)
             }
-            _ => Err(format!("Cannot convert {:?} to decimal", arg_type))
+            _ => Err(format!("Cannot convert {:?} to decimal", arg_type)),
         }
     }
 
@@ -5925,6 +7582,13 @@ impl<'a, 'b> CompileContext<'a, 'b> {
     fn compile_print(&mut self, expr: &Expr) -> Result<Value, String> {
         let expr_type = self.infer_expr_type(expr);
         let val = self.compile_expr(expr)?;
+
+        if let BolideType::Tuple(elem_types) = &expr_type {
+            self.compile_print_tuple_inline(val, elem_types)?;
+            let println_ref = *self.func_refs.get("@_println").ok_or("println not found")?;
+            self.builder.ins().call(println_ref, &[]);
+            return Ok(self.builder.ins().iconst(types::I64, 0));
+        }
 
         let func_name = match expr_type {
             BolideType::Int => "@_print_int",
@@ -5938,28 +7602,93 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             BolideType::List(_) => "@_print_list",
             BolideType::Dict(_, _) => "@_print_dict",
 
-            _ => "@_print_int",  // 默认用 int 打印
+            _ => "@_print_int", // 默认用 int 打印
         };
 
-
-        let func_ref = *self.func_refs.get(func_name)
+        let func_ref = *self
+            .func_refs
+            .get(func_name)
             .ok_or_else(|| format!("{} not found", func_name))?;
         self.builder.ins().call(func_ref, &[val]);
         Ok(self.builder.ins().iconst(types::I64, 0))
+    }
+
+    fn compile_print_tuple_inline(
+        &mut self,
+        tuple_val: Value,
+        elem_types: &[BolideType],
+    ) -> Result<(), String> {
+        let start_ref = *self
+            .func_refs
+            .get("@_print_tuple_start")
+            .ok_or("print_tuple_start not found")?;
+        self.builder.ins().call(start_ref, &[]);
+
+        let tuple_get = *self
+            .func_refs
+            .get("@_tuple_get")
+            .ok_or("tuple_get not found")?;
+        let separator_ref = *self
+            .func_refs
+            .get("@_print_tuple_separator")
+            .ok_or("print_tuple_separator not found")?;
+
+        for (i, elem_ty) in elem_types.iter().enumerate() {
+            if i > 0 {
+                self.builder.ins().call(separator_ref, &[]);
+            }
+            let idx = self.builder.ins().iconst(types::I64, i as i64);
+            let call = self.builder.ins().call(tuple_get, &[tuple_val, idx]);
+            let elem_val = self.builder.inst_results(call)[0];
+            self.compile_print_value_inline(elem_val, elem_ty)?;
+        }
+
+        let end_ref = *self
+            .func_refs
+            .get("@_print_tuple_end_inline")
+            .ok_or("print_tuple_end_inline not found")?;
+        self.builder.ins().call(end_ref, &[]);
+        Ok(())
+    }
+
+    fn compile_print_value_inline(&mut self, val: Value, ty: &BolideType) -> Result<(), String> {
+        if let BolideType::Tuple(elem_types) = ty {
+            return self.compile_print_tuple_inline(val, elem_types);
+        }
+
+        let func_name = match ty {
+            BolideType::Int => "@_print_int_inline",
+            BolideType::Float => "@_print_float_inline",
+            BolideType::Bool => "@_print_bool_inline",
+            BolideType::BigInt => "@_print_bigint_inline",
+            BolideType::Decimal => "@_print_decimal_inline",
+            BolideType::Str => "@_print_string_inline",
+            BolideType::Dynamic => "@_print_dynamic_inline",
+            BolideType::List(_) => "@_print_list",
+            BolideType::Dict(_, _) => "@_print_dict",
+            _ => "@_print_int_inline",
+        };
+        let func_ref = *self
+            .func_refs
+            .get(func_name)
+            .ok_or_else(|| format!("{} not found", func_name))?;
+        self.builder.ins().call(func_ref, &[val]);
+        Ok(())
     }
 
     /// 编译 input 函数 - 读取用户输入
     fn compile_input(&mut self, args: &[Expr]) -> Result<Value, String> {
         let result = if args.is_empty() {
             // 无参数版本: input()
-            let func_ref = *self.func_refs.get("@_input")
-                .ok_or("input not found")?;
+            let func_ref = *self.func_refs.get("@_input").ok_or("input not found")?;
             let call = self.builder.ins().call(func_ref, &[]);
             self.builder.inst_results(call)[0]
         } else if args.len() == 1 {
             // 带提示版本: input("prompt")
             let prompt = self.compile_expr(&args[0])?;
-            let func_ref = *self.func_refs.get("@_input_prompt")
+            let func_ref = *self
+                .func_refs
+                .get("@_input_prompt")
                 .ok_or("input_prompt not found")?;
             let call = self.builder.ins().call(func_ref, &[prompt]);
             self.builder.inst_results(call)[0]
@@ -6000,29 +7729,31 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                 let right_ty = self.infer_expr_type(right);
                 // 类型提升规则
                 match (&left_ty, &right_ty) {
-                    (BolideType::Str, BolideType::Str) => {
-                        match op {
-                            BinOp::Add => BolideType::Str,
-                            BinOp::Eq | BinOp::Ne => BolideType::Bool,
-                            _ => BolideType::Int,
-                        }
-                    }
+                    (BolideType::Str, BolideType::Str) => match op {
+                        BinOp::Add => BolideType::Str,
+                        BinOp::Eq | BinOp::Ne => BolideType::Bool,
+                        _ => BolideType::Int,
+                    },
                     (BolideType::Float, _) | (_, BolideType::Float) => BolideType::Float,
                     (BolideType::BigInt, _) | (_, BolideType::BigInt) => BolideType::BigInt,
                     (BolideType::Decimal, _) | (_, BolideType::Decimal) => BolideType::Decimal,
                     _ => match op {
-                        BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge
-                        | BinOp::And | BinOp::Or => BolideType::Bool,
+                        BinOp::Eq
+                        | BinOp::Ne
+                        | BinOp::Lt
+                        | BinOp::Le
+                        | BinOp::Gt
+                        | BinOp::Ge
+                        | BinOp::And
+                        | BinOp::Or => BolideType::Bool,
                         _ => BolideType::Int,
-                    }
+                    },
                 }
             }
-            Expr::UnaryOp(op, operand) => {
-                match op {
-                    UnaryOp::Not => BolideType::Bool,
-                    UnaryOp::Neg => self.infer_expr_type(operand),
-                }
-            }
+            Expr::UnaryOp(op, operand) => match op {
+                UnaryOp::Not => BolideType::Bool,
+                UnaryOp::Neg => self.infer_expr_type(operand),
+            },
             Expr::Call(callee, args) => {
                 // 根据函数名推断返回类型
                 if let Expr::Ident(name) = callee.as_ref() {
@@ -6031,15 +7762,17 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                         "decimal" => BolideType::Decimal,
                         "int" => BolideType::Int,
                         "float" => BolideType::Float,
-                        "str" => BolideType::Str,  // str 函数返回字符串
-                        "channel" => BolideType::Channel(Box::new(BolideType::Int)),  // 默认 int，实际类型从声明获取
-                        "input" => BolideType::Str,  // input 函数返回字符串
+                        "str" => BolideType::Str, // str 函数返回字符串
+                        "channel" => BolideType::Channel(Box::new(BolideType::Int)), // 默认 int，实际类型从声明获取
+                        "input" => BolideType::Str, // input 函数返回字符串
                         "join" => {
                             // 从 spawn_func_map 获取原函数的返回类型
                             if args.len() == 1 {
                                 if let Expr::Ident(var_name) = &args[0] {
                                     if let Some(func_name) = self.spawn_func_map.get(var_name) {
-                                        if let Some(Some(ret_ty)) = self.func_return_types.get(func_name) {
+                                        if let Some(Some(ret_ty)) =
+                                            self.func_return_types.get(func_name)
+                                        {
                                             return ret_ty.clone();
                                         }
                                     }
@@ -6051,7 +7784,9 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                             // 查找用户定义函数的返回类型
                             if let Some(Some(ret_ty)) = self.func_return_types.get(name.as_str()) {
                                 ret_ty.clone()
-                            } else if let Some(BolideType::FuncSig(_, Some(ret))) = self.var_types.get(name.as_str()) {
+                            } else if let Some(BolideType::FuncSig(_, Some(ret))) =
+                                self.var_types.get(name.as_str())
+                            {
                                 // 函数指针变量（间接调用）：取签名中的返回类型
                                 (**ret).clone()
                             } else {
@@ -6062,25 +7797,21 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                 } else if let Expr::Member(base, method) = callee.as_ref() {
                     let base_ty = self.infer_expr_type(base);
                     match base_ty {
-                        BolideType::Dict(k, v) => {
-                             match method.as_str() {
-                                 "keys" => BolideType::List(k),
-                                 "values" => BolideType::List(v),
-                                 "get" | "remove" => *v,
-                                 "clone" => BolideType::Dict(k, v),
-                                 "len" | "is_empty" | "contains" => BolideType::Int,
-                                 _ => BolideType::Int,
-                             }
-                        }
-                        BolideType::List(elem) => {
-                             match method.as_str() {
-                                 "pop" | "get" | "first" | "last" => *elem,
-                                 "slice" | "copy" | "clone" => BolideType::List(elem),
-                                 "len" | "index_of" | "count" | "is_empty" => BolideType::Int,
-                                 _ => BolideType::Int
-                             }
-                        }
-                        _ => BolideType::Int
+                        BolideType::Dict(k, v) => match method.as_str() {
+                            "keys" => BolideType::List(k),
+                            "values" => BolideType::List(v),
+                            "get" | "remove" => *v,
+                            "clone" => BolideType::Dict(k, v),
+                            "len" | "is_empty" | "contains" => BolideType::Int,
+                            _ => BolideType::Int,
+                        },
+                        BolideType::List(elem) => match method.as_str() {
+                            "pop" | "get" | "first" | "last" => *elem,
+                            "slice" | "copy" | "clone" => BolideType::List(elem),
+                            "len" | "index_of" | "count" | "is_empty" => BolideType::Int,
+                            _ => BolideType::Int,
+                        },
+                        _ => BolideType::Int,
                     }
                 } else {
                     BolideType::Int
@@ -6118,9 +7849,8 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                 BolideType::Int
             }
             Expr::Tuple(exprs) => {
-                let elem_types: Vec<BolideType> = exprs.iter()
-                    .map(|e| self.infer_expr_type(e))
-                    .collect();
+                let elem_types: Vec<BolideType> =
+                    exprs.iter().map(|e| self.infer_expr_type(e)).collect();
                 BolideType::Tuple(elem_types)
             }
             Expr::Index(base, idx) => {
@@ -6147,9 +7877,7 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             }
             Expr::AwaitAll(exprs) => {
                 // await all 返回元组，元素类型为各协程的返回类型
-                let elem_types = exprs.iter()
-                    .map(|e| self.infer_awaited_type(e))
-                    .collect();
+                let elem_types = exprs.iter().map(|e| self.infer_awaited_type(e)).collect();
                 BolideType::Tuple(elem_types)
             }
             Expr::List(items) => {
@@ -6175,9 +7903,13 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                     let mut v_ty = self.infer_expr_type(&entries[0].1);
                     for (k, v) in entries.iter().skip(1) {
                         let next_k = self.infer_expr_type(k);
-                        if k_ty != next_k { k_ty = BolideType::Dynamic; }
+                        if k_ty != next_k {
+                            k_ty = BolideType::Dynamic;
+                        }
                         let next_v = self.infer_expr_type(v);
-                        if v_ty != next_v { v_ty = BolideType::Dynamic; }
+                        if v_ty != next_v {
+                            v_ty = BolideType::Dynamic;
+                        }
                     }
                     (k_ty, v_ty)
                 };
@@ -6199,11 +7931,11 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             BolideType::Ptr => self.ptr_type,
             BolideType::Channel(_) => self.ptr_type,
             BolideType::Future => self.ptr_type,
-            BolideType::Func => self.ptr_type,  // 函数指针
-            BolideType::FuncSig(_, _) => self.ptr_type,  // 带签名的函数指针
+            BolideType::Func => self.ptr_type,          // 函数指针
+            BolideType::FuncSig(_, _) => self.ptr_type, // 带签名的函数指针
             BolideType::List(_) => self.ptr_type,
             BolideType::Dict(_, _) => self.ptr_type,
-            BolideType::Tuple(_) => self.ptr_type,  // 元组作为指针
+            BolideType::Tuple(_) => self.ptr_type, // 元组作为指针
 
             BolideType::Custom(_) => self.ptr_type,
             BolideType::Weak(inner) => self.bolide_type_to_cranelift(inner),
@@ -6217,13 +7949,17 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         let size = self.compile_expr(&pool_stmt.size)?;
 
         // 创建线程池: pool_create(size) -> ptr
-        let pool_create_ref = *self.func_refs.get("@_pool_create")
+        let pool_create_ref = *self
+            .func_refs
+            .get("@_pool_create")
             .ok_or("pool_create not found")?;
         let call = self.builder.ins().call(pool_create_ref, &[size]);
         let pool_ptr = self.builder.inst_results(call)[0];
 
         // 进入线程池上下文: pool_enter(pool)
-        let pool_enter_ref = *self.func_refs.get("@_pool_enter")
+        let pool_enter_ref = *self
+            .func_refs
+            .get("@_pool_enter")
             .ok_or("pool_enter not found")?;
         self.builder.ins().call(pool_enter_ref, &[pool_ptr]);
 
@@ -6233,12 +7969,16 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         }
 
         // 退出线程池上下文: pool_exit()
-        let pool_exit_ref = *self.func_refs.get("@_pool_exit")
+        let pool_exit_ref = *self
+            .func_refs
+            .get("@_pool_exit")
             .ok_or("pool_exit not found")?;
         self.builder.ins().call(pool_exit_ref, &[]);
 
         // 销毁线程池: pool_destroy(pool)
-        let pool_destroy_ref = *self.func_refs.get("@_pool_destroy")
+        let pool_destroy_ref = *self
+            .func_refs
+            .get("@_pool_destroy")
             .ok_or("pool_destroy not found")?;
         self.builder.ins().call(pool_destroy_ref, &[pool_ptr]);
 
@@ -6248,7 +7988,8 @@ impl<'a, 'b> CompileContext<'a, 'b> {
     /// 编译 send 语句: ch <- value
     fn compile_send(&mut self, send_stmt: &bolide_parser::SendStmt) -> Result<(), String> {
         // 获取通道变量（支持局部与全局）
-        let channel_ptr = self.load_var_value(&send_stmt.channel)
+        let channel_ptr = self
+            .load_var_value(&send_stmt.channel)
             .map_err(|_| format!("Undefined channel: {}", send_stmt.channel))?;
 
         // from 借用检查：借用值禁止通过通道逃逸
@@ -6258,9 +7999,13 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         let value = self.compile_expr(&send_stmt.value)?;
 
         // 调用 channel_send(channel, value)
-        let channel_send_ref = *self.func_refs.get("@_channel_send")
+        let channel_send_ref = *self
+            .func_refs
+            .get("@_channel_send")
             .ok_or("channel_send not found")?;
-        self.builder.ins().call(channel_send_ref, &[channel_ptr, value]);
+        self.builder
+            .ins()
+            .call(channel_send_ref, &[channel_ptr, value]);
 
         Ok(())
     }
@@ -6301,43 +8046,55 @@ impl<'a, 'b> CompileContext<'a, 'b> {
 
         // 在栈上分配 channel 指针数组
         let array_size = (channel_count * 8) as i32;
-        let stack_slot = self.builder.create_sized_stack_slot(cranelift::prelude::StackSlotData::new(
-            cranelift::prelude::StackSlotKind::ExplicitSlot,
-            array_size as u32,
-            0,
-        ));
+        let stack_slot =
+            self.builder
+                .create_sized_stack_slot(cranelift::prelude::StackSlotData::new(
+                    cranelift::prelude::StackSlotKind::ExplicitSlot,
+                    array_size as u32,
+                    0,
+                ));
         let array_ptr = self.builder.ins().stack_addr(self.ptr_type, stack_slot, 0);
 
         // 填充 channel 指针数组
         for (i, (_, channel_name, _)) in recv_branches.iter().enumerate() {
-            let channel_ptr = self.load_var_value(channel_name)
+            let channel_ptr = self
+                .load_var_value(channel_name)
                 .map_err(|_| format!("Undefined channel: {}", channel_name))?;
             let offset = (i * 8) as i32;
-            self.builder.ins().store(MemFlags::new(), channel_ptr, array_ptr, offset);
+            self.builder
+                .ins()
+                .store(MemFlags::new(), channel_ptr, array_ptr, offset);
         }
 
         // 分配接收值的栈空间
-        let value_slot = self.builder.create_sized_stack_slot(cranelift::prelude::StackSlotData::new(
-            cranelift::prelude::StackSlotKind::ExplicitSlot,
-            8,
-            0,
-        ));
+        let value_slot =
+            self.builder
+                .create_sized_stack_slot(cranelift::prelude::StackSlotData::new(
+                    cranelift::prelude::StackSlotKind::ExplicitSlot,
+                    8,
+                    0,
+                ));
         let value_ptr = self.builder.ins().stack_addr(self.ptr_type, value_slot, 0);
 
         // 确定 timeout 值
         let timeout_val = if default_branch.is_some() {
-            self.builder.ins().iconst(types::I64, -2)  // has default
+            self.builder.ins().iconst(types::I64, -2) // has default
         } else if let Some((duration_expr, _)) = &timeout_branch {
             self.compile_expr(duration_expr)?
         } else {
-            self.builder.ins().iconst(types::I64, -1)  // no timeout
+            self.builder.ins().iconst(types::I64, -1) // no timeout
         };
 
         // 调用 bolide_channel_select
-        let select_ref = *self.func_refs.get("@_channel_select")
+        let select_ref = *self
+            .func_refs
+            .get("@_channel_select")
             .ok_or("channel_select not found")?;
         let count_val = self.builder.ins().iconst(types::I64, channel_count as i64);
-        let call = self.builder.ins().call(select_ref, &[array_ptr, count_val, timeout_val, value_ptr]);
+        let call = self
+            .builder
+            .ins()
+            .call(select_ref, &[array_ptr, count_val, timeout_val, value_ptr]);
         let results = self.builder.inst_results(call);
         let selected_idx = results[0];
 
@@ -6373,7 +8130,10 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             self.builder.seal_block(branch_blocks[i]);
 
             // 从栈上读取接收到的值
-            let received_val = self.builder.ins().load(types::I64, MemFlags::new(), value_ptr, 0);
+            let received_val = self
+                .builder
+                .ins()
+                .load(types::I64, MemFlags::new(), value_ptr, 0);
 
             // 声明或获取变量
             let var = if let Some(&existing) = self.variables.get(*var_name) {
@@ -6433,7 +8193,9 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             let idx_val = self.builder.ins().iconst(types::I64, i as i64);
             let is_match = self.builder.ins().icmp(IntCC::Equal, selected_idx, idx_val);
             let next_block = self.builder.create_block();
-            self.builder.ins().brif(is_match, block, &[], next_block, &[]);
+            self.builder
+                .ins()
+                .brif(is_match, block, &[], next_block, &[]);
             self.builder.switch_to_block(next_block);
             self.builder.seal_block(next_block);
         }
@@ -6441,9 +8203,14 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         // 检查 timeout (-1)
         if let Some(block) = timeout_block {
             let timeout_val = self.builder.ins().iconst(types::I64, -1);
-            let is_timeout = self.builder.ins().icmp(IntCC::Equal, selected_idx, timeout_val);
+            let is_timeout = self
+                .builder
+                .ins()
+                .icmp(IntCC::Equal, selected_idx, timeout_val);
             let next_block = self.builder.create_block();
-            self.builder.ins().brif(is_timeout, block, &[], next_block, &[]);
+            self.builder
+                .ins()
+                .brif(is_timeout, block, &[], next_block, &[]);
             self.builder.switch_to_block(next_block);
             self.builder.seal_block(next_block);
         }
@@ -6451,8 +8218,13 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         // 检查 default (-2)
         if let Some(block) = default_block {
             let default_val = self.builder.ins().iconst(types::I64, -2);
-            let is_default = self.builder.ins().icmp(IntCC::Equal, selected_idx, default_val);
-            self.builder.ins().brif(is_default, block, &[], exit_block, &[]);
+            let is_default = self
+                .builder
+                .ins()
+                .icmp(IntCC::Equal, selected_idx, default_val);
+            self.builder
+                .ins()
+                .brif(is_default, block, &[], exit_block, &[]);
         } else {
             self.builder.ins().jump(exit_block, &[]);
         }
@@ -6468,35 +8240,53 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         }
 
         // 获取目标函数的返回类型，确定 spawn 函数后缀
-        let return_type = self.func_return_types.get(func_name).cloned().unwrap_or(None);
+        let return_type = self
+            .func_return_types
+            .get(func_name)
+            .cloned()
+            .unwrap_or(None);
         let type_suffix = match &return_type {
             Some(BolideType::Float) => "_float",
-            Some(BolideType::Str) | Some(BolideType::BigInt) | Some(BolideType::Decimal)
-            | Some(BolideType::Dynamic) | Some(BolideType::Ptr)
-            | Some(BolideType::List(_)) | Some(BolideType::Custom(_)) => "_ptr",
+            Some(BolideType::Str)
+            | Some(BolideType::BigInt)
+            | Some(BolideType::Decimal)
+            | Some(BolideType::Dynamic)
+            | Some(BolideType::Ptr)
+            | Some(BolideType::List(_))
+            | Some(BolideType::Custom(_)) => "_ptr",
             _ => "_int", // Int, Bool, None 都用 int
         };
 
         // 根据是否有参数选择不同的路径
         let (func_addr, env_ptr) = if args.is_empty() {
             // 无参数：直接使用目标函数
-            let target_func_ref = *self.func_refs.get(func_name)
+            let target_func_ref = *self
+                .func_refs
+                .get(func_name)
                 .ok_or_else(|| format!("Undefined function: {}", func_name))?;
             let func_addr = self.builder.ins().func_addr(self.ptr_type, target_func_ref);
             let null_ptr = self.builder.ins().iconst(self.ptr_type, 0);
             (func_addr, null_ptr)
         } else {
             // 有参数：使用 trampoline
-            let trampoline_ref = *self.trampoline_refs.get(func_name)
+            let trampoline_ref = *self
+                .trampoline_refs
+                .get(func_name)
                 .ok_or_else(|| format!("No trampoline for function: {}", func_name))?;
-            let param_types = self.trampoline_param_types.get(func_name)
+            let param_types = self
+                .trampoline_param_types
+                .get(func_name)
                 .ok_or_else(|| format!("No param types for trampoline: {}", func_name))?
                 .clone();
-            let env_size = *self.trampoline_env_sizes.get(func_name)
+            let env_size = *self
+                .trampoline_env_sizes
+                .get(func_name)
                 .ok_or_else(|| format!("No env size for trampoline: {}", func_name))?;
 
             // 分配 env 内存
-            let alloc_ref = *self.func_refs.get("@_bolide_alloc")
+            let alloc_ref = *self
+                .func_refs
+                .get("@_bolide_alloc")
                 .ok_or("bolide_alloc not found")?;
             let size_val = self.builder.ins().iconst(types::I64, env_size);
             let alloc_call = self.builder.ins().call(alloc_ref, &[size_val]);
@@ -6525,7 +8315,9 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                     val
                 };
 
-                self.builder.ins().store(MemFlags::trusted(), val_to_store, env_ptr, offset);
+                self.builder
+                    .ins()
+                    .store(MemFlags::trusted(), val_to_store, env_ptr, offset);
             }
 
             // 获取 trampoline 函数地址
@@ -6534,7 +8326,9 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         };
 
         // 检查是否在线程池上下文中
-        let pool_is_active_ref = *self.func_refs.get("@_pool_is_active")
+        let pool_is_active_ref = *self
+            .func_refs
+            .get("@_pool_is_active")
             .ok_or("pool_is_active not found")?;
         let is_active_call = self.builder.ins().call(pool_is_active_ref, &[]);
         let is_active = self.builder.inst_results(is_active_call)[0];
@@ -6545,7 +8339,9 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         let merge_block = self.builder.create_block();
         self.builder.append_block_param(merge_block, self.ptr_type);
 
-        self.builder.ins().brif(is_active, pool_block, &[], thread_block, &[]);
+        self.builder
+            .ins()
+            .brif(is_active, pool_block, &[], thread_block, &[]);
 
         // 根据是否有参数选择 spawn 函数
         let spawn_suffix = if args.is_empty() {
@@ -6558,12 +8354,16 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         self.builder.switch_to_block(pool_block);
         self.builder.seal_block(pool_block);
         let pool_spawn_name = format!("@_pool_spawn{}", spawn_suffix);
-        let pool_spawn_ref = *self.func_refs.get(&pool_spawn_name)
+        let pool_spawn_ref = *self
+            .func_refs
+            .get(&pool_spawn_name)
             .ok_or_else(|| format!("{} not found", pool_spawn_name))?;
         let pool_call = if args.is_empty() {
             self.builder.ins().call(pool_spawn_ref, &[func_addr])
         } else {
-            self.builder.ins().call(pool_spawn_ref, &[func_addr, env_ptr])
+            self.builder
+                .ins()
+                .call(pool_spawn_ref, &[func_addr, env_ptr])
         };
         let pool_handle = self.builder.inst_results(pool_call)[0];
         self.builder.ins().jump(merge_block, &[pool_handle]);
@@ -6572,12 +8372,16 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         self.builder.switch_to_block(thread_block);
         self.builder.seal_block(thread_block);
         let thread_spawn_name = format!("@_thread_spawn{}", spawn_suffix);
-        let thread_spawn_ref = *self.func_refs.get(&thread_spawn_name)
+        let thread_spawn_ref = *self
+            .func_refs
+            .get(&thread_spawn_name)
             .ok_or_else(|| format!("{} not found", thread_spawn_name))?;
         let thread_call = if args.is_empty() {
             self.builder.ins().call(thread_spawn_ref, &[func_addr])
         } else {
-            self.builder.ins().call(thread_spawn_ref, &[func_addr, env_ptr])
+            self.builder
+                .ins()
+                .call(thread_spawn_ref, &[func_addr, env_ptr])
         };
         let thread_handle = self.builder.inst_results(thread_call)[0];
         self.builder.ins().jump(merge_block, &[thread_handle]);
@@ -6593,11 +8397,14 @@ impl<'a, 'b> CompileContext<'a, 'b> {
     /// 编译 recv 表达式: <- ch
     fn compile_recv(&mut self, channel_name: &str) -> Result<Value, String> {
         // 获取通道变量（支持局部与全局）
-        let channel_ptr = self.load_var_value(channel_name)
+        let channel_ptr = self
+            .load_var_value(channel_name)
             .map_err(|_| format!("Undefined channel: {}", channel_name))?;
 
         // 调用 channel_recv(channel) -> i64
-        let channel_recv_ref = *self.func_refs.get("@_channel_recv")
+        let channel_recv_ref = *self
+            .func_refs
+            .get("@_channel_recv")
             .ok_or("channel_recv not found")?;
         let call = self.builder.ins().call(channel_recv_ref, &[channel_ptr]);
         let value = self.builder.inst_results(call)[0];
@@ -6608,34 +8415,52 @@ impl<'a, 'b> CompileContext<'a, 'b> {
     /// 编译 async 函数调用 - 启动协程并返回 Future
     fn compile_async_call(&mut self, func_name: &str, args: &[Expr]) -> Result<Value, String> {
         // 获取返回类型确定 spawn 函数后缀
-        let return_type = self.func_return_types.get(func_name).cloned().unwrap_or(None);
+        let return_type = self
+            .func_return_types
+            .get(func_name)
+            .cloned()
+            .unwrap_or(None);
         let type_suffix = match &return_type {
             Some(BolideType::Float) => "_float",
-            Some(BolideType::Str) | Some(BolideType::BigInt) | Some(BolideType::Decimal)
-            | Some(BolideType::Dynamic) | Some(BolideType::Ptr)
-            | Some(BolideType::List(_)) | Some(BolideType::Custom(_)) => "_ptr",
+            Some(BolideType::Str)
+            | Some(BolideType::BigInt)
+            | Some(BolideType::Decimal)
+            | Some(BolideType::Dynamic)
+            | Some(BolideType::Ptr)
+            | Some(BolideType::List(_))
+            | Some(BolideType::Custom(_)) => "_ptr",
             _ => "_int",
         };
 
         // 获取函数地址和环境指针
         let (func_addr, env_ptr) = if args.is_empty() {
-            let target_func_ref = *self.func_refs.get(func_name)
+            let target_func_ref = *self
+                .func_refs
+                .get(func_name)
                 .ok_or_else(|| format!("Undefined async function: {}", func_name))?;
             let func_addr = self.builder.ins().func_addr(self.ptr_type, target_func_ref);
             let null_ptr = self.builder.ins().iconst(self.ptr_type, 0);
             (func_addr, null_ptr)
         } else {
             // 有参数：使用 trampoline
-            let trampoline_ref = *self.trampoline_refs.get(func_name)
+            let trampoline_ref = *self
+                .trampoline_refs
+                .get(func_name)
                 .ok_or_else(|| format!("No trampoline for async function: {}", func_name))?;
-            let param_types = self.trampoline_param_types.get(func_name)
+            let param_types = self
+                .trampoline_param_types
+                .get(func_name)
                 .ok_or_else(|| format!("No param types for trampoline: {}", func_name))?
                 .clone();
-            let env_size = *self.trampoline_env_sizes.get(func_name)
+            let env_size = *self
+                .trampoline_env_sizes
+                .get(func_name)
                 .ok_or_else(|| format!("No env size for trampoline: {}", func_name))?;
 
             // 分配 env 内存
-            let alloc_ref = *self.func_refs.get("@_bolide_alloc")
+            let alloc_ref = *self
+                .func_refs
+                .get("@_bolide_alloc")
                 .ok_or("bolide_alloc not found")?;
             let size_val = self.builder.ins().iconst(types::I64, env_size);
             let alloc_call = self.builder.ins().call(alloc_ref, &[size_val]);
@@ -6645,7 +8470,9 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             for (i, arg) in args.iter().enumerate() {
                 let val = self.compile_expr(arg)?;
                 let offset = (i * 8) as i32;
-                self.builder.ins().store(MemFlags::trusted(), val, env_ptr, offset);
+                self.builder
+                    .ins()
+                    .store(MemFlags::trusted(), val, env_ptr, offset);
             }
 
             let func_addr = self.builder.ins().func_addr(self.ptr_type, trampoline_ref);
@@ -6655,13 +8482,17 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         // 调用 coroutine_spawn_* 启动协程
         let (spawn_func_name, call) = if args.is_empty() {
             let spawn_func_name = format!("@_coroutine_spawn{}", type_suffix);
-            let spawn_ref = *self.func_refs.get(&spawn_func_name)
+            let spawn_ref = *self
+                .func_refs
+                .get(&spawn_func_name)
                 .ok_or_else(|| format!("{} not found", spawn_func_name))?;
             let call = self.builder.ins().call(spawn_ref, &[func_addr]);
             (spawn_func_name, call)
         } else {
             let spawn_func_name = format!("@_coroutine_spawn{}_with_env", type_suffix);
-            let spawn_ref = *self.func_refs.get(&spawn_func_name)
+            let spawn_ref = *self
+                .func_refs
+                .get(&spawn_func_name)
                 .ok_or_else(|| format!("{} not found", spawn_func_name))?;
             let call = self.builder.ins().call(spawn_ref, &[func_addr, env_ptr]);
             (spawn_func_name, call)
@@ -6670,7 +8501,9 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         let future_ptr = self.builder.inst_results(call)[0];
 
         // 注册 Future 到当前 scope（如果在 scope 内）
-        let scope_register = *self.func_refs.get("@_scope_register")
+        let scope_register = *self
+            .func_refs
+            .get("@_scope_register")
             .ok_or("scope_register not found")?;
         self.builder.ins().call(scope_register, &[future_ptr]);
 
@@ -6688,19 +8521,26 @@ impl<'a, 'b> CompileContext<'a, 'b> {
 
         let await_func_name = match &expr_type {
             BolideType::Float => "@_coroutine_await_float",
-            BolideType::Str | BolideType::BigInt | BolideType::Decimal
-            | BolideType::List(_) | BolideType::Custom(_) => "@_coroutine_await_ptr",
+            BolideType::Str
+            | BolideType::BigInt
+            | BolideType::Decimal
+            | BolideType::List(_)
+            | BolideType::Custom(_) => "@_coroutine_await_ptr",
             _ => "@_coroutine_await_int",
         };
 
-        let await_ref = *self.func_refs.get(await_func_name)
+        let await_ref = *self
+            .func_refs
+            .get(await_func_name)
             .ok_or_else(|| format!("{} not found", await_func_name))?;
 
         let call = self.builder.ins().call(await_ref, &[future_ptr]);
         let result = self.builder.inst_results(call)[0];
 
         // 释放 Future
-        let free_ref = *self.func_refs.get("@_coroutine_free")
+        let free_ref = *self
+            .func_refs
+            .get("@_coroutine_free")
             .ok_or("coroutine_free not found")?;
         self.builder.ins().call(free_ref, &[future_ptr]);
 
@@ -6729,25 +8569,29 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         let tuple_type = BolideType::Tuple(elem_types);
 
         // 调用 tuple_new 创建元组
-        let tuple_new = *self.func_refs.get("@_tuple_new")
+        let tuple_new = *self
+            .func_refs
+            .get("@_tuple_new")
             .ok_or("tuple_new not found")?;
         let len = self.builder.ins().iconst(types::I64, exprs.len() as i64);
         let call = self.builder.ins().call(tuple_new, &[len]);
         let tuple_ptr = self.builder.inst_results(call)[0];
 
         // 编译并设置每个元素
-        let tuple_set = *self.func_refs.get("@_tuple_set")
+        let tuple_set = *self
+            .func_refs
+            .get("@_tuple_set")
             .ok_or("tuple_set not found")?;
         for (i, expr) in exprs.iter().enumerate() {
             let val = self.compile_expr(expr)?;
             let ty = self.infer_expr_type(expr);
-            
+
             // 如果元素是 RC 类型，需要 retain (clone) 因为 tuple 会持有它
             // 注意: 这里的 val 可能是临时的，也可能是变量的借用
             // 如果是临时的 (track_temp_rc_value)，它已经在 compile_expr 中被创建且 count=1
             // 如果我们将它放入 tuple，tuple 接管所有权。
             // 检查 val 是否在 temp_rc_values 中
-            
+
             let val_to_store = if Self::is_rc_type(&ty) {
                 let is_temp = self.temp_rc_values.iter().any(|(v, _)| *v == val);
                 if is_temp {
@@ -6772,7 +8616,9 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             };
 
             let idx = self.builder.ins().iconst(types::I64, i as i64);
-            self.builder.ins().call(tuple_set, &[tuple_ptr, idx, val_to_store]);
+            self.builder
+                .ins()
+                .call(tuple_set, &[tuple_ptr, idx, val_to_store]);
         }
 
         // 标记 Tuple 本身为临时 RC 值
@@ -6787,7 +8633,11 @@ impl<'a, 'b> CompileContext<'a, 'b> {
     }
 
     /// hint 提供类型标注指定的元素类型（用于空列表或未初始化列表）
-    fn compile_list_with_hint(&mut self, items: &[Expr], hint: Option<&BolideType>) -> Result<Value, String> {
+    fn compile_list_with_hint(
+        &mut self,
+        items: &[Expr],
+        hint: Option<&BolideType>,
+    ) -> Result<Value, String> {
         // from 借用检查：借用值禁止存入列表
         for item in items {
             self.check_borrow_escape(item, "list literal")?;
@@ -6822,14 +8672,18 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         };
 
         // 调用 list_new(elem_type) 创建列表
-        let list_new = *self.func_refs.get("@_list_new")
+        let list_new = *self
+            .func_refs
+            .get("@_list_new")
             .ok_or("list_new not found")?;
         let elem_type_val = self.builder.ins().iconst(types::I8, elem_type as i64);
         let call = self.builder.ins().call(list_new, &[elem_type_val]);
         let list_ptr = self.builder.inst_results(call)[0];
 
         // 编译并添加每个元素
-        let list_push = *self.func_refs.get("@_list_push")
+        let list_push = *self
+            .func_refs
+            .get("@_list_push")
             .ok_or("list_push not found")?;
         for expr in items {
             let val = self.compile_expr(expr)?;
@@ -6838,8 +8692,6 @@ impl<'a, 'b> CompileContext<'a, 'b> {
 
         Ok(list_ptr)
     }
-
-
 
     /// 将值转换为 Dynamic 类型 (Boxing)
     fn convert_to_dynamic(&mut self, val: Value, ty: &BolideType) -> Result<Value, String> {
@@ -6855,7 +8707,9 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             BolideType::Dynamic => return Ok(val), // Already dynamic
             _ => return Err(format!("Cannot convert {:?} to dynamic", ty)),
         };
-        let func = *self.func_refs.get(func_name)
+        let func = *self
+            .func_refs
+            .get(func_name)
             .ok_or_else(|| format!("{} not found", func_name))?;
         let call = self.builder.ins().call(func, &[val]);
         let res = self.builder.inst_results(call)[0];
@@ -6873,22 +8727,26 @@ impl<'a, 'b> CompileContext<'a, 'b> {
 
         // 确定键和值类型 (需扫描所有元素以处理 Dynamic)
         let (key_type_tag, val_type_tag) = if entries.is_empty() {
-             (0u8, 0u8) // default int: int
+            (0u8, 0u8) // default int: int
         } else {
-             // 第一次扫描：推断统一类型 (Dynamic or specific)
-             let mut k_final_ty = self.infer_expr_type(&entries[0].0);
-             let mut v_final_ty = self.infer_expr_type(&entries[0].1);
-             
-             for (k, v) in entries.iter().skip(1) {
-                 let next_k = self.infer_expr_type(k);
-                 if k_final_ty != next_k { k_final_ty = BolideType::Dynamic; }
-                 let next_v = self.infer_expr_type(v);
-                 if v_final_ty != next_v { v_final_ty = BolideType::Dynamic; }
-             }
+            // 第一次扫描：推断统一类型 (Dynamic or specific)
+            let mut k_final_ty = self.infer_expr_type(&entries[0].0);
+            let mut v_final_ty = self.infer_expr_type(&entries[0].1);
 
-             // 映射到 type tag
-             let map_tag = |ty: &BolideType| -> u8 {
-                 match ty {
+            for (k, v) in entries.iter().skip(1) {
+                let next_k = self.infer_expr_type(k);
+                if k_final_ty != next_k {
+                    k_final_ty = BolideType::Dynamic;
+                }
+                let next_v = self.infer_expr_type(v);
+                if v_final_ty != next_v {
+                    v_final_ty = BolideType::Dynamic;
+                }
+            }
+
+            // 映射到 type tag
+            let map_tag = |ty: &BolideType| -> u8 {
+                match ty {
                     BolideType::Int => 0,
                     BolideType::Float => 1,
                     BolideType::Bool => 2,
@@ -6899,28 +8757,32 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                     BolideType::Ptr => 7,
                     BolideType::Dict(_, _) => 8,
                     BolideType::Dynamic => 9,
-                    _ => 0 // fallback integer
-                 }
-             };
-             (map_tag(&k_final_ty), map_tag(&v_final_ty))
+                    _ => 0, // fallback integer
+                }
+            };
+            (map_tag(&k_final_ty), map_tag(&v_final_ty))
         };
 
         // 创建字典
-        let dict_new = *self.func_refs.get("@_dict_new")
-             .ok_or("dict_new not found")?;
+        let dict_new = *self
+            .func_refs
+            .get("@_dict_new")
+            .ok_or("dict_new not found")?;
         let k_type_val = self.builder.ins().iconst(types::I8, key_type_tag as i64);
         let v_type_val = self.builder.ins().iconst(types::I8, val_type_tag as i64);
         let call = self.builder.ins().call(dict_new, &[k_type_val, v_type_val]);
         let dict_ptr = self.builder.inst_results(call)[0];
 
         // 设置元素
-        let dict_set = *self.func_refs.get("@_dict_set")
-             .ok_or("dict_set not found")?;
-        
+        let dict_set = *self
+            .func_refs
+            .get("@_dict_set")
+            .ok_or("dict_set not found")?;
+
         for (key, val) in entries {
             let mut k_val = self.compile_expr(key)?;
             let mut v_val = self.compile_expr(val)?;
-            
+
             // 如果目标是 Dynamic，但源不是，进行转换
             if key_type_tag == 9 {
                 let k_ty = self.infer_expr_type(key);
@@ -6937,15 +8799,14 @@ impl<'a, 'b> CompileContext<'a, 'b> {
 
             self.builder.ins().call(dict_set, &[dict_ptr, k_val, v_val]);
         }
-        
+
         Ok(dict_ptr)
     }
-
-
 
     /// 编译索引访问 (元组或列表)
     fn compile_index(&mut self, base: &Expr, index: &Expr) -> Result<Value, String> {
         let base_type = self.infer_expr_type(base);
+        let index_type = self.infer_expr_type(index);
         let base_val = self.compile_expr(base)?;
         let index_val = self.compile_expr(index)?;
 
@@ -6953,16 +8814,29 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         match base_type {
             BolideType::List(ref elem_ty) => {
                 // Int/Float/Bool 内联：单次 load，无运行时调用
-                if matches!(elem_ty.as_ref(), BolideType::Int | BolideType::Float | BolideType::Bool) {
+                if matches!(
+                    elem_ty.as_ref(),
+                    BolideType::Int | BolideType::Float | BolideType::Bool
+                ) {
                     return self.emit_list_get_inline(base_val, index_val, elem_ty.as_ref());
                 }
-                let list_get = *self.func_refs.get("@_list_get")
+                let list_get = *self
+                    .func_refs
+                    .get("@_list_get")
                     .ok_or("list_get not found")?;
                 let call = self.builder.ins().call(list_get, &[base_val, index_val]);
                 Ok(self.builder.inst_results(call)[0])
             }
-            BolideType::Dict(_, _) => {
-                let dict_get = *self.func_refs.get("@_dict_get")
+            BolideType::Dict(key_ty, _) => {
+                if !Self::dict_key_type_accepts(key_ty.as_ref(), &index_type) {
+                    return Err(format!(
+                        "Dict key type mismatch: expected {:?}, got {:?}",
+                        key_ty, index_type
+                    ));
+                }
+                let dict_get = *self
+                    .func_refs
+                    .get("@_dict_get")
                     .ok_or("dict_get not found")?;
                 let call = self.builder.ins().call(dict_get, &[base_val, index_val]);
                 Ok(self.builder.inst_results(call)[0])
@@ -6970,7 +8844,9 @@ impl<'a, 'b> CompileContext<'a, 'b> {
 
             _ => {
                 // 默认使用元组索引
-                let tuple_get = *self.func_refs.get("@_tuple_get")
+                let tuple_get = *self
+                    .func_refs
+                    .get("@_tuple_get")
                     .ok_or("tuple_get not found")?;
                 let call = self.builder.ins().call(tuple_get, &[base_val, index_val]);
                 Ok(self.builder.inst_results(call)[0])
@@ -6978,6 +8854,9 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         }
     }
 
+    fn dict_key_type_accepts(expected: &BolideType, actual: &BolideType) -> bool {
+        matches!(expected, BolideType::Dynamic) || expected == actual
+    }
 
     // ==================== List 内联索引（Int/Float/Bool） ====================
     /// BolideList 内存布局常量
@@ -6988,7 +8867,12 @@ impl<'a, 'b> CompileContext<'a, 'b> {
     const LIST_LEN_OFFSET: i64 = 24;
 
     /// 内联 list[index] 读取（仅 Int/Float/Bool）
-    fn emit_list_get_inline(&mut self, list_ptr: Value, index: Value, elem_ty: &BolideType) -> Result<Value, String> {
+    fn emit_list_get_inline(
+        &mut self,
+        list_ptr: Value,
+        index: Value,
+        elem_ty: &BolideType,
+    ) -> Result<Value, String> {
         let (elem_byte_width, load_ty) = if matches!(elem_ty, BolideType::Bool) {
             (1, types::I8)
         } else {
@@ -6996,14 +8880,26 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         };
         // load len
         let len_ptr = self.builder.ins().iadd_imm(list_ptr, Self::LIST_LEN_OFFSET);
-        let len = self.builder.ins().load(types::I64, MemFlags::new(), len_ptr, 0);
+        let len = self
+            .builder
+            .ins()
+            .load(types::I64, MemFlags::new(), len_ptr, 0);
         let in_bounds = self.builder.ins().icmp(IntCC::UnsignedLessThan, index, len);
         // load data ptr (now *mut u8)
-        let data_ptr_addr = self.builder.ins().iadd_imm(list_ptr, Self::LIST_DATA_OFFSET);
-        let data_ptr = self.builder.ins().load(self.ptr_type, MemFlags::new(), data_ptr_addr, 0);
+        let data_ptr_addr = self
+            .builder
+            .ins()
+            .iadd_imm(list_ptr, Self::LIST_DATA_OFFSET);
+        let data_ptr = self
+            .builder
+            .ins()
+            .load(self.ptr_type, MemFlags::new(), data_ptr_addr, 0);
         let offset = self.builder.ins().imul_imm(index, elem_byte_width);
         let elem_addr = self.builder.ins().iadd(data_ptr, offset);
-        let loaded = self.builder.ins().load(load_ty, MemFlags::new(), elem_addr, 0);
+        let loaded = self
+            .builder
+            .ins()
+            .load(load_ty, MemFlags::new(), elem_addr, 0);
         let value = if load_ty == types::I8 {
             self.builder.ins().uextend(types::I64, loaded)
         } else {
@@ -7015,7 +8911,11 @@ impl<'a, 'b> CompileContext<'a, 'b> {
 
     /// 内联 list[index] = value 写入（仅 Int/Float/Bool）
     fn emit_list_set_inline(
-        &mut self, list_ptr: Value, index: Value, value: Value, elem_ty: &BolideType,
+        &mut self,
+        list_ptr: Value,
+        index: Value,
+        value: Value,
+        elem_ty: &BolideType,
     ) -> Result<(), String> {
         let (elem_byte_width, store_ty) = if matches!(elem_ty, BolideType::Bool) {
             (1, types::I8)
@@ -7024,10 +8924,19 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         };
         // load len
         let len_ptr = self.builder.ins().iadd_imm(list_ptr, Self::LIST_LEN_OFFSET);
-        let _len = self.builder.ins().load(types::I64, MemFlags::new(), len_ptr, 0);
+        let _len = self
+            .builder
+            .ins()
+            .load(types::I64, MemFlags::new(), len_ptr, 0);
         // load data ptr
-        let data_ptr_addr = self.builder.ins().iadd_imm(list_ptr, Self::LIST_DATA_OFFSET);
-        let data_ptr = self.builder.ins().load(self.ptr_type, MemFlags::new(), data_ptr_addr, 0);
+        let data_ptr_addr = self
+            .builder
+            .ins()
+            .iadd_imm(list_ptr, Self::LIST_DATA_OFFSET);
+        let data_ptr = self
+            .builder
+            .ins()
+            .load(self.ptr_type, MemFlags::new(), data_ptr_addr, 0);
         let offset = self.builder.ins().imul_imm(index, elem_byte_width);
         let elem_addr = self.builder.ins().iadd(data_ptr, offset);
         // 窄存储时必须 ireduce，否则 store 按 value 类型宽度写出
@@ -7036,7 +8945,9 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         } else {
             value
         };
-        self.builder.ins().store(MemFlags::new(), store_val, elem_addr, 0);
+        self.builder
+            .ins()
+            .store(MemFlags::new(), store_val, elem_addr, 0);
         Ok(())
     }
 
@@ -7055,12 +8966,17 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             let expr_type = self.infer_expr_type(&exprs[i]);
             let await_func_name = match &expr_type {
                 BolideType::Float => "@_coroutine_await_float",
-                BolideType::Str | BolideType::BigInt | BolideType::Decimal
-                | BolideType::List(_) | BolideType::Custom(_) => "@_coroutine_await_ptr",
+                BolideType::Str
+                | BolideType::BigInt
+                | BolideType::Decimal
+                | BolideType::List(_)
+                | BolideType::Custom(_) => "@_coroutine_await_ptr",
                 _ => "@_coroutine_await_int",
             };
 
-            let await_ref = *self.func_refs.get(await_func_name)
+            let await_ref = *self
+                .func_refs
+                .get(await_func_name)
                 .ok_or_else(|| format!("{} not found", await_func_name))?;
 
             let call = self.builder.ins().call(await_ref, &[*future_ptr]);
@@ -7075,17 +8991,23 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             Ok(results[0])
         } else {
             // 使用运行时元组存储所有结果
-            let tuple_new = *self.func_refs.get("@_tuple_new")
+            let tuple_new = *self
+                .func_refs
+                .get("@_tuple_new")
                 .ok_or("tuple_new not found")?;
             let len = self.builder.ins().iconst(types::I64, results.len() as i64);
             let call = self.builder.ins().call(tuple_new, &[len]);
             let tuple_ptr = self.builder.inst_results(call)[0];
 
-            let tuple_set = *self.func_refs.get("@_tuple_set")
+            let tuple_set = *self
+                .func_refs
+                .get("@_tuple_set")
                 .ok_or("tuple_set not found")?;
             for (i, result) in results.iter().enumerate() {
                 let idx = self.builder.ins().iconst(types::I64, i as i64);
-                self.builder.ins().call(tuple_set, &[tuple_ptr, idx, *result]);
+                self.builder
+                    .ins()
+                    .call(tuple_set, &[tuple_ptr, idx, *result]);
             }
 
             Ok(tuple_ptr)
@@ -7093,9 +9015,14 @@ impl<'a, 'b> CompileContext<'a, 'b> {
     }
 
     /// 编译 await scope 语句
-    fn compile_await_scope(&mut self, scope_stmt: &bolide_parser::AwaitScopeStmt) -> Result<(), String> {
+    fn compile_await_scope(
+        &mut self,
+        scope_stmt: &bolide_parser::AwaitScopeStmt,
+    ) -> Result<(), String> {
         // 进入 scope
-        let scope_enter = *self.func_refs.get("@_scope_enter")
+        let scope_enter = *self
+            .func_refs
+            .get("@_scope_enter")
             .ok_or("scope_enter not found")?;
         self.builder.ins().call(scope_enter, &[]);
 
@@ -7105,7 +9032,9 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         }
 
         // 退出 scope（等待所有未完成的 Future）
-        let scope_exit = *self.func_refs.get("@_scope_exit")
+        let scope_exit = *self
+            .func_refs
+            .get("@_scope_exit")
             .ok_or("scope_exit not found")?;
         self.builder.ins().call(scope_exit, &[]);
 
@@ -7113,7 +9042,10 @@ impl<'a, 'b> CompileContext<'a, 'b> {
     }
 
     /// 编译 async select 语句 - 真正的竞争等待
-    fn compile_async_select(&mut self, select_stmt: &bolide_parser::AsyncSelectStmt) -> Result<(), String> {
+    fn compile_async_select(
+        &mut self,
+        select_stmt: &bolide_parser::AsyncSelectStmt,
+    ) -> Result<(), String> {
         use bolide_parser::AsyncSelectBranch;
 
         if select_stmt.branches.is_empty() {
@@ -7145,14 +9077,21 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         // 3. 将 futures 存入数组
         for (i, future) in futures.iter().enumerate() {
             let offset = (i * 8) as i32;
-            self.builder.ins().store(MemFlags::new(), *future, array_ptr, offset);
+            self.builder
+                .ins()
+                .store(MemFlags::new(), *future, array_ptr, offset);
         }
 
         // 4. 调用 select_wait_first 获取第一个完成的索引
-        let select_wait_first = *self.func_refs.get("@_select_wait_first")
+        let select_wait_first = *self
+            .func_refs
+            .get("@_select_wait_first")
             .ok_or("select_wait_first not found")?;
         let count = self.builder.ins().iconst(types::I64, branch_count as i64);
-        let call = self.builder.ins().call(select_wait_first, &[array_ptr, count]);
+        let call = self
+            .builder
+            .ins()
+            .call(select_wait_first, &[array_ptr, count]);
         let winner_idx = self.builder.inst_results(call)[0];
 
         // 5. 根据获胜索引执行对应分支
@@ -7179,7 +9118,9 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             // 比较 winner_idx == i
             let idx_const = self.builder.ins().iconst(types::I64, i as i64);
             let cmp = self.builder.ins().icmp(IntCC::Equal, winner_idx, idx_const);
-            self.builder.ins().brif(cmp, branch_block, &[], next_block, &[]);
+            self.builder
+                .ins()
+                .brif(cmp, branch_block, &[], next_block, &[]);
 
             // 分支块
             self.builder.switch_to_block(branch_block);
@@ -7190,12 +9131,18 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                     let bound_ty = self.infer_awaited_type(expr);
                     let await_func_name = match &bound_ty {
                         BolideType::Float => "@_coroutine_await_float",
-                        BolideType::Str | BolideType::BigInt | BolideType::Decimal
-                        | BolideType::Dynamic | BolideType::List(_) | BolideType::Dict(_, _)
+                        BolideType::Str
+                        | BolideType::BigInt
+                        | BolideType::Decimal
+                        | BolideType::Dynamic
+                        | BolideType::List(_)
+                        | BolideType::Dict(_, _)
                         | BolideType::Custom(_) => "@_coroutine_await_ptr",
                         _ => "@_coroutine_await_int",
                     };
-                    let await_ref = *self.func_refs.get(await_func_name)
+                    let await_ref = *self
+                        .func_refs
+                        .get(await_func_name)
                         .ok_or_else(|| format!("{} not found", await_func_name))?;
                     let call = self.builder.ins().call(await_ref, &[futures[i]]);
                     let result = self.builder.inst_results(call)[0];
@@ -7246,23 +9193,33 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         // 根据返回类型确定 join 函数后缀（只有 _int, _float, _ptr 三种）
         let type_suffix = match &return_type {
             Some(BolideType::Float) => "_float",
-            Some(BolideType::Str) | Some(BolideType::BigInt) | Some(BolideType::Decimal)
-            | Some(BolideType::Dynamic) | Some(BolideType::Ptr)
-            | Some(BolideType::List(_)) | Some(BolideType::Custom(_)) => "_ptr",
+            Some(BolideType::Str)
+            | Some(BolideType::BigInt)
+            | Some(BolideType::Decimal)
+            | Some(BolideType::Dynamic)
+            | Some(BolideType::Ptr)
+            | Some(BolideType::List(_))
+            | Some(BolideType::Custom(_)) => "_ptr",
             _ => "_int", // Int, Bool, Channel, Future, None 都用 int
         };
 
         // 确定 merge_block 的参数类型（与 type_suffix 保持一致）
         let result_type = match &return_type {
             Some(BolideType::Float) => types::F64,
-            Some(BolideType::Str) | Some(BolideType::BigInt) | Some(BolideType::Decimal)
-            | Some(BolideType::Dynamic) | Some(BolideType::Ptr)
-            | Some(BolideType::List(_)) | Some(BolideType::Custom(_)) => self.ptr_type,
+            Some(BolideType::Str)
+            | Some(BolideType::BigInt)
+            | Some(BolideType::Decimal)
+            | Some(BolideType::Dynamic)
+            | Some(BolideType::Ptr)
+            | Some(BolideType::List(_))
+            | Some(BolideType::Custom(_)) => self.ptr_type,
             _ => types::I64,
         };
 
         // 先检查是否在线程池上下文
-        let pool_is_active_ref = *self.func_refs.get("@_pool_is_active")
+        let pool_is_active_ref = *self
+            .func_refs
+            .get("@_pool_is_active")
             .ok_or("pool_is_active not found")?;
         let is_active_call = self.builder.ins().call(pool_is_active_ref, &[]);
         let is_active = self.builder.inst_results(is_active_call)[0];
@@ -7276,13 +9233,17 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         self.builder.append_block_param(merge_block, result_type);
 
         // 根据是否在线程池中选择分支
-        self.builder.ins().brif(is_active, pool_block, &[], thread_block, &[]);
+        self.builder
+            .ins()
+            .brif(is_active, pool_block, &[], thread_block, &[]);
 
         // 线程池分支: 使用 pool_join
         self.builder.switch_to_block(pool_block);
         self.builder.seal_block(pool_block);
         let pool_join_name = format!("@_pool_join{}", type_suffix);
-        let pool_join_ref = *self.func_refs.get(&pool_join_name)
+        let pool_join_ref = *self
+            .func_refs
+            .get(&pool_join_name)
             .ok_or(format!("{} not found", pool_join_name))?;
         let pool_call = self.builder.ins().call(pool_join_ref, &[handle]);
         let pool_result = self.builder.inst_results(pool_call)[0];
@@ -7292,7 +9253,9 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         self.builder.switch_to_block(thread_block);
         self.builder.seal_block(thread_block);
         let thread_join_name = format!("@_thread_join{}", type_suffix);
-        let thread_join_ref = *self.func_refs.get(&thread_join_name)
+        let thread_join_ref = *self
+            .func_refs
+            .get(&thread_join_name)
             .ok_or(format!("{} not found", thread_join_name))?;
         let thread_call = self.builder.ins().call(thread_join_ref, &[handle]);
         let thread_result = self.builder.inst_results(thread_call)[0];
@@ -7317,7 +9280,9 @@ impl<'a, 'b> CompileContext<'a, 'b> {
     fn compile_channel_create(&mut self, args: &[Expr]) -> Result<Value, String> {
         if args.is_empty() {
             // 无缓冲通道: channel_create()
-            let channel_create_ref = *self.func_refs.get("@_channel_create")
+            let channel_create_ref = *self
+                .func_refs
+                .get("@_channel_create")
                 .ok_or("channel_create not found")?;
             let call = self.builder.ins().call(channel_create_ref, &[]);
             let channel_ptr = self.builder.inst_results(call)[0];
@@ -7325,9 +9290,14 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         } else if args.len() == 1 {
             // 带缓冲通道: channel_create_buffered(capacity)
             let capacity = self.compile_expr(&args[0])?;
-            let channel_create_buffered_ref = *self.func_refs.get("@_channel_create_buffered")
+            let channel_create_buffered_ref = *self
+                .func_refs
+                .get("@_channel_create_buffered")
                 .ok_or("channel_create_buffered not found")?;
-            let call = self.builder.ins().call(channel_create_buffered_ref, &[capacity]);
+            let call = self
+                .builder
+                .ins()
+                .call(channel_create_buffered_ref, &[capacity]);
             let channel_ptr = self.builder.inst_results(call)[0];
             Ok(channel_ptr)
         } else {
@@ -7347,10 +9317,19 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                     let gv = self.module.declare_data_in_func(data_id, self.builder.func);
                     let addr = self.builder.ins().global_value(self.ptr_type, gv);
                     // 从地址加载值
-                    let val = self.builder.ins().load(self.ptr_type, MemFlags::new(), addr, 0);
+                    let val = self
+                        .builder
+                        .ins()
+                        .load(self.ptr_type, MemFlags::new(), addr, 0);
                     return Ok(val);
                 } else {
-                     return Err(format!("DEBUG: Global not found: {}, in module: {}, keys: {:?}, modules: {:?}", global_name, name, self.global_data_ids.keys().take(10).collect::<Vec<_>>(), self.modules.keys().collect::<Vec<_>>()));
+                    return Err(format!(
+                        "DEBUG: Global not found: {}, in module: {}, keys: {:?}, modules: {:?}",
+                        global_name,
+                        name,
+                        self.global_data_ids.keys().take(10).collect::<Vec<_>>(),
+                        self.modules.keys().collect::<Vec<_>>()
+                    ));
                 }
             }
         }
@@ -7370,24 +9349,34 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                 if let BolideType::Custom(name) = inner.as_ref() {
                     name.clone()
                 } else {
-                    return Err(format!("Member access on non-class unowned type: {:?}", inner));
+                    return Err(format!(
+                        "Member access on non-class unowned type: {:?}",
+                        inner
+                    ));
                 }
             }
             _ => return Err(format!("Member access on non-class type: {:?}", base_type)),
         };
 
-        let class_info = self.classes.get(&class_name)
+        let class_info = self
+            .classes
+            .get(&class_name)
             .ok_or_else(|| format!("Class not found: {}", class_name))?
             .clone();
 
-        let field = class_info.fields.iter()
+        let field = class_info
+            .fields
+            .iter()
             .find(|f| f.name == member)
             .ok_or_else(|| format!("Field '{}' not found in class '{}'", member, class_name))?;
 
         let field_offset = field.offset;
         let obj_ptr = self.compile_expr(base)?;
         let field_ptr = self.builder.ins().iadd_imm(obj_ptr, field_offset as i64);
-        let value = self.builder.ins().load(types::I64, MemFlags::new(), field_ptr, 0);
+        let value = self
+            .builder
+            .ins()
+            .load(types::I64, MemFlags::new(), field_ptr, 0);
 
         Ok(value)
     }
@@ -7409,7 +9398,8 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                     if self.classes.contains_key(func_name) {
                         return Ok(BolideType::Custom(func_name.clone()));
                     }
-                    self.func_return_types.get(func_name)
+                    self.func_return_types
+                        .get(func_name)
                         .cloned()
                         .flatten()
                         .ok_or_else(|| format!("Unknown function return type: {}", func_name))
@@ -7437,23 +9427,35 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                         if let BolideType::Custom(name) = inner.as_ref() {
                             name.clone()
                         } else {
-                            return Err(format!("Member access on non-class weak type: {:?}", inner));
+                            return Err(format!(
+                                "Member access on non-class weak type: {:?}",
+                                inner
+                            ));
                         }
                     }
                     BolideType::Unowned(inner) => {
                         if let BolideType::Custom(name) = inner.as_ref() {
                             name.clone()
                         } else {
-                            return Err(format!("Member access on non-class unowned type: {:?}", inner));
+                            return Err(format!(
+                                "Member access on non-class unowned type: {:?}",
+                                inner
+                            ));
                         }
                     }
                     _ => return Err(format!("Member access on non-class type: {:?}", base_type)),
                 };
-                let class_info = self.classes.get(&class_name)
+                let class_info = self
+                    .classes
+                    .get(&class_name)
                     .ok_or_else(|| format!("Class not found: {}", class_name))?;
-                let field = class_info.fields.iter()
+                let field = class_info
+                    .fields
+                    .iter()
                     .find(|f| f.name == *member)
-                    .ok_or_else(|| format!("Field '{}' not found in class '{}'", member, class_name))?;
+                    .ok_or_else(|| {
+                        format!("Field '{}' not found in class '{}'", member, class_name)
+                    })?;
                 Ok(field.ty.clone())
             }
             _ => Err("Cannot determine expression type".to_string()),
@@ -7462,7 +9464,9 @@ impl<'a, 'b> CompileContext<'a, 'b> {
 
     /// 编译模块函数调用 (module.func())
     fn compile_module_call(&mut self, func_name: &str, args: &[Expr]) -> Result<Value, String> {
-        let func_ref = *self.func_refs.get(func_name)
+        let func_ref = *self
+            .func_refs
+            .get(func_name)
             .ok_or_else(|| format!("Undefined function: {}", func_name))?;
 
         // 编译参数
@@ -7483,7 +9487,12 @@ impl<'a, 'b> CompileContext<'a, 'b> {
     }
 
     /// 编译方法调用 (obj.method(args))
-    fn compile_method_call(&mut self, base: &Expr, method_name: &str, args: &[Expr]) -> Result<Value, String> {
+    fn compile_method_call(
+        &mut self,
+        base: &Expr,
+        method_name: &str,
+        args: &[Expr],
+    ) -> Result<Value, String> {
         // 获取对象类型
         let class_name = self.get_expr_type(base)?;
 
@@ -7493,14 +9502,18 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             match method_name {
                 "close" | "cancel" => {
                     // 调用 thread_cancel
-                    let cancel_ref = *self.func_refs.get("@_thread_cancel")
+                    let cancel_ref = *self
+                        .func_refs
+                        .get("@_thread_cancel")
                         .ok_or("thread_cancel not found")?;
                     self.builder.ins().call(cancel_ref, &[handle]);
                     return Ok(self.builder.ins().iconst(types::I64, 0));
                 }
                 "is_cancelled" => {
                     // 调用 thread_is_cancelled
-                    let is_cancelled_ref = *self.func_refs.get("@_thread_is_cancelled")
+                    let is_cancelled_ref = *self
+                        .func_refs
+                        .get("@_thread_is_cancelled")
                         .ok_or("thread_is_cancelled not found")?;
                     let call = self.builder.ins().call(is_cancelled_ref, &[handle]);
                     return Ok(self.builder.inst_results(call)[0]);
@@ -7521,18 +9534,18 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             return self.compile_dict_method_call(dict_ptr, method_name, args);
         }
 
-
         let class_name = match class_name {
             BolideType::Custom(name) => name,
             _ => return Err(format!("Method call on non-class type: {:?}", class_name)),
         };
 
-
         // 查找方法（支持继承链）
         let full_method_name = self.find_method(&class_name, method_name)?;
 
         // 获取方法引用
-        let func_ref = *self.func_refs.get(&full_method_name)
+        let func_ref = *self
+            .func_refs
+            .get(&full_method_name)
             .ok_or_else(|| format!("Method '{}' not found", full_method_name))?;
 
         // 编译 self 参数（对象指针）
@@ -7556,7 +9569,12 @@ impl<'a, 'b> CompileContext<'a, 'b> {
     }
 
     /// 编译列表方法调用
-    fn compile_list_method_call(&mut self, list_ptr: Value, method_name: &str, args: &[Expr]) -> Result<Value, String> {
+    fn compile_list_method_call(
+        &mut self,
+        list_ptr: Value,
+        method_name: &str,
+        args: &[Expr],
+    ) -> Result<Value, String> {
         // from 借用检查：借用值禁止通过存储型方法进入容器
         if matches!(method_name, "push" | "append" | "insert") {
             for arg in args {
@@ -7570,19 +9588,28 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                     return Err(format!("{} expects 1 argument", method_name));
                 }
                 let value = self.compile_expr(&args[0])?;
-                let func_ref = *self.func_refs.get("@_list_push").ok_or("list_push not found")?;
+                let func_ref = *self
+                    .func_refs
+                    .get("@_list_push")
+                    .ok_or("list_push not found")?;
                 self.builder.ins().call(func_ref, &[list_ptr, value]);
                 Ok(self.builder.ins().iconst(types::I64, 0))
             }
             // pop() -> value
             "pop" => {
-                let func_ref = *self.func_refs.get("@_list_pop").ok_or("list_pop not found")?;
+                let func_ref = *self
+                    .func_refs
+                    .get("@_list_pop")
+                    .ok_or("list_pop not found")?;
                 let call = self.builder.ins().call(func_ref, &[list_ptr]);
                 Ok(self.builder.inst_results(call)[0])
             }
             // len() -> int
             "len" | "length" | "size" => {
-                let func_ref = *self.func_refs.get("@_list_len").ok_or("list_len not found")?;
+                let func_ref = *self
+                    .func_refs
+                    .get("@_list_len")
+                    .ok_or("list_len not found")?;
                 let call = self.builder.ins().call(func_ref, &[list_ptr]);
                 Ok(self.builder.inst_results(call)[0])
             }
@@ -7592,7 +9619,10 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                     return Err("get expects 1 argument".to_string());
                 }
                 let index = self.compile_expr(&args[0])?;
-                let func_ref = *self.func_refs.get("@_list_get").ok_or("list_get not found")?;
+                let func_ref = *self
+                    .func_refs
+                    .get("@_list_get")
+                    .ok_or("list_get not found")?;
                 let call = self.builder.ins().call(func_ref, &[list_ptr, index]);
                 Ok(self.builder.inst_results(call)[0])
             }
@@ -7603,7 +9633,10 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                 }
                 let index = self.compile_expr(&args[0])?;
                 let value = self.compile_expr(&args[1])?;
-                let func_ref = *self.func_refs.get("@_list_set").ok_or("list_set not found")?;
+                let func_ref = *self
+                    .func_refs
+                    .get("@_list_set")
+                    .ok_or("list_set not found")?;
                 let call = self.builder.ins().call(func_ref, &[list_ptr, index, value]);
                 Ok(self.builder.inst_results(call)[0])
             }
@@ -7614,7 +9647,10 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                 }
                 let index = self.compile_expr(&args[0])?;
                 let value = self.compile_expr(&args[1])?;
-                let func_ref = *self.func_refs.get("@_list_insert").ok_or("list_insert not found")?;
+                let func_ref = *self
+                    .func_refs
+                    .get("@_list_insert")
+                    .ok_or("list_insert not found")?;
                 self.builder.ins().call(func_ref, &[list_ptr, index, value]);
                 Ok(self.builder.ins().iconst(types::I64, 0))
             }
@@ -7624,19 +9660,28 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                     return Err("remove expects 1 argument".to_string());
                 }
                 let index = self.compile_expr(&args[0])?;
-                let func_ref = *self.func_refs.get("@_list_remove").ok_or("list_remove not found")?;
+                let func_ref = *self
+                    .func_refs
+                    .get("@_list_remove")
+                    .ok_or("list_remove not found")?;
                 let call = self.builder.ins().call(func_ref, &[list_ptr, index]);
                 Ok(self.builder.inst_results(call)[0])
             }
             // clear() -> void
             "clear" => {
-                let func_ref = *self.func_refs.get("@_list_clear").ok_or("list_clear not found")?;
+                let func_ref = *self
+                    .func_refs
+                    .get("@_list_clear")
+                    .ok_or("list_clear not found")?;
                 self.builder.ins().call(func_ref, &[list_ptr]);
                 Ok(self.builder.ins().iconst(types::I64, 0))
             }
             // reverse() -> void
             "reverse" => {
-                let func_ref = *self.func_refs.get("@_list_reverse").ok_or("list_reverse not found")?;
+                let func_ref = *self
+                    .func_refs
+                    .get("@_list_reverse")
+                    .ok_or("list_reverse not found")?;
                 self.builder.ins().call(func_ref, &[list_ptr]);
                 Ok(self.builder.ins().iconst(types::I64, 0))
             }
@@ -7646,7 +9691,10 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                     return Err("extend expects 1 argument".to_string());
                 }
                 let other = self.compile_expr(&args[0])?;
-                let func_ref = *self.func_refs.get("@_list_extend").ok_or("list_extend not found")?;
+                let func_ref = *self
+                    .func_refs
+                    .get("@_list_extend")
+                    .ok_or("list_extend not found")?;
                 self.builder.ins().call(func_ref, &[list_ptr, other]);
                 Ok(self.builder.ins().iconst(types::I64, 0))
             }
@@ -7656,7 +9704,10 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                     return Err(format!("{} expects 1 argument", method_name));
                 }
                 let value = self.compile_expr(&args[0])?;
-                let func_ref = *self.func_refs.get("@_list_contains").ok_or("list_contains not found")?;
+                let func_ref = *self
+                    .func_refs
+                    .get("@_list_contains")
+                    .ok_or("list_contains not found")?;
                 let call = self.builder.ins().call(func_ref, &[list_ptr, value]);
                 Ok(self.builder.inst_results(call)[0])
             }
@@ -7666,7 +9717,10 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                     return Err(format!("{} expects 1 argument", method_name));
                 }
                 let value = self.compile_expr(&args[0])?;
-                let func_ref = *self.func_refs.get("@_list_index_of").ok_or("list_index_of not found")?;
+                let func_ref = *self
+                    .func_refs
+                    .get("@_list_index_of")
+                    .ok_or("list_index_of not found")?;
                 let call = self.builder.ins().call(func_ref, &[list_ptr, value]);
                 Ok(self.builder.inst_results(call)[0])
             }
@@ -7676,13 +9730,19 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                     return Err("count expects 1 argument".to_string());
                 }
                 let value = self.compile_expr(&args[0])?;
-                let func_ref = *self.func_refs.get("@_list_count").ok_or("list_count not found")?;
+                let func_ref = *self
+                    .func_refs
+                    .get("@_list_count")
+                    .ok_or("list_count not found")?;
                 let call = self.builder.ins().call(func_ref, &[list_ptr, value]);
                 Ok(self.builder.inst_results(call)[0])
             }
             // sort() -> void
             "sort" => {
-                let func_ref = *self.func_refs.get("@_list_sort").ok_or("list_sort not found")?;
+                let func_ref = *self
+                    .func_refs
+                    .get("@_list_sort")
+                    .ok_or("list_sort not found")?;
                 self.builder.ins().call(func_ref, &[list_ptr]);
                 Ok(self.builder.ins().iconst(types::I64, 0))
             }
@@ -7693,31 +9753,46 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                 }
                 let start = self.compile_expr(&args[0])?;
                 let end = self.compile_expr(&args[1])?;
-                let func_ref = *self.func_refs.get("@_list_slice").ok_or("list_slice not found")?;
+                let func_ref = *self
+                    .func_refs
+                    .get("@_list_slice")
+                    .ok_or("list_slice not found")?;
                 let call = self.builder.ins().call(func_ref, &[list_ptr, start, end]);
                 Ok(self.builder.inst_results(call)[0])
             }
             // is_empty() -> bool
             "is_empty" | "empty" => {
-                let func_ref = *self.func_refs.get("@_list_is_empty").ok_or("list_is_empty not found")?;
+                let func_ref = *self
+                    .func_refs
+                    .get("@_list_is_empty")
+                    .ok_or("list_is_empty not found")?;
                 let call = self.builder.ins().call(func_ref, &[list_ptr]);
                 Ok(self.builder.inst_results(call)[0])
             }
             // first() -> value
             "first" => {
-                let func_ref = *self.func_refs.get("@_list_first").ok_or("list_first not found")?;
+                let func_ref = *self
+                    .func_refs
+                    .get("@_list_first")
+                    .ok_or("list_first not found")?;
                 let call = self.builder.ins().call(func_ref, &[list_ptr]);
                 Ok(self.builder.inst_results(call)[0])
             }
             // last() -> value
             "last" => {
-                let func_ref = *self.func_refs.get("@_list_last").ok_or("list_last not found")?;
+                let func_ref = *self
+                    .func_refs
+                    .get("@_list_last")
+                    .ok_or("list_last not found")?;
                 let call = self.builder.ins().call(func_ref, &[list_ptr]);
                 Ok(self.builder.inst_results(call)[0])
             }
             // copy() -> list (shallow copy, same as clone)
             "copy" | "clone" => {
-                let func_ref = *self.func_refs.get("@_list_clone").ok_or("list_clone not found")?;
+                let func_ref = *self
+                    .func_refs
+                    .get("@_list_clone")
+                    .ok_or("list_clone not found")?;
                 let call = self.builder.ins().call(func_ref, &[list_ptr]);
                 Ok(self.builder.inst_results(call)[0])
             }
@@ -7726,14 +9801,19 @@ impl<'a, 'b> CompileContext<'a, 'b> {
     }
 
     /// 编译字典方法调用
-    fn compile_dict_method_call(&mut self, dict_ptr: Value, method_name: &str, args: &[Expr]) -> Result<Value, String> {
+    fn compile_dict_method_call(
+        &mut self,
+        dict_ptr: Value,
+        method_name: &str,
+        args: &[Expr],
+    ) -> Result<Value, String> {
         match method_name {
             "set" => {
-                 let set_fn = *self.func_refs.get("@_dict_set").ok_or("dict_set failed")?;
-                 let k = self.compile_expr(&args[0])?;
-                 let v = self.compile_expr(&args[1])?;
-                 self.builder.ins().call(set_fn, &[dict_ptr, k, v]);
-                 Ok(self.builder.ins().iconst(types::I64, 0))
+                let set_fn = *self.func_refs.get("@_dict_set").ok_or("dict_set failed")?;
+                let k = self.compile_expr(&args[0])?;
+                let v = self.compile_expr(&args[1])?;
+                self.builder.ins().call(set_fn, &[dict_ptr, k, v]);
+                Ok(self.builder.ins().iconst(types::I64, 0))
             }
             "get" => {
                 let get_fn = *self.func_refs.get("@_dict_get").ok_or("dict_get failed")?;
@@ -7742,51 +9822,71 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                 Ok(self.builder.inst_results(call)[0])
             }
             "contains" => {
-                let contains_fn = *self.func_refs.get("@_dict_contains").ok_or("dict_contains failed")?;
+                let contains_fn = *self
+                    .func_refs
+                    .get("@_dict_contains")
+                    .ok_or("dict_contains failed")?;
                 let k = self.compile_expr(&args[0])?;
                 let call = self.builder.ins().call(contains_fn, &[dict_ptr, k]);
                 Ok(self.builder.inst_results(call)[0])
             }
             "remove" => {
-                let remove_fn = *self.func_refs.get("@_dict_remove").ok_or("dict_remove failed")?;
+                let remove_fn = *self
+                    .func_refs
+                    .get("@_dict_remove")
+                    .ok_or("dict_remove failed")?;
                 let k = self.compile_expr(&args[0])?;
                 let call = self.builder.ins().call(remove_fn, &[dict_ptr, k]);
                 Ok(self.builder.inst_results(call)[0])
             }
-             "len" => {
+            "len" => {
                 let len_fn = *self.func_refs.get("@_dict_len").ok_or("dict_len failed")?;
                 let call = self.builder.ins().call(len_fn, &[dict_ptr]);
                 Ok(self.builder.inst_results(call)[0])
             }
-             "is_empty" => {
-                let is_empty_fn = *self.func_refs.get("@_dict_is_empty").ok_or("dict_is_empty failed")?;
+            "is_empty" => {
+                let is_empty_fn = *self
+                    .func_refs
+                    .get("@_dict_is_empty")
+                    .ok_or("dict_is_empty failed")?;
                 let call = self.builder.ins().call(is_empty_fn, &[dict_ptr]);
                 Ok(self.builder.inst_results(call)[0])
             }
             "clear" => {
-                let clear_fn = *self.func_refs.get("@_dict_clear").ok_or("dict_clear failed")?;
+                let clear_fn = *self
+                    .func_refs
+                    .get("@_dict_clear")
+                    .ok_or("dict_clear failed")?;
                 self.builder.ins().call(clear_fn, &[dict_ptr]);
                 Ok(self.builder.ins().iconst(types::I64, 0))
             }
-             "keys" => {
-                let keys_fn = *self.func_refs.get("@_dict_keys").ok_or("dict_keys failed")?;
+            "keys" => {
+                let keys_fn = *self
+                    .func_refs
+                    .get("@_dict_keys")
+                    .ok_or("dict_keys failed")?;
                 let call = self.builder.ins().call(keys_fn, &[dict_ptr]);
                 Ok(self.builder.inst_results(call)[0])
             }
-             "values" => {
-                let values_fn = *self.func_refs.get("@_dict_values").ok_or("dict_values failed")?;
+            "values" => {
+                let values_fn = *self
+                    .func_refs
+                    .get("@_dict_values")
+                    .ok_or("dict_values failed")?;
                 let call = self.builder.ins().call(values_fn, &[dict_ptr]);
                 Ok(self.builder.inst_results(call)[0])
             }
-             "clone" => {
-                let clone_fn = *self.func_refs.get("@_dict_clone").ok_or("dict_clone failed")?;
+            "clone" => {
+                let clone_fn = *self
+                    .func_refs
+                    .get("@_dict_clone")
+                    .ok_or("dict_clone failed")?;
                 let call = self.builder.ins().call(clone_fn, &[dict_ptr]);
                 Ok(self.builder.inst_results(call)[0])
             }
             _ => Err(format!("Unknown dictionary method: {}", method_name)),
         }
     }
-
 
     /// 在继承链中查找方法
 
@@ -7804,12 +9904,21 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                     continue;
                 }
             }
-            return Err(format!("Method '{}' not found in class '{}' or its parents", method_name, class_name));
+            return Err(format!(
+                "Method '{}' not found in class '{}' or its parents",
+                method_name, class_name
+            ));
         }
     }
 
     /// 尝试运算符重载
-    fn try_operator_overload(&mut self, left: &Expr, op: &BinOp, right: &Expr, class_name: &str) -> Result<Option<Value>, String> {
+    fn try_operator_overload(
+        &mut self,
+        left: &Expr,
+        op: &BinOp,
+        right: &Expr,
+        class_name: &str,
+    ) -> Result<Option<Value>, String> {
         let method_name = match op {
             BinOp::Add => "__add__",
             BinOp::Sub => "__sub__",
@@ -7844,10 +9953,8 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             match decl {
                 bolide_parser::ExternDecl::Function(func) => {
                     // 记录 extern 函数信息
-                    self.extern_funcs.insert(
-                        func.name.clone(),
-                        (lib_path.clone(), func.clone())
-                    );
+                    self.extern_funcs
+                        .insert(func.name.clone(), (lib_path.clone(), func.clone()));
                 }
                 bolide_parser::ExternDecl::Struct(_) => {
                     // TODO: 处理结构体声明
@@ -7867,24 +9974,21 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         bytes.push(0);
 
         // 在栈上分配空间
-        let slot = self.builder.create_sized_stack_slot(
-            cranelift_codegen::ir::StackSlotData::new(
+        let slot = self
+            .builder
+            .create_sized_stack_slot(cranelift_codegen::ir::StackSlotData::new(
                 cranelift_codegen::ir::StackSlotKind::ExplicitSlot,
                 bytes.len() as u32,
                 0,
-            )
-        );
+            ));
         let ptr = self.builder.ins().stack_addr(self.ptr_type, slot, 0);
 
         // 写入字符串数据
         for (i, byte) in bytes.iter().enumerate() {
             let val = self.builder.ins().iconst(types::I8, *byte as i64);
-            self.builder.ins().store(
-                cranelift_codegen::ir::MemFlags::new(),
-                val,
-                ptr,
-                i as i32,
-            );
+            self.builder
+                .ins()
+                .store(cranelift_codegen::ir::MemFlags::new(), val, ptr, i as i32);
         }
 
         Ok(ptr)
@@ -7901,7 +10005,9 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         let lib_path_ptr = self.create_string_constant(lib_path)?;
 
         // 2. 加载库
-        let load_lib_ref = *self.func_refs.get("@_ffi_load_library")
+        let load_lib_ref = *self
+            .func_refs
+            .get("@_ffi_load_library")
             .ok_or("ffi_load_library not found")?;
         self.builder.ins().call(load_lib_ref, &[lib_path_ptr]);
 
@@ -7909,9 +10015,14 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         let func_name_ptr = self.create_string_constant(&extern_func.name)?;
 
         // 4. 获取函数指针
-        let get_symbol_ref = *self.func_refs.get("@_ffi_get_symbol")
+        let get_symbol_ref = *self
+            .func_refs
+            .get("@_ffi_get_symbol")
             .ok_or("ffi_get_symbol not found")?;
-        let call = self.builder.ins().call(get_symbol_ref, &[lib_path_ptr, func_name_ptr]);
+        let call = self
+            .builder
+            .ins()
+            .call(get_symbol_ref, &[lib_path_ptr, func_name_ptr]);
         let func_ptr = self.builder.inst_results(call)[0];
 
         // 5. 编译参数并进行类型转换
@@ -7939,7 +10050,9 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                 if let bolide_parser::CType::Ptr(inner) = &param.ty {
                     if matches!(inner.as_ref(), bolide_parser::CType::Char) {
                         // 参数类型是 *char，需要转换 BolideString* -> char*
-                        let as_cstr_ref = *self.func_refs.get("@_string_as_cstr")
+                        let as_cstr_ref = *self
+                            .func_refs
+                            .get("@_string_as_cstr")
                             .ok_or("string_as_cstr not found")?;
                         let call = self.builder.ins().call(as_cstr_ref, &[val]);
                         let cstr_ptr = self.builder.inst_results(call)[0];
@@ -7977,7 +10090,10 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         let sig_ref = self.builder.import_signature(sig);
 
         // 7. 间接调用
-        let call = self.builder.ins().call_indirect(sig_ref, func_ptr, &arg_values);
+        let call = self
+            .builder
+            .ins()
+            .call_indirect(sig_ref, func_ptr, &arg_values);
         let results = self.builder.inst_results(call);
 
         if results.is_empty() {
@@ -7992,7 +10108,9 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                 if let bolide_parser::CType::Ptr(inner) = ret_ty {
                     if matches!(inner.as_ref(), bolide_parser::CType::Char) {
                         // 返回类型是 *char，需要转换为 BolideString*
-                        let string_new_ref = *self.func_refs.get("@_bolide_string_new")
+                        let string_new_ref = *self
+                            .func_refs
+                            .get("@_bolide_string_new")
                             .ok_or("bolide_string_new not found")?;
                         let call = self.builder.ins().call(string_new_ref, &[result]);
                         let bolide_string = self.builder.inst_results(call)[0];
@@ -8015,7 +10133,10 @@ impl<'a, 'b> CompileContext<'a, 'b> {
     }
 
     /// 构建 extern 函数签名
-    fn build_extern_signature(&self, func: &bolide_parser::ExternFunc) -> Result<Signature, String> {
+    fn build_extern_signature(
+        &self,
+        func: &bolide_parser::ExternFunc,
+    ) -> Result<Signature, String> {
         use cranelift_codegen::isa::CallConv;
 
         // Windows 使用 WindowsFastcall，其他平台使用 SystemV
@@ -8047,7 +10168,7 @@ impl<'a, 'b> CompileContext<'a, 'b> {
     fn ctype_to_cranelift(&self, ctype: &bolide_parser::CType) -> types::Type {
         use bolide_parser::CType;
         match ctype {
-            CType::Void => types::I64,  // void 用 i64 占位
+            CType::Void => types::I64, // void 用 i64 占位
             CType::Char | CType::I8 => types::I8,
             CType::UChar | CType::U8 => types::I8,
             CType::Short | CType::I16 => types::I16,

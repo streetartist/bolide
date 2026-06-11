@@ -3,11 +3,11 @@
 //! 提供线程创建、线程池和 Future 支持
 //! 使用 trampoline 方案，运行时只处理无参函数
 
-use std::sync::{Arc, Mutex, Condvar};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::thread::{self, JoinHandle};
 use std::collections::VecDeque;
 use std::os::raw::c_void;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
+use std::thread::{self, JoinHandle};
 
 /// 包装函数指针使其可跨线程发送
 #[derive(Clone, Copy)]
@@ -65,22 +65,20 @@ impl BolideThreadPool {
             let condvar = Arc::clone(&condvar);
             let shutdown = Arc::clone(&shutdown);
 
-            let thread = thread::spawn(move || {
-                loop {
-                    let job = {
-                        let mut queue = sender.lock().unwrap();
-                        while queue.is_empty() {
-                            if *shutdown.lock().unwrap() {
-                                return;
-                            }
-                            queue = condvar.wait(queue).unwrap();
+            let thread = thread::spawn(move || loop {
+                let job = {
+                    let mut queue = sender.lock().unwrap();
+                    while queue.is_empty() {
+                        if *shutdown.lock().unwrap() {
+                            return;
                         }
-                        queue.pop_front()
-                    };
-
-                    if let Some(job) = job {
-                        job();
+                        queue = condvar.wait(queue).unwrap();
                     }
+                    queue.pop_front()
+                };
+
+                if let Some(job) = job {
+                    job();
                 }
             });
 
@@ -129,7 +127,9 @@ unsafe impl Sync for BolidePoolHandle {}
 
 /// 创建新线程执行返回 int 的无参函数
 #[no_mangle]
-pub extern "C" fn bolide_thread_spawn_int(func_ptr: extern "C" fn() -> i64) -> *mut BolideThreadHandle {
+pub extern "C" fn bolide_thread_spawn_int(
+    func_ptr: extern "C" fn() -> i64,
+) -> *mut BolideThreadHandle {
     let send_fn = SendFnPtr(func_ptr as *const c_void);
     let cancelled = Arc::new(AtomicBool::new(false));
 
@@ -148,7 +148,9 @@ pub extern "C" fn bolide_thread_spawn_int(func_ptr: extern "C" fn() -> i64) -> *
 
 /// 创建新线程执行返回 float 的无参函数
 #[no_mangle]
-pub extern "C" fn bolide_thread_spawn_float(func_ptr: extern "C" fn() -> f64) -> *mut BolideThreadHandle {
+pub extern "C" fn bolide_thread_spawn_float(
+    func_ptr: extern "C" fn() -> f64,
+) -> *mut BolideThreadHandle {
     let send_fn = SendFnPtr(func_ptr as *const c_void);
     let cancelled = Arc::new(AtomicBool::new(false));
 
@@ -167,7 +169,9 @@ pub extern "C" fn bolide_thread_spawn_float(func_ptr: extern "C" fn() -> f64) ->
 
 /// 创建新线程执行返回指针的无参函数（用于 string, bigint, decimal 等）
 #[no_mangle]
-pub extern "C" fn bolide_thread_spawn_ptr(func_ptr: extern "C" fn() -> *mut c_void) -> *mut BolideThreadHandle {
+pub extern "C" fn bolide_thread_spawn_ptr(
+    func_ptr: extern "C" fn() -> *mut c_void,
+) -> *mut BolideThreadHandle {
     let send_fn = SendFnPtr(func_ptr as *const c_void);
     let cancelled = Arc::new(AtomicBool::new(false));
 
@@ -178,7 +182,9 @@ pub extern "C" fn bolide_thread_spawn_ptr(func_ptr: extern "C" fn() -> *mut c_vo
 
     Box::into_raw(Box::new(BolideThreadHandle {
         handle: Some(handle),
-        result: ThreadResult { ptr_val: std::ptr::null_mut() },
+        result: ThreadResult {
+            ptr_val: std::ptr::null_mut(),
+        },
         has_result: false,
         cancelled,
     }))
@@ -199,7 +205,9 @@ pub extern "C" fn bolide_thread_spawn_int_with_env(
     let handle = thread::spawn(move || {
         let f: extern "C" fn(*mut c_void) -> i64 = unsafe { std::mem::transmute(send_fn) };
         let env_ptr = env_addr as *mut c_void;
-        ThreadResult { int_val: f(env_ptr) }
+        ThreadResult {
+            int_val: f(env_ptr),
+        }
     });
 
     Box::into_raw(Box::new(BolideThreadHandle {
@@ -223,7 +231,9 @@ pub extern "C" fn bolide_thread_spawn_float_with_env(
     let handle = thread::spawn(move || {
         let f: extern "C" fn(*mut c_void) -> f64 = unsafe { std::mem::transmute(send_fn) };
         let env_ptr = env_addr as *mut c_void;
-        ThreadResult { float_val: f(env_ptr) }
+        ThreadResult {
+            float_val: f(env_ptr),
+        }
     });
 
     Box::into_raw(Box::new(BolideThreadHandle {
@@ -247,12 +257,16 @@ pub extern "C" fn bolide_thread_spawn_ptr_with_env(
     let handle = thread::spawn(move || {
         let f: extern "C" fn(*mut c_void) -> *mut c_void = unsafe { std::mem::transmute(send_fn) };
         let env_ptr = env_addr as *mut c_void;
-        ThreadResult { ptr_val: f(env_ptr) }
+        ThreadResult {
+            ptr_val: f(env_ptr),
+        }
     });
 
     Box::into_raw(Box::new(BolideThreadHandle {
         handle: Some(handle),
-        result: ThreadResult { ptr_val: std::ptr::null_mut() },
+        result: ThreadResult {
+            ptr_val: std::ptr::null_mut(),
+        },
         has_result: false,
         cancelled,
     }))
@@ -357,7 +371,11 @@ pub extern "C" fn bolide_thread_is_cancelled(handle: *const BolideThreadHandle) 
         return 0;
     }
     unsafe {
-        if (*handle).cancelled.load(Ordering::SeqCst) { 1 } else { 0 }
+        if (*handle).cancelled.load(Ordering::SeqCst) {
+            1
+        } else {
+            0
+        }
     }
 }
 
@@ -394,7 +412,11 @@ pub extern "C" fn bolide_pool_exit() {
 #[no_mangle]
 pub extern "C" fn bolide_pool_is_active() -> i64 {
     let ctx = POOL_CONTEXT.lock().unwrap();
-    if ctx.is_some() { 1 } else { 0 }
+    if ctx.is_some() {
+        1
+    } else {
+        0
+    }
 }
 
 /// 在线程池中执行返回 int 的任务
@@ -444,7 +466,9 @@ pub extern "C" fn bolide_pool_spawn_int(func_ptr: extern "C" fn() -> i64) -> *mu
 
 /// 在线程池中执行返回 float 的任务
 #[no_mangle]
-pub extern "C" fn bolide_pool_spawn_float(func_ptr: extern "C" fn() -> f64) -> *mut BolidePoolHandle {
+pub extern "C" fn bolide_pool_spawn_float(
+    func_ptr: extern "C" fn() -> f64,
+) -> *mut BolidePoolHandle {
     let send_fn = SendFnPtr(func_ptr as *const c_void);
 
     let result: Arc<Mutex<Option<ThreadResult>>> = Arc::new(Mutex::new(None));
@@ -488,7 +512,9 @@ pub extern "C" fn bolide_pool_spawn_float(func_ptr: extern "C" fn() -> f64) -> *
 
 /// 在线程池中执行返回指针的任务
 #[no_mangle]
-pub extern "C" fn bolide_pool_spawn_ptr(func_ptr: extern "C" fn() -> *mut c_void) -> *mut BolidePoolHandle {
+pub extern "C" fn bolide_pool_spawn_ptr(
+    func_ptr: extern "C" fn() -> *mut c_void,
+) -> *mut BolidePoolHandle {
     let send_fn = SendFnPtr(func_ptr as *const c_void);
 
     let result: Arc<Mutex<Option<ThreadResult>>> = Arc::new(Mutex::new(None));
@@ -554,7 +580,9 @@ pub extern "C" fn bolide_pool_spawn_int_with_env(
         let job = Box::new(move || {
             let f: extern "C" fn(*mut c_void) -> i64 = unsafe { std::mem::transmute(send_fn) };
             let env_ptr = env_addr as *mut c_void;
-            let res = ThreadResult { int_val: f(env_ptr) };
+            let res = ThreadResult {
+                int_val: f(env_ptr),
+            };
             *result_clone.lock().unwrap() = Some(res);
             let (lock, cvar) = &*completed_clone;
             *lock.lock().unwrap() = true;
@@ -571,7 +599,9 @@ pub extern "C" fn bolide_pool_spawn_int_with_env(
         thread::spawn(move || {
             let f: extern "C" fn(*mut c_void) -> i64 = unsafe { std::mem::transmute(send_fn) };
             let env_ptr = env_addr as *mut c_void;
-            let res = ThreadResult { int_val: f(env_ptr) };
+            let res = ThreadResult {
+                int_val: f(env_ptr),
+            };
             *result_clone.lock().unwrap() = Some(res);
             let (lock, cvar) = &*completed_clone;
             *lock.lock().unwrap() = true;
@@ -604,7 +634,9 @@ pub extern "C" fn bolide_pool_spawn_float_with_env(
         let job = Box::new(move || {
             let f: extern "C" fn(*mut c_void) -> f64 = unsafe { std::mem::transmute(send_fn) };
             let env_ptr = env_addr as *mut c_void;
-            let res = ThreadResult { float_val: f(env_ptr) };
+            let res = ThreadResult {
+                float_val: f(env_ptr),
+            };
             *result_clone.lock().unwrap() = Some(res);
             let (lock, cvar) = &*completed_clone;
             *lock.lock().unwrap() = true;
@@ -621,7 +653,9 @@ pub extern "C" fn bolide_pool_spawn_float_with_env(
         thread::spawn(move || {
             let f: extern "C" fn(*mut c_void) -> f64 = unsafe { std::mem::transmute(send_fn) };
             let env_ptr = env_addr as *mut c_void;
-            let res = ThreadResult { float_val: f(env_ptr) };
+            let res = ThreadResult {
+                float_val: f(env_ptr),
+            };
             *result_clone.lock().unwrap() = Some(res);
             let (lock, cvar) = &*completed_clone;
             *lock.lock().unwrap() = true;
@@ -652,9 +686,12 @@ pub extern "C" fn bolide_pool_spawn_ptr_with_env(
         let pool = unsafe { &*send_ptr.0 };
 
         let job = Box::new(move || {
-            let f: extern "C" fn(*mut c_void) -> *mut c_void = unsafe { std::mem::transmute(send_fn) };
+            let f: extern "C" fn(*mut c_void) -> *mut c_void =
+                unsafe { std::mem::transmute(send_fn) };
             let env_ptr = env_addr as *mut c_void;
-            let res = ThreadResult { ptr_val: f(env_ptr) };
+            let res = ThreadResult {
+                ptr_val: f(env_ptr),
+            };
             *result_clone.lock().unwrap() = Some(res);
             let (lock, cvar) = &*completed_clone;
             *lock.lock().unwrap() = true;
@@ -669,9 +706,12 @@ pub extern "C" fn bolide_pool_spawn_ptr_with_env(
         pool.condvar.notify_one();
     } else {
         thread::spawn(move || {
-            let f: extern "C" fn(*mut c_void) -> *mut c_void = unsafe { std::mem::transmute(send_fn) };
+            let f: extern "C" fn(*mut c_void) -> *mut c_void =
+                unsafe { std::mem::transmute(send_fn) };
             let env_ptr = env_addr as *mut c_void;
-            let res = ThreadResult { ptr_val: f(env_ptr) };
+            let res = ThreadResult {
+                ptr_val: f(env_ptr),
+            };
             *result_clone.lock().unwrap() = Some(res);
             let (lock, cvar) = &*completed_clone;
             *lock.lock().unwrap() = true;

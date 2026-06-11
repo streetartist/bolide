@@ -2,9 +2,9 @@
 //!
 //! 提供 Hot Future 风格的协程支持
 
-use std::sync::{Arc, Mutex, Condvar};
-use std::thread;
 use std::os::raw::c_void;
+use std::sync::{Arc, Condvar, Mutex};
+use std::thread;
 
 /// 协程状态
 #[derive(Clone, Copy, PartialEq)]
@@ -137,7 +137,7 @@ unsafe impl Send for SendFnPtr {}
 /// 启动协程（返回 int）
 #[no_mangle]
 pub extern "C" fn bolide_coroutine_spawn_int(
-    func_ptr: extern "C" fn() -> i64
+    func_ptr: extern "C" fn() -> i64,
 ) -> *mut BolideFuture {
     let future = Box::new(BolideFuture::new());
     let future_ptr = Box::into_raw(future);
@@ -176,7 +176,7 @@ pub extern "C" fn bolide_coroutine_spawn_int(
 /// 启动协程（返回 float）
 #[no_mangle]
 pub extern "C" fn bolide_coroutine_spawn_float(
-    func_ptr: extern "C" fn() -> f64
+    func_ptr: extern "C" fn() -> f64,
 ) -> *mut BolideFuture {
     let future = Box::new(BolideFuture::new());
     let future_ptr = Box::into_raw(future);
@@ -215,7 +215,7 @@ pub extern "C" fn bolide_coroutine_spawn_float(
 /// 启动协程（返回指针）
 #[no_mangle]
 pub extern "C" fn bolide_coroutine_spawn_ptr(
-    func_ptr: extern "C" fn() -> *mut c_void
+    func_ptr: extern "C" fn() -> *mut c_void,
 ) -> *mut BolideFuture {
     let future = Box::new(BolideFuture::new());
     let future_ptr = Box::into_raw(future);
@@ -254,25 +254,40 @@ pub extern "C" fn bolide_coroutine_spawn_ptr(
 /// 等待协程结果（int）
 #[no_mangle]
 pub extern "C" fn bolide_coroutine_await_int(future: *mut BolideFuture) -> i64 {
-    if future.is_null() { return 0; }
+    if future.is_null() {
+        return 0;
+    }
     let future = unsafe { &*future };
-    future.await_result().map(|r| unsafe { r.int_val }).unwrap_or(0)
+    future
+        .await_result()
+        .map(|r| unsafe { r.int_val })
+        .unwrap_or(0)
 }
 
 /// 等待协程结果（float）
 #[no_mangle]
 pub extern "C" fn bolide_coroutine_await_float(future: *mut BolideFuture) -> f64 {
-    if future.is_null() { return 0.0; }
+    if future.is_null() {
+        return 0.0;
+    }
     let future = unsafe { &*future };
-    future.await_result().map(|r| unsafe { r.float_val }).unwrap_or(0.0)
+    future
+        .await_result()
+        .map(|r| unsafe { r.float_val })
+        .unwrap_or(0.0)
 }
 
 /// 等待协程结果（指针）
 #[no_mangle]
 pub extern "C" fn bolide_coroutine_await_ptr(future: *mut BolideFuture) -> *mut c_void {
-    if future.is_null() { return std::ptr::null_mut(); }
+    if future.is_null() {
+        return std::ptr::null_mut();
+    }
     let future = unsafe { &*future };
-    future.await_result().map(|r| unsafe { r.ptr_val }).unwrap_or(std::ptr::null_mut())
+    future
+        .await_result()
+        .map(|r| unsafe { r.ptr_val })
+        .unwrap_or(std::ptr::null_mut())
 }
 
 /// 取消协程
@@ -288,7 +303,9 @@ pub extern "C" fn bolide_coroutine_cancel(future: *mut BolideFuture) {
 #[no_mangle]
 pub extern "C" fn bolide_coroutine_free(future: *mut BolideFuture) {
     if !future.is_null() {
-        unsafe { let _ = Box::from_raw(future); }
+        unsafe {
+            let _ = Box::from_raw(future);
+        }
     }
 }
 
@@ -439,7 +456,9 @@ pub extern "C" fn bolide_scope_enter() {
 /// 注册 Future 到当前 scope
 #[no_mangle]
 pub extern "C" fn bolide_scope_register(future: *mut BolideFuture) {
-    if future.is_null() { return; }
+    if future.is_null() {
+        return;
+    }
     SCOPE_FUTURES.with(|stack| {
         if let Some(current) = stack.borrow_mut().last_mut() {
             current.push(future);
@@ -502,17 +521,12 @@ impl SelectContext {
 
 /// 等待第一个完成的 Future，返回其索引（0-based）
 #[no_mangle]
-pub extern "C" fn bolide_select_wait_first(
-    futures: *const *mut BolideFuture,
-    count: i64,
-) -> i64 {
+pub extern "C" fn bolide_select_wait_first(futures: *const *mut BolideFuture, count: i64) -> i64 {
     if futures.is_null() || count <= 0 {
         return -1;
     }
 
-    let futures_slice = unsafe {
-        std::slice::from_raw_parts(futures, count as usize)
-    };
+    let futures_slice = unsafe { std::slice::from_raw_parts(futures, count as usize) };
 
     // 先检查是否有已完成的（按顺序，保证确定性）
     for (i, &future_ptr) in futures_slice.iter().enumerate() {
@@ -553,4 +567,3 @@ pub extern "C" fn bolide_select_wait_first(
     // 等待第一个完成（零轮询，纯事件驱动）
     ctx.wait_winner() as i64
 }
-

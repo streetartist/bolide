@@ -26,15 +26,35 @@ pub enum Statement {
     /// continue; - 进入最近一层循环的下一次迭代
     Continue,
     Return(Option<Expr>),
+    /// throw expr; - 抛出异常
+    Throw(Expr),
+    /// try { ... } catch { ... } - 异常捕获
+    Try(TryStmt),
     Expr(Expr),
     Import(Import),
     ExternBlock(ExternBlock),
 }
 
+/// try/catch 语句
+#[derive(Debug, Clone)]
+pub struct TryStmt {
+    pub try_body: Vec<Statement>,
+    pub catch_clauses: Vec<CatchClause>,
+    pub finally: Option<Vec<Statement>>,
+}
+
+/// catch 子句
+#[derive(Debug, Clone)]
+pub struct CatchClause {
+    pub var: String,
+    pub ty: Type,
+    pub body: Vec<Statement>,
+}
+
 /// 赋值语句
 #[derive(Debug, Clone)]
 pub struct Assign {
-    pub target: Expr,  // 可以是 Ident 或 Member
+    pub target: Expr, // 可以是 Ident 或 Member
     pub value: Expr,
 }
 
@@ -82,7 +102,7 @@ pub struct Param {
 #[derive(Debug, Clone)]
 pub struct ClassDef {
     pub name: String,
-    pub parent: Option<String>,  // 父类名（继承）
+    pub parent: Option<String>, // 父类名（继承）
     pub fields: Vec<ClassField>,
     pub methods: Vec<FuncDef>,
 }
@@ -147,9 +167,7 @@ pub enum SelectBranch {
         body: Vec<Statement>,
     },
     /// 默认分支: default => { body }
-    Default {
-        body: Vec<Statement>,
-    },
+    Default { body: Vec<Statement> },
 }
 
 /// await scope 语句: await scope { ... }
@@ -174,10 +192,7 @@ pub enum AsyncSelectBranch {
         body: Vec<Statement>,
     },
     /// 不带绑定: expr => { body }
-    Expr {
-        expr: Expr,
-        body: Vec<Statement>,
-    },
+    Expr { expr: Expr, body: Vec<Statement> },
 }
 
 /// 通道发送: ch <- val;
@@ -190,8 +205,8 @@ pub struct SendStmt {
 /// Import 语句
 #[derive(Debug, Clone)]
 pub struct Import {
-    pub path: Vec<String>,      // 模块路径 (如 math.utils)
-    pub file_path: Option<String>,  // 文件路径 (如 "utils.bl")
+    pub path: Vec<String>,         // 模块路径 (如 math.utils)
+    pub file_path: Option<String>, // 文件路径 (如 "utils.bl")
     pub alias: Option<String>,
 }
 
@@ -202,8 +217,8 @@ pub enum Expr {
     Float(f64),
     Bool(bool),
     String(String),
-    BigInt(String),     // 存储原始字符串以支持任意大数
-    Decimal(String),    // 存储原始字符串以支持任意精度
+    BigInt(String),  // 存储原始字符串以支持任意大数
+    Decimal(String), // 存储原始字符串以支持任意精度
     Ident(String),
     BinOp(Box<Expr>, BinOp, Box<Expr>),
     UnaryOp(UnaryOp, Box<Expr>),
@@ -229,15 +244,26 @@ pub enum Expr {
 /// 二元运算符
 #[derive(Debug, Clone, Copy)]
 pub enum BinOp {
-    Add, Sub, Mul, Div, Mod,
-    Eq, Ne, Lt, Le, Gt, Ge,
-    And, Or,
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Mod,
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+    And,
+    Or,
 }
 
 /// 一元运算符
 #[derive(Debug, Clone, Copy)]
 pub enum UnaryOp {
-    Neg, Not,
+    Neg,
+    Not,
 }
 
 /// 类型
@@ -251,13 +277,13 @@ pub enum Type {
     Decimal,
     Dynamic,
     Ptr,
-    Channel(Box<Type>),  // 泛型 channel<T>
-    Future,  // spawn 返回的句柄类型
-    Func,    // 函数类型（简单版本，无签名）
-    FuncSig(Vec<Type>, Option<Box<Type>>),  // 带签名的函数类型: func(params) -> return_type
+    Channel(Box<Type>),                    // 泛型 channel<T>
+    Future,                                // spawn 返回的句柄类型
+    Func,                                  // 函数类型（简单版本，无签名）
+    FuncSig(Vec<Type>, Option<Box<Type>>), // 带签名的函数类型: func(params) -> return_type
     List(Box<Type>),
-    Dict(Box<Type>, Box<Type>),  // dict<K, V>
-    Tuple(Vec<Type>),  // 元组类型: (T1, T2, ...)
+    Dict(Box<Type>, Box<Type>), // dict<K, V>
+    Tuple(Vec<Type>),           // 元组类型: (T1, T2, ...)
     Custom(String),
     Weak(Box<Type>),    // 弱引用: weak T
     Unowned(Box<Type>), // 无主引用: unowned T
@@ -284,7 +310,7 @@ pub struct ExternFunc {
     pub name: String,
     pub params: Vec<CParam>,
     pub return_type: Option<CType>,
-    pub variadic: bool,  // 支持可变参数 (...)
+    pub variadic: bool, // 支持可变参数 (...)
 }
 
 /// C 函数参数
@@ -327,7 +353,14 @@ pub enum CType {
     Double,
     Bool,
     // 固定宽度整数
-    I8, U8, I16, U16, I32, U32, I64, U64,
+    I8,
+    U8,
+    I16,
+    U16,
+    I32,
+    U32,
+    I64,
+    U64,
     // 特殊类型
     SizeT,
     PtrDiffT,

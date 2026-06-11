@@ -5,10 +5,11 @@
 //! - clone 时 strong_count += 1（浅拷贝）
 //! - drop 时 strong_count -= 1，归零时释放
 
-use std::ffi::CStr;
-use std::os::raw::c_char;
+use std::alloc::{alloc, dealloc, Layout};
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::ffi::CStr;
+use std::os::raw::c_char;
 
 thread_local! {
     // String interner for literals (stores raw pointers with Strong RC=1 owned by interner)
@@ -24,32 +25,60 @@ use crate::rc::{RcHeader, TypeTag};
 /// +------------------+
 /// | RcHeader (16B)   |  引用计数头
 /// +------------------+
-/// | data: *mut char  |  C 字符串指针
-/// +------------------+
 /// | len: usize       |  字符串长度
 /// +------------------+
-/// | capacity: usize  |  分配容量
+/// | bytes[len + 1]   |  UTF-8 数据和末尾 NUL
 /// +------------------+
 /// ```
 #[repr(C)]
 pub struct BolideString {
     header: RcHeader,
-    data: *mut c_char,
     len: usize,
-    capacity: usize,
 }
 
 impl BolideString {
-    /// 分配 len+1 字节缓冲区（末尾 NUL，兼容 C 字符串用法）
-    fn alloc_buffer(len: usize) -> *mut c_char {
-        let layout = std::alloc::Layout::array::<u8>(len + 1).unwrap();
+    #[inline]
+    fn layout_for_len(len: usize) -> Layout {
+        let size = std::mem::size_of::<Self>()
+            .checked_add(len)
+            .and_then(|n| n.checked_add(1))
+            .expect("BolideString allocation size overflow");
+        Layout::from_size_align(size, std::mem::align_of::<Self>()).unwrap()
+    }
+
+    #[inline]
+    fn data_ptr(&self) -> *mut c_char {
+        unsafe { (self as *const Self as *mut u8).add(std::mem::size_of::<Self>()) as *mut c_char }
+    }
+
+    fn from_parts(first: &str, second: Option<&str>) -> *mut Self {
+        let second_len = second.map_or(0, str::len);
+        let len = first.len() + second_len;
+        let layout = Self::layout_for_len(len);
+
         unsafe {
-            let p = std::alloc::alloc(layout);
-            if p.is_null() {
+            let ptr = alloc(layout);
+            if ptr.is_null() {
                 std::alloc::handle_alloc_error(layout);
             }
-            *p.add(len) = 0;
-            p as *mut c_char
+
+            let string = ptr as *mut Self;
+            std::ptr::write(
+                string,
+                Self {
+                    header: RcHeader::new(TypeTag::String),
+                    len,
+                },
+            );
+
+            let data = (*string).data_ptr() as *mut u8;
+            std::ptr::copy_nonoverlapping(first.as_ptr(), data, first.len());
+            if let Some(second) = second {
+                std::ptr::copy_nonoverlapping(second.as_ptr(), data.add(first.len()), second.len());
+            }
+            *data.add(len) = 0;
+
+            string
         }
     }
 
@@ -57,35 +86,12 @@ impl BolideString {
     ///
     /// 内容必须是合法 UTF-8（&str 保证），as_str 据此免校验
     pub fn new(s: &str) -> *mut Self {
-        let len = s.len();
-        let data = Self::alloc_buffer(len);
-        unsafe {
-            std::ptr::copy_nonoverlapping(s.as_ptr(), data as *mut u8, len);
-        }
-        let string = Self {
-            header: RcHeader::new(TypeTag::String),
-            data,
-            len,
-            capacity: len + 1,
-        };
-        Box::into_raw(Box::new(string))
+        Self::from_parts(s, None)
     }
 
     /// 拼接两个字符串为新字符串（单次分配，无中间拷贝）
     pub fn concat(a: &str, b: &str) -> *mut Self {
-        let len = a.len() + b.len();
-        let data = Self::alloc_buffer(len);
-        unsafe {
-            std::ptr::copy_nonoverlapping(a.as_ptr(), data as *mut u8, a.len());
-            std::ptr::copy_nonoverlapping(b.as_ptr(), (data as *mut u8).add(a.len()), b.len());
-        }
-        let string = Self {
-            header: RcHeader::new(TypeTag::String),
-            data,
-            len,
-            capacity: len + 1,
-        };
-        Box::into_raw(Box::new(string))
+        Self::from_parts(a, Some(b))
     }
 
     /// 获取字符串内容
@@ -94,11 +100,8 @@ impl BolideString {
     /// 无需每次重新 strlen + 校验
     #[inline]
     pub fn as_str(&self) -> &str {
-        if self.data.is_null() {
-            return "";
-        }
         unsafe {
-            let bytes = std::slice::from_raw_parts(self.data as *const u8, self.len);
+            let bytes = std::slice::from_raw_parts(self.data_ptr() as *const u8, self.len);
             std::str::from_utf8_unchecked(bytes)
         }
     }
@@ -143,13 +146,10 @@ impl BolideString {
         self.header.mark_moved();
     }
 
-    /// 释放内部数据（仅当 strong_count 归零时调用）
-    unsafe fn drop_data(&mut self) {
-        if !self.data.is_null() {
-            let layout = std::alloc::Layout::array::<u8>(self.capacity).unwrap();
-            std::alloc::dealloc(self.data as *mut u8, layout);
-            self.data = std::ptr::null_mut();
-        }
+    unsafe fn dealloc(ptr: *mut Self) {
+        let layout = Self::layout_for_len((*ptr).len);
+        std::ptr::drop_in_place(ptr);
+        dealloc(ptr as *mut u8, layout);
     }
 }
 
@@ -178,21 +178,25 @@ pub extern "C" fn bolide_string_from_slice(s: *const i8, len: usize) -> *mut Bol
 pub extern "C" fn bolide_string_literal(s: *const i8, len: usize) -> *mut BolideString {
     let slice = unsafe { std::slice::from_raw_parts(s as *const u8, len) };
     let s_str = std::str::from_utf8(slice).unwrap_or("");
-    
+
     STRING_LITERALS.with(|interner| {
         let mut map = interner.borrow_mut();
         if let Some(&ptr) = map.get(s_str) {
-             // Found. Retain and return a NEW reference.
-             unsafe { (*ptr).retain(); }
-             ptr
+            // Found. Retain and return a NEW reference.
+            unsafe {
+                (*ptr).retain();
+            }
+            ptr
         } else {
-             // Not found. Create (RC=1).
-             let ptr = BolideString::new(s_str);
-             // Interner keeps the original RC=1.
-             // We retain to give caller their own reference (RC=2).
-             unsafe { (*ptr).retain(); }
-             map.insert(s_str.to_string(), ptr);
-             ptr
+            // Not found. Create (RC=1).
+            let ptr = BolideString::new(s_str);
+            // Interner keeps the original RC=1.
+            // We retain to give caller their own reference (RC=2).
+            unsafe {
+                (*ptr).retain();
+            }
+            map.insert(s_str.to_string(), ptr);
+            ptr
         }
     })
 }
@@ -217,9 +221,7 @@ pub extern "C" fn bolide_string_release(s: *mut BolideString) {
     }
     unsafe {
         if (*s).release() {
-            // 引用计数归零，释放数据
-            (*s).drop_data();
-            let _ = Box::from_raw(s);
+            BolideString::dealloc(s);
         }
     }
 }
@@ -260,9 +262,20 @@ pub extern "C" fn bolide_string_ref_count(s: *const BolideString) -> u32 {
 
 /// 字符串拼接（返回新字符串，ref_count = 1）
 #[no_mangle]
-pub extern "C" fn bolide_string_concat(a: *const BolideString, b: *const BolideString) -> *mut BolideString {
-    let a_str = if a.is_null() { "" } else { unsafe { (*a).as_str() } };
-    let b_str = if b.is_null() { "" } else { unsafe { (*b).as_str() } };
+pub extern "C" fn bolide_string_concat(
+    a: *const BolideString,
+    b: *const BolideString,
+) -> *mut BolideString {
+    let a_str = if a.is_null() {
+        ""
+    } else {
+        unsafe { (*a).as_str() }
+    };
+    let b_str = if b.is_null() {
+        ""
+    } else {
+        unsafe { (*b).as_str() }
+    };
     BolideString::concat(a_str, b_str)
 }
 
@@ -284,7 +297,11 @@ pub extern "C" fn bolide_string_eq(a: *const BolideString, b: *const BolideStrin
     if a.len != b.len {
         return 0;
     }
-    if a.as_str().as_bytes() == b.as_str().as_bytes() { 1 } else { 0 }
+    if a.as_str().as_bytes() == b.as_str().as_bytes() {
+        1
+    } else {
+        0
+    }
 }
 
 /// 检查是否已被 move
@@ -294,7 +311,11 @@ pub extern "C" fn bolide_string_is_moved(s: *const BolideString) -> i32 {
         return 0;
     }
     unsafe {
-        if (*s).is_moved() { 1 } else { 0 }
+        if (*s).is_moved() {
+            1
+        } else {
+            0
+        }
     }
 }
 
@@ -302,7 +323,9 @@ pub extern "C" fn bolide_string_is_moved(s: *const BolideString) -> i32 {
 #[no_mangle]
 pub extern "C" fn bolide_string_mark_moved(s: *mut BolideString) {
     if !s.is_null() {
-        unsafe { (*s).mark_moved(); }
+        unsafe {
+            (*s).mark_moved();
+        }
     }
 }
 
@@ -338,7 +361,9 @@ pub extern "C" fn bolide_string_from_bigint(ptr: *const crate::BolideBigInt) -> 
 
 /// decimal 转字符串
 #[no_mangle]
-pub extern "C" fn bolide_string_from_decimal(ptr: *const crate::BolideDecimal) -> *mut BolideString {
+pub extern "C" fn bolide_string_from_decimal(
+    ptr: *const crate::BolideDecimal,
+) -> *mut BolideString {
     if ptr.is_null() {
         return BolideString::new("0");
     }
@@ -379,7 +404,7 @@ pub extern "C" fn bolide_string_as_cstr(s: *const BolideString) -> *const c_char
     if s.is_null() {
         return std::ptr::null();
     }
-    unsafe { (*s).data }
+    unsafe { (*s).data_ptr() }
 }
 
 // ==================== 测试 ====================
@@ -396,6 +421,11 @@ mod tests {
             assert_eq!((*s).ref_count(), 1);
             bolide_string_release(s);
         }
+    }
+
+    #[test]
+    fn test_string_layout_size() {
+        assert_eq!(std::mem::size_of::<BolideString>(), 24);
     }
 
     #[test]

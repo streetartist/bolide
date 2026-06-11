@@ -1,14 +1,14 @@
 //! pest 解析结果到 AST 的转换
 
-use pest::Parser;
-use pest::iterators::Pair;
-use crate::{BolideParser, Rule};
 use crate::ast::*;
+use crate::{BolideParser, Rule};
+use pest::iterators::Pair;
+use pest::Parser;
 
 /// 解析源代码为 AST
 pub fn parse(source: &str) -> Result<Program, String> {
-    let pairs = BolideParser::parse(Rule::program, source)
-        .map_err(|e| format!("Parse error: {}", e))?;
+    let pairs =
+        BolideParser::parse(Rule::program, source).map_err(|e| format!("Parse error: {}", e))?;
 
     let mut statements = Vec::new();
     for pair in pairs {
@@ -50,6 +50,8 @@ fn parse_statement(pair: Pair<Rule>) -> Result<Option<Statement>, String> {
         Rule::send_stmt => Ok(Some(Statement::Send(parse_send_stmt(pair)?))),
         Rule::break_stmt => Ok(Some(Statement::Break)),
         Rule::continue_stmt => Ok(Some(Statement::Continue)),
+        Rule::throw_stmt => Ok(Some(Statement::Throw(parse_expr(pair.into_inner().next().unwrap())?))),
+        Rule::try_stmt => Ok(Some(Statement::Try(parse_try_stmt(pair)?))),
         Rule::return_stmt => Ok(Some(parse_return_stmt(pair)?)),
         Rule::expr_stmt => Ok(Some(Statement::Expr(parse_expr_stmt(pair)?))),
         Rule::import_stmt => Ok(Some(Statement::Import(parse_import(pair)?))),
@@ -89,7 +91,12 @@ fn parse_assign_target(pair: Pair<Rule>) -> Result<Expr, String> {
     let ident = match first.as_rule() {
         Rule::self_lit => "self".to_string(),
         Rule::ident => first.as_str().to_string(),
-        _ => return Err(format!("Unexpected rule in assign_target: {:?}", first.as_rule())),
+        _ => {
+            return Err(format!(
+                "Unexpected rule in assign_target: {:?}",
+                first.as_rule()
+            ))
+        }
     };
     let mut expr = Expr::Ident(ident);
 
@@ -110,7 +117,6 @@ fn parse_assign_target(pair: Pair<Rule>) -> Result<Expr, String> {
 
     Ok(expr)
 }
-
 
 fn parse_func_def(pair: Pair<Rule>) -> Result<FuncDef, String> {
     let mut inner = pair.into_inner();
@@ -142,7 +148,8 @@ fn parse_func_def(pair: Pair<Rule>) -> Result<FuncDef, String> {
             }
             Rule::lifetime_clause => {
                 // 解析生命周期依赖: from x, y（跳过 kw_from 关键字对）
-                let deps: Vec<String> = item.into_inner()
+                let deps: Vec<String> = item
+                    .into_inner()
                     .filter(|p| p.as_rule() == Rule::ident)
                     .map(|p| p.as_str().to_string())
                     .collect();
@@ -155,12 +162,19 @@ fn parse_func_def(pair: Pair<Rule>) -> Result<FuncDef, String> {
         }
     }
 
-    Ok(FuncDef { name, is_async, params, return_type, lifetime_deps, body })
+    Ok(FuncDef {
+        name,
+        is_async,
+        params,
+        return_type,
+        lifetime_deps,
+        body,
+    })
 }
 
 fn parse_param(pair: Pair<Rule>) -> Result<Param, String> {
     let mut inner = pair.into_inner();
-    let mut mode = ParamMode::Borrow;  // 默认借用
+    let mut mode = ParamMode::Borrow; // 默认借用
 
     // 检查是否有参数模式
     let first = inner.next().unwrap();
@@ -195,8 +209,7 @@ fn parse_type(pair: Pair<Rule>) -> Result<Type, String> {
     // 解析基础类型
     let base_type = match type_pair.as_rule() {
         Rule::tuple_type => {
-            let types: Result<Vec<_>, _> = type_pair.into_inner()
-                .map(parse_type).collect();
+            let types: Result<Vec<_>, _> = type_pair.into_inner().map(parse_type).collect();
             Type::Tuple(types?)
         }
         Rule::list_type => {
@@ -238,11 +251,14 @@ fn parse_type(pair: Pair<Rule>) -> Result<Type, String> {
             let s = type_pair.as_str().trim();
             // 如果是 qualified_type，去除内部可能的空格
             let clean_s = if s.contains('.') {
-                s.split('.').map(|p| p.trim()).collect::<Vec<&str>>().join(".")
+                s.split('.')
+                    .map(|p| p.trim())
+                    .collect::<Vec<&str>>()
+                    .join(".")
             } else {
                 s.to_string()
             };
-            
+
             match clean_s.as_str() {
                 "int" => Type::Int,
                 "float" => Type::Float,
@@ -323,7 +339,12 @@ fn parse_if_stmt(pair: Pair<Rule>) -> Result<IfStmt, String> {
         }
     }
 
-    Ok(IfStmt { condition, then_body, elif_branches, else_body })
+    Ok(IfStmt {
+        condition,
+        then_body,
+        elif_branches,
+        else_body,
+    })
 }
 
 fn parse_while_stmt(pair: Pair<Rule>) -> Result<WhileStmt, String> {
@@ -336,7 +357,7 @@ fn parse_while_stmt(pair: Pair<Rule>) -> Result<WhileStmt, String> {
 fn parse_for_stmt(pair: Pair<Rule>) -> Result<ForStmt, String> {
     let mut inner = pair.into_inner();
     let mut vars = Vec::new();
-    
+
     // Collect loop variables
     while let Some(p) = inner.peek() {
         if p.as_rule() == Rule::ident {
@@ -345,7 +366,7 @@ fn parse_for_stmt(pair: Pair<Rule>) -> Result<ForStmt, String> {
             break;
         }
     }
-    
+
     if vars.is_empty() {
         return Err("For loop must have at least one variable".to_string());
     }
@@ -356,7 +377,7 @@ fn parse_for_stmt(pair: Pair<Rule>) -> Result<ForStmt, String> {
         iter_pair = inner.next().ok_or("Missing iterator expression")?;
     }
     let iter = parse_expr(iter_pair)?;
-    
+
     // Next is block
     let block_pair = inner.next().ok_or("Missing loop body")?;
     let body = parse_block(block_pair)?;
@@ -440,13 +461,44 @@ fn parse_async_select_branch(pair: Pair<Rule>) -> Result<AsyncSelectBranch, Stri
             let body = parse_block(expr_inner.next().unwrap())?;
             Ok(AsyncSelectBranch::Expr { expr, body })
         }
-        _ => Err(format!("Unknown async select branch: {:?}", inner.as_rule())),
+        _ => Err(format!(
+            "Unknown async select branch: {:?}",
+            inner.as_rule()
+        )),
     }
 }
 
 fn parse_return_stmt(pair: Pair<Rule>) -> Result<Statement, String> {
-    let expr = pair.into_inner().next().map(|p| parse_expr(p)).transpose()?;
+    let expr = pair
+        .into_inner()
+        .next()
+        .map(|p| parse_expr(p))
+        .transpose()?;
     Ok(Statement::Return(expr))
+}
+
+fn parse_try_stmt(pair: Pair<Rule>) -> Result<TryStmt, String> {
+    let mut inner = pair.into_inner();
+    let try_body = parse_block(inner.next().unwrap())?;
+    let mut catch_clauses = Vec::new();
+    let mut finally = None;
+    for item in inner {
+        match item.as_rule() {
+            Rule::catch_clause => {
+                let mut c = item.into_inner();
+                let var = c.next().unwrap().as_str().to_string();
+                let ty = parse_type(c.next().unwrap())?;
+                let body = parse_block(c.next().unwrap())?;
+                catch_clauses.push(CatchClause { var, ty, body });
+            }
+            Rule::finally => {
+                let body = parse_block(item.into_inner().next().unwrap())?;
+                finally = Some(body);
+            }
+            _ => {}
+        }
+    }
+    Ok(TryStmt { try_body, catch_clauses, finally })
 }
 
 fn parse_expr_stmt(pair: Pair<Rule>) -> Result<Expr, String> {
@@ -461,22 +513,26 @@ fn parse_import(pair: Pair<Rule>) -> Result<Import, String> {
         Rule::string_lit => {
             // 文件路径导入: import "file.bl";
             let s = first.as_str();
-            let fp = s[1..s.len()-1].to_string();
+            let fp = s[1..s.len() - 1].to_string();
             (Vec::new(), Some(fp))
         }
         Rule::module_path => {
             // 模块路径导入: import math.utils;
-            let p: Vec<String> = first.into_inner()
-                .map(|p| p.as_str().to_string())
-                .collect();
+            let p: Vec<String> = first.into_inner().map(|p| p.as_str().to_string()).collect();
             (p, None)
         }
         _ => return Err(format!("Unexpected import path: {:?}", first.as_rule())),
     };
 
     // 跳过 kw_as 关键字对，别名是其后的 ident
-    let alias = inner.find(|p| p.as_rule() == Rule::ident).map(|p| p.as_str().to_string());
-    Ok(Import { path, file_path, alias })
+    let alias = inner
+        .find(|p| p.as_rule() == Rule::ident)
+        .map(|p| p.as_str().to_string());
+    Ok(Import {
+        path,
+        file_path,
+        alias,
+    })
 }
 
 fn parse_class_def(pair: Pair<Rule>) -> Result<ClassDef, String> {
@@ -502,10 +558,15 @@ fn parse_class_def(pair: Pair<Rule>) -> Result<ClassDef, String> {
                             let fname = f.next().unwrap().as_str().to_string();
                             let fty = parse_type(f.next().unwrap())?;
                             let default_value = f.next().map(|e| parse_expr(e)).transpose()?;
-                            fields.push(ClassField { name: fname, ty: fty, default_value });
+                            fields.push(ClassField {
+                                name: fname,
+                                ty: fty,
+                                default_value,
+                            });
                         }
                         Rule::method_def => {
-                            methods.push(parse_func_def(member_inner.into_inner().next().unwrap())?);
+                            methods
+                                .push(parse_func_def(member_inner.into_inner().next().unwrap())?);
                         }
                         _ => {}
                     }
@@ -515,7 +576,12 @@ fn parse_class_def(pair: Pair<Rule>) -> Result<ClassDef, String> {
         }
     }
 
-    Ok(ClassDef { name, parent, fields, methods })
+    Ok(ClassDef {
+        name,
+        parent,
+        fields,
+        methods,
+    })
 }
 
 // 表达式解析
@@ -625,8 +691,7 @@ fn parse_postfix_expr(pair: Pair<Rule>) -> Result<Expr, String> {
     for item in inner {
         match item.as_rule() {
             Rule::call_args => {
-                let args: Result<Vec<_>, _> = item.into_inner()
-                    .map(parse_expr).collect();
+                let args: Result<Vec<_>, _> = item.into_inner().map(parse_expr).collect();
                 expr = Expr::Call(Box::new(expr), args?);
             }
             Rule::index => {
@@ -656,7 +721,10 @@ fn unescape_string(s: &str) -> String {
                 Some('"') => res.push('"'),
                 Some('\'') => res.push('\''),
                 Some('0') => res.push('\0'),
-                Some(c) => { res.push('\\'); res.push(c); }
+                Some(c) => {
+                    res.push('\\');
+                    res.push(c);
+                }
                 None => res.push('\\'),
             }
         } else {
@@ -682,34 +750,32 @@ fn parse_primary(pair: Pair<Rule>) -> Result<Expr, String> {
         }
         Rule::float_lit => {
             let s = inner.as_str().replace('_', "");
-            let f: f64 = s.parse()
+            let f: f64 = s
+                .parse()
                 .map_err(|e| format!("Invalid float literal '{}': {}", s, e))?;
             Ok(Expr::Float(f))
         }
         Rule::bigint_lit => {
             // 去掉后缀 B/b 和下划线分隔符
             let s = inner.as_str();
-            let num_str = s[..s.len()-1].replace('_', "");
+            let num_str = s[..s.len() - 1].replace('_', "");
             Ok(Expr::BigInt(num_str))
         }
         Rule::decimal_lit => {
             // 去掉后缀 D/d 和下划线分隔符
             let s = inner.as_str();
-            let num_str = s[..s.len()-1].replace('_', "");
+            let num_str = s[..s.len() - 1].replace('_', "");
             Ok(Expr::Decimal(num_str))
         }
         Rule::string_lit => {
             let s = inner.as_str();
-            Ok(Expr::String(unescape_string(&s[1..s.len()-1])))
+            Ok(Expr::String(unescape_string(&s[1..s.len() - 1])))
         }
-        Rule::bool_lit => {
-            Ok(Expr::Bool(inner.as_str() == "true"))
-        }
+        Rule::bool_lit => Ok(Expr::Bool(inner.as_str() == "true")),
         Rule::none_lit => Ok(Expr::None),
         Rule::ident => Ok(Expr::Ident(inner.as_str().to_string())),
         Rule::list_literal => {
-            let items: Result<Vec<_>, _> = inner.into_inner()
-                .map(parse_expr).collect();
+            let items: Result<Vec<_>, _> = inner.into_inner().map(parse_expr).collect();
             Ok(Expr::List(items?))
         }
         Rule::dict_literal => {
@@ -732,7 +798,9 @@ fn parse_primary(pair: Pair<Rule>) -> Result<Expr, String> {
                 first = spawn_inner.next().unwrap();
             }
             let func_name = first.as_str().to_string();
-            let args: Result<Vec<_>, _> = spawn_inner.next().unwrap()
+            let args: Result<Vec<_>, _> = spawn_inner
+                .next()
+                .unwrap()
                 .into_inner()
                 .map(parse_expr)
                 .collect();
@@ -744,7 +812,8 @@ fn parse_primary(pair: Pair<Rule>) -> Result<Expr, String> {
         }
         Rule::await_expr => {
             // await 绑定到后缀表达式层级（跳过 kw_await 关键字对）
-            let postfix = inner.into_inner()
+            let postfix = inner
+                .into_inner()
                 .find(|p| p.as_rule() == Rule::postfix_expr)
                 .ok_or("await expression missing operand")?;
             let expr = parse_postfix_expr(postfix)?;
@@ -752,14 +821,15 @@ fn parse_primary(pair: Pair<Rule>) -> Result<Expr, String> {
         }
         Rule::await_all_expr => {
             // 跳过 kw_await 关键字对，只收集表达式
-            let exprs: Result<Vec<_>, _> = inner.into_inner()
+            let exprs: Result<Vec<_>, _> = inner
+                .into_inner()
                 .filter(|p| p.as_rule() == Rule::expr)
-                .map(parse_expr).collect();
+                .map(parse_expr)
+                .collect();
             Ok(Expr::AwaitAll(exprs?))
         }
         Rule::tuple_literal => {
-            let exprs: Result<Vec<_>, _> = inner.into_inner()
-                .map(parse_expr).collect();
+            let exprs: Result<Vec<_>, _> = inner.into_inner().map(parse_expr).collect();
             Ok(Expr::Tuple(exprs?))
         }
         Rule::self_lit => Ok(Expr::Ident("self".to_string())),
@@ -777,7 +847,7 @@ fn parse_extern_block(pair: Pair<Rule>) -> Result<ExternBlock, String> {
     let lib_path_pair = inner.next().unwrap();
     let lib_path = {
         let s = lib_path_pair.as_str();
-        s[1..s.len()-1].to_string()  // 去掉引号
+        s[1..s.len() - 1].to_string() // 去掉引号
     };
 
     // 解析声明列表
@@ -789,7 +859,10 @@ fn parse_extern_block(pair: Pair<Rule>) -> Result<ExternBlock, String> {
         }
     }
 
-    Ok(ExternBlock { lib_path, declarations })
+    Ok(ExternBlock {
+        lib_path,
+        declarations,
+    })
 }
 
 fn parse_extern_decl(pair: Pair<Rule>) -> Result<ExternDecl, String> {
@@ -828,7 +901,12 @@ fn parse_extern_func(pair: Pair<Rule>) -> Result<ExternFunc, String> {
         }
     }
 
-    Ok(ExternFunc { name, params, return_type, variadic })
+    Ok(ExternFunc {
+        name,
+        params,
+        return_type,
+        variadic,
+    })
 }
 
 fn parse_extern_param(pair: Pair<Rule>) -> Result<CParam, String> {
@@ -848,7 +926,10 @@ fn parse_extern_struct(pair: Pair<Rule>) -> Result<ExternStruct, String> {
             let mut f = field_pair.into_inner();
             let fname = f.next().unwrap().as_str().to_string();
             let fty = parse_c_type(f.next().unwrap())?;
-            fields.push(CField { name: fname, ty: fty });
+            fields.push(CField {
+                name: fname,
+                ty: fty,
+            });
         }
     }
 
@@ -883,7 +964,10 @@ fn parse_c_type(pair: Pair<Rule>) -> Result<CType, String> {
                     _ => {}
                 }
             }
-            Ok(CType::FuncPtr { params, return_type })
+            Ok(CType::FuncPtr {
+                params,
+                return_type,
+            })
         }
         Rule::c_basic_type => parse_c_basic_type(inner),
         _ => Err(format!("Unknown c_type: {:?}", inner.as_rule())),
