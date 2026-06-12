@@ -12,7 +12,7 @@
     <img src="https://img.shields.io/badge/License-MIT-brightgreen.svg" alt="License: MIT">
   </a>
   <a href="#">
-    <img src="https://img.shields.io/badge/version-0.8.2-blue.svg" alt="Version">
+    <img src="https://img.shields.io/badge/version-0.10.1-blue.svg" alt="Version">
   </a>
   <a href="#">
     <img src="https://img.shields.io/badge/platform-windows%20%7C%20linux-lightgrey.svg" alt="Platform">
@@ -27,8 +27,9 @@
 
 - **JIT Compilation** - Native performance via Cranelift, fast startup
 - **AOT Compilation** - Compile to native executables, no runtime needed
+- **First-Class Functions** - Functions as values: pass, store in lists, return; higher-order `map`/`filter`
 - **Async Coroutines** - First-class async/await support
-- **FFI** - Seamless C library interop with callback support
+- **Bidirectional FFI** - Call C libraries (with callbacks); also compile Bolide to a static library callable from C (`export fn` + `.h` generation)
 - **Module System** - Namespace-isolated module imports
 - **Rich Types** - BigInt, Decimal, Dynamic, and more
 - **Concurrency** - Threads, channels, thread pools
@@ -138,6 +139,65 @@ fn greet(name: str) {
     print(name);
 }
 ```
+
+### First-Class Functions
+
+Functions are first-class values: assign to variables, pass as arguments, return from functions, store in lists. Type annotations are optional — the compiler infers function signatures.
+
+```bolide
+fn add1(x: int) -> int { return x + 1; }
+fn double(x: int) -> int { return x * 2; }
+
+// Assign a function to a variable (no annotation needed), then call
+let f = add1;
+print(f(10));            // 11
+
+// Explicit function type annotation (optional)
+let g: func(int) -> int = double;
+print(g(10));            // 20
+
+// Function as parameter: user-defined higher-order function
+fn apply(callback: func(int) -> int, x: int) -> int {
+    return callback(x);
+}
+print(apply(double, 21));  // 42
+
+// Returning a function
+fn pick(which: int) -> func(int) -> int {
+    if which == 0 { return add1; }
+    return double;
+}
+print(pick(0)(7));       // 8
+print(pick(1)(7));       // 14
+
+// Store functions in a list, call by index
+let fns: list<func(int) -> int> = [add1, double];
+print(fns[0](5));        // 6
+print(fns[1](5));        // 10
+```
+
+### Higher-Order List Methods (map / filter)
+
+`map` applies a callback to each element (may change element type); `filter` keeps elements where the callback returns true. Callbacks can be any named function.
+
+```bolide
+fn double(x: int) -> int { return x * 2; }
+fn is_even(x: int) -> bool { return x % 2 == 0; }
+fn label(n: int) -> str { return "n=" + str(n); }
+
+let nums: list<int> = [1, 2, 3, 4];
+
+print(nums.map(double));     // [2, 4, 6, 8]
+print(nums.filter(is_even)); // [2, 4]
+print(nums.map(label));      // ["n=1", "n=2", "n=3", "n=4"]  (cross-type map)
+
+// float callbacks supported too
+fn scale(x: float) -> float { return x * 2.0; }
+let fs: list<float> = [1.5, 2.5, 3.5];
+print(fs.map(scale));        // [3, 5, 7]
+```
+
+> Note: `map`/`filter` type inference is fully available **inside functions**; at top level (global scope), annotate the result type explicitly.
 
 ### Control Flow
 
@@ -297,6 +357,10 @@ print(p.distance());  // 25
 
 ### FFI (C Interop)
 
+Bolide supports **bidirectional** C interop: it can call C libraries, and it can be called from C programs.
+
+#### Bolide calls C
+
 ```bolide
 extern "msvcrt.dll" {
     fn abs(x: c_int) -> c_int;
@@ -305,7 +369,107 @@ extern "msvcrt.dll" {
 
 let a: int = abs(-42);      // 42
 let b: float = sqrt(16.0);  // 4.0
+
+// Callbacks are supported too
+fn my_callback(a: int, b: int) -> int { return a + b; }
+let r: int = test_callback(my_callback, 10, 20);
 ```
+
+#### C calls Bolide
+
+Mark functions with `export fn` to expose them to C (bare symbol name, no
+name mangling), then compile to a static library with `--lib` and generate a
+C header with `--header`:
+
+```bolide
+// mathlib.bl — exported functions use bare names for C linkage
+export fn add(a: int, b: int) -> int { return a + b; }
+export fn scale(x: float, k: float) -> float { return x * k; }
+
+fn internal_helper() -> int { return 1; }  // no export -> not exposed
+```
+
+```bash
+# Compile to a static library and emit the header
+bolide compile mathlib.bl --lib --header
+# Products: mathlib.lib (Windows) / libmathlib.a (Linux), mathlib.h
+```
+
+The C side links the Bolide library + the runtime library:
+
+```c
+#include "mathlib.h"
+#include <stdio.h>
+
+int main(void) {
+    printf("add(3,4) = %lld\n", add(3, 4));            // 7
+    printf("scale(2.5,4.0) = %f\n", scale(2.5, 4.0));  // 10.0
+    return 0;
+}
+```
+
+```bash
+cl main.c mathlib.lib bolide_runtime.lib   # Windows (MSVC)
+cc main.c libmathlib.a libbolide_runtime.a # Linux
+```
+
+> **C interop ABI contract**: Only **numeric and pointer signatures** are
+> stable across the C boundary — `int`/`bool` map to `long long`, `float`
+> maps to `double`, and other composite types (`str`/`list`/objects) are
+> passed as opaque runtime pointers (`void*`) that C cannot safely construct.
+> Use plain numeric/pointer signatures for C-friendly exports.
+
+### Error Handling (try/catch/throw)
+
+Bolide provides lightweight exception handling: `throw` raises an exception,
+`try/catch` catches it, with an optional `finally` cleanup block.
+
+```bolide
+try {
+    print("in try body");
+    throw 42;
+    print("after throw (will not print)");
+} catch (e: int) {
+    print("caught:");
+    print(e);  // 42
+} finally {
+    print("cleanup runs either way");
+}
+```
+
+- **`throw`** can raise a value of any type (`int`, `str`, objects, etc.)
+- **`catch (e: T)`** matches exceptions by type tag, including subclass matching
+- **`finally`** always runs whether or not an exception was thrown
+
+#### Built-in `Error` class
+
+A built-in `Error` class (single field `message: str`) is always available — no
+import needed. User classes can inherit from it, and a base-class `catch` also
+catches subclasses:
+
+```bolide
+// throw a built-in Error
+try {
+    throw Error("something broke");
+} catch (e: Error) {
+    print(e.message);  // something broke
+}
+
+// custom error subclass
+class MyError: Error {}
+
+try {
+    throw MyError("custom failure");
+} catch (e: Error) {           // base-class catch also catches subclasses
+    print(e.message);          // custom failure
+}
+```
+
+If you define your own class named `Error`, it overrides the built-in one.
+
+> **Current limitation**: try/catch works within a single function (catch and
+> throw must be in the same compiled function). Cross-function stack unwinding
+> is planned for a future version.
 
 ## Type System
 
@@ -321,6 +485,7 @@ let b: float = sqrt(16.0);  // 4.0
 | `dict<K, V>` | Dictionary | `let d: dict<str, int> = {"a": 1};` |
 | `channel<T>` | Channel | `let ch: channel<int> = channel();` |
 | `future` | Coroutine Future | `let f: future = async_fn();` |
+| `func(T...) -> R` | Function value | `let f: func(int) -> int = add1;` |
 
 ## Project Structure
 

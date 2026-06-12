@@ -1,5 +1,5 @@
-// 斐波那契 — 快速倍增 + pool(16) 并行矩阵拆分
-// 将 n 拆成 16 块, 每块并行算 M^chunk, 再顺序乘起
+// 斐波那契 — 快速倍增 + pool(16) 并行矩阵拆分 + 树形归并
+// 将 n 拆成 16 块, 每块并行算 M^chunk, 再树形归并
 
 fn fib_pair(k: int) -> (bigint, bigint) {
     if k <= 0 { return (0B, 1B); }
@@ -28,7 +28,7 @@ fn mat_mul(a: bigint, a1: bigint, b: bigint, b1: bigint) -> (bigint, bigint) {
     return (a1 * b + a * b_1, a1 * b1 + a * b);
 }
 
-// 全局结果数组 (16 块 × 2 值)
+// 全局结果数组
 let Fk:  list<bigint> = [0B,0B,0B,0B,0B,0B,0B,0B,0B,0B,0B,0B,0B,0B,0B,0B];
 let Fk1: list<bigint> = [0B,0B,0B,0B,0B,0B,0B,0B,0B,0B,0B,0B,0B,0B,0B,0B];
 
@@ -38,8 +38,15 @@ fn worker(i: int, target: int) {
     Fk1[i] = p[1];
 }
 
+// 树形归并: 合并 Fk[a]/Fk1[a] 和 Fk[b]/Fk1[b]，结果存回 a
+fn combine_two(a_idx: int, b_idx: int) {
+    let m: (bigint, bigint) = mat_mul(Fk[a_idx], Fk1[a_idx], Fk[b_idx], Fk1[b_idx]);
+    Fk[a_idx]  = m[0];
+    Fk1[a_idx] = m[1];
+}
+
 // ============================================================
-print("=== 斐波那契 (快速倍增 + 16 核并行) ===");
+print("=== 斐波那契 (快速倍增 + 16 核并行 + 树形归并) ===");
 let s: str = input("请输入 n: ");
 let n: int = int(s);
 
@@ -51,7 +58,7 @@ elif n <= 100 {
     let cs: int = n / 16;
     let rem: int = n % 16;
 
-    // 16 核并行: 每核算一对 (F(chunk), F(chunk+1))
+    // Phase 1: 16 核并行，每核算一对 (F(chunk), F(chunk+1))
     pool(16) {
         for i in range(16) {
             let t: int = cs;
@@ -60,18 +67,35 @@ elif n <= 100 {
         }
     }
 
-    // 顺序合并 16 个矩阵
-    let cur: bigint  = 0B;
-    let cur1: bigint = 1B;
-    for i in range(16) {
-        let m: (bigint, bigint) = mat_mul(cur, cur1, Fk[i], Fk1[i]);
-        cur = m[0]; cur1 = m[1];
+    // Phase 2: 树形归并，4 层逐层减少并行度
+    // 层1: 16→8 (8核)
+    pool(8) {
+        for i in range(0, 16, 2) {
+            spawn combine_two(i, i + 1);
+        }
     }
+    // 层2: 8→4 (4核)
+    pool(4) {
+        for i in range(0, 16, 4) {
+            spawn combine_two(i, i + 2);
+        }
+    }
+    // 层3: 4→2 (2核)
+    pool(2) {
+        for i in range(0, 16, 8) {
+            spawn combine_two(i, i + 4);
+        }
+    }
+    // 层4: 2→1 (主线程收尾)
+    let m: (bigint, bigint) = mat_mul(Fk[0], Fk1[0], Fk[8], Fk1[8]);
+    Fk[0]  = m[0];
+    Fk1[0] = m[1];
 
-    print("F(" + str(n) + ") = " + str(cur));
-    print("位数: " + str(str(cur).len()));
+    let result: bigint = Fk[0];
+    print("F(" + str(n) + ") = " + str(result));
+    print("位数: " + str(str(result).len()));
 
     // 验证
-    if cur == fib_pair(n)[0] { print("✓ 验证通过"); }
+    if result == fib_pair(n)[0] { print("✓ 验证通过"); }
     else { print("✗ 验证失败"); }
 }

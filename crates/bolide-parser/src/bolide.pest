@@ -67,9 +67,10 @@ extern_typedef = { "type" ~ ident ~ "=" ~ c_type ~ ";" }
 // 函数定义（支持 async）
 // 生命周期注解: fn foo(ref x: bigint) -> str from x
 func_def = {
-    async_keyword? ~ "fn" ~ ident ~ "(" ~ param_list? ~ ")" ~ ("->" ~ type_expr)? ~ lifetime_clause? ~ block
+    export_keyword? ~ async_keyword? ~ "fn" ~ ident ~ "(" ~ param_list? ~ ")" ~ ("->" ~ type_expr)? ~ lifetime_clause? ~ block
 }
 async_keyword = { "async" }
+export_keyword = { "export" }
 param_list = { param ~ ("," ~ param)* ~ ","? }
 param = { param_mode? ~ ident ~ ":" ~ type_expr }
 param_mode = { "owned" | "ref" }
@@ -247,7 +248,7 @@ keyword = {
     "while" | "for" | "in" | "break" | "continue" | "return" | "import" | "as" |
     "true" | "false" | "none" | "and" | "or" | "not" |
     "spawn" | "pool" | "self" | "super" | "select" | "timeout" | "default" |
-    "async" | "await" | "scope" | "all" | "extern" | "struct" | "type" |
+    "async" | "await" | "scope" | "all" | "extern" | "struct" | "type" | "export" |
     "from" | "owned" | "ref" | "weak" | "unowned") ~ !(ASCII_ALPHANUMERIC | "_")
 }
 

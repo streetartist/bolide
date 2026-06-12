@@ -1,33 +1,43 @@
 //! Bolide 元组运行时
 //!
 //! 元组是固定长度的异构容器，支持：
-//! - 创建和销毁
+//! - 创建和销毁（类型感知）
 //! - 索引访问
-//! - 打印
+//! - 类型感知打印（混合类型正确打印，非仅指针地址）
 
 use std::alloc::{alloc, dealloc, Layout};
 
+use crate::list::{print_element_inline, ElementType};
+use crate::rc::{RcHeader, TypeTag};
+
 /// 元组头部结构
-/// 元素数据紧随其后 (每个元素 8 字节)
+/// 布局：[RcHeader][len: usize][padding: 4 bytes][type_tags: ElementType[len]][data: i64[len]]
 #[repr(C)]
 pub struct BolideTuple {
-    /// 元素数量
+    header: RcHeader,
     len: usize,
+    _pad: u32,
+    // 紧随其后: type_tags: [u8; len] (每个元素 1 字节类型标签)
+    // 然后是 data: [i64; len] (每个元素 8 字节值)
 }
 
 impl BolideTuple {
-    /// 获取元素指针
-    fn data_ptr(&self) -> *const i64 {
-        unsafe {
-            (self as *const Self as *const u8).add(std::mem::size_of::<BolideTuple>()) as *const i64
-        }
+    unsafe fn type_tags(&self) -> *const u8 {
+        (self as *const Self as *const u8)
+            .add(std::mem::size_of::<BolideTuple>())
     }
 
-    /// 获取可变元素指针
-    fn data_ptr_mut(&mut self) -> *mut i64 {
-        unsafe {
-            (self as *mut Self as *mut u8).add(std::mem::size_of::<BolideTuple>()) as *mut i64
-        }
+    unsafe fn type_tags_mut(&mut self) -> *mut u8 {
+        (self as *mut Self as *mut u8)
+            .add(std::mem::size_of::<BolideTuple>())
+    }
+
+    unsafe fn data_ptr(&self) -> *const i64 {
+        self.type_tags().add(self.len) as *const i64
+    }
+
+    unsafe fn data_ptr_mut(&mut self) -> *mut i64 {
+        self.type_tags_mut().add(self.len) as *mut i64
     }
 }
 
@@ -37,18 +47,17 @@ use std::sync::atomic::{AtomicI64, Ordering};
 static TUPLE_ALLOC_COUNT: AtomicI64 = AtomicI64::new(0);
 static TUPLE_FREE_COUNT: AtomicI64 = AtomicI64::new(0);
 
-// ==================== 创建和销毁 ====================
-
-/// 创建指定长度的元组
+/// 创建带类型标签的元组（推荐）。type_tags 是每个元素的 ElementType。
 #[no_mangle]
-pub extern "C" fn bolide_tuple_new(len: usize) -> *mut BolideTuple {
+pub extern "C" fn bolide_tuple_new_typed(len: usize, type_tags_ptr: *const u8) -> *mut BolideTuple {
     if len == 0 {
         return std::ptr::null_mut();
     }
 
     let header_size = std::mem::size_of::<BolideTuple>();
+    let tags_size = len; // 每个元素 1 字节
     let data_size = len * 8;
-    let total_size = header_size + data_size;
+    let total_size = header_size + tags_size + data_size;
 
     unsafe {
         let layout = Layout::from_size_align(total_size, 8).unwrap();
@@ -59,18 +68,34 @@ pub extern "C" fn bolide_tuple_new(len: usize) -> *mut BolideTuple {
 
         TUPLE_ALLOC_COUNT.fetch_add(1, Ordering::SeqCst);
 
+        (*ptr).header = RcHeader::new(TypeTag::Object); // Tuple uses Object tag for GC
         (*ptr).len = len;
-        // 初始化为 0
-        let data = (*ptr).data_ptr_mut();
-        for i in 0..len {
-            *data.add(i) = 0;
+        (*ptr)._pad = 0;
+
+        // 拷贝类型标签
+        if !type_tags_ptr.is_null() {
+            let dst = (*ptr).type_tags_mut();
+            std::ptr::copy_nonoverlapping(type_tags_ptr, dst, len);
+        } else {
+            let dst = (*ptr).type_tags_mut();
+            std::ptr::write_bytes(dst, 0u8, len);
         }
+
+        // 初始化数据为 0
+        let data = (*ptr).data_ptr_mut();
+        std::ptr::write_bytes(data, 0u8, len);
 
         ptr
     }
 }
 
-/// 释放元组
+/// 旧接口（兼容）：创建无类型标签的元组（所有元素 Int=0）。
+#[no_mangle]
+pub extern "C" fn bolide_tuple_new(len: usize) -> *mut BolideTuple {
+    bolide_tuple_new_typed(len, std::ptr::null())
+}
+
+/// 释放元组（含 RC 类型元素释放）
 #[no_mangle]
 pub extern "C" fn bolide_tuple_free(ptr: *mut BolideTuple) {
     if ptr.is_null() {
@@ -81,9 +106,31 @@ pub extern "C" fn bolide_tuple_free(ptr: *mut BolideTuple) {
         TUPLE_FREE_COUNT.fetch_add(1, Ordering::SeqCst);
 
         let len = (*ptr).len;
+        let tags = (*ptr).type_tags();
+        let data = (*ptr).data_ptr();
+
+        // 释放 RC 类型元素
+        for i in 0..len {
+            let tag = *tags.add(i);
+            let val = *data.add(i);
+            release_raw_static(match tag {
+                3 => ElementType::String,
+                4 => ElementType::BigInt,
+                5 => ElementType::Decimal,
+                6 => ElementType::List,
+                8 => ElementType::Dict,
+                9 => ElementType::Dynamic,
+                _ => {
+                    // 基本类型（Int/Float/Bool）不需释放
+                    continue;
+                }
+            }, val);
+        }
+
         let header_size = std::mem::size_of::<BolideTuple>();
+        let tags_size = len;
         let data_size = len * 8;
-        let total_size = header_size + data_size;
+        let total_size = header_size + tags_size + data_size;
 
         let layout = Layout::from_size_align(total_size, 8).unwrap();
         dealloc(ptr as *mut u8, layout);
@@ -107,9 +154,14 @@ pub extern "C" fn bolide_tuple_debug_stats() {
 
 // ==================== 元素访问 ====================
 
-/// 设置元组元素 (i64)
+/// 设置元组元素 + 类型标签
 #[no_mangle]
-pub extern "C" fn bolide_tuple_set(ptr: *mut BolideTuple, index: usize, value: i64) {
+pub extern "C" fn bolide_tuple_set_typed(
+    ptr: *mut BolideTuple,
+    index: usize,
+    value: i64,
+    type_tag: u8,
+) {
     if ptr.is_null() {
         return;
     }
@@ -121,9 +173,21 @@ pub extern "C" fn bolide_tuple_set(ptr: *mut BolideTuple, index: usize, value: i
             return;
         }
 
-        let data = (*ptr).data_ptr_mut();
-        *data.add(index) = value;
+        // 释放旧值（如果旧类型是 RC 类型）
+        let old_tag = *(*ptr).type_tags().add(index);
+        let old_val = *(*ptr).data_ptr().add(index);
+        release_raw_static(old_tag.into(), old_val);
+
+        // 存储新值与类型
+        *(*ptr).type_tags_mut().add(index) = type_tag;
+        *(*ptr).data_ptr_mut().add(index) = value;
     }
+}
+
+/// 设置元组元素 (向后兼容，无类型标签，默认 Int)
+#[no_mangle]
+pub extern "C" fn bolide_tuple_set(ptr: *mut BolideTuple, index: usize, value: i64) {
+    bolide_tuple_set_typed(ptr, index, value, 0); // 0 = Int
 }
 
 /// 获取元组元素 (i64)
@@ -140,8 +204,24 @@ pub extern "C" fn bolide_tuple_get(ptr: *const BolideTuple, index: usize) -> i64
             return 0;
         }
 
-        let data = (*ptr).data_ptr();
-        *data.add(index)
+        *(*ptr).data_ptr().add(index)
+    }
+}
+
+/// 获取元组元素类型标签
+#[no_mangle]
+pub extern "C" fn bolide_tuple_get_type(ptr: *const BolideTuple, index: usize) -> u8 {
+    if ptr.is_null() {
+        return 0;
+    }
+
+    unsafe {
+        let len = (*ptr).len;
+        if index >= len {
+            return 0;
+        }
+
+        *(*ptr).type_tags().add(index)
     }
 }
 
@@ -154,9 +234,36 @@ pub extern "C" fn bolide_tuple_len(ptr: *const BolideTuple) -> usize {
     unsafe { (*ptr).len }
 }
 
+/// 增加引用计数
+#[no_mangle]
+pub extern "C" fn bolide_tuple_retain(ptr: *mut BolideTuple) {
+    if ptr.is_null() {
+        return;
+    }
+    unsafe {
+        (*ptr).header.inc_strong();
+    }
+}
+
+/// 减少引用计数，返回是否已释放
+#[no_mangle]
+pub extern "C" fn bolide_tuple_release(ptr: *mut BolideTuple) -> bool {
+    if ptr.is_null() {
+        return true;
+    }
+    unsafe {
+        if (*ptr).header.dec_strong() {
+            bolide_tuple_free(ptr);
+            true
+        } else {
+            false
+        }
+    }
+}
+
 // ==================== 打印 ====================
 
-/// 打印元组 (简单版本，所有元素作为 i64 打印)
+/// 类型感知打印元组
 #[no_mangle]
 pub extern "C" fn bolide_print_tuple(ptr: *const BolideTuple) {
     if ptr.is_null() {
@@ -166,6 +273,7 @@ pub extern "C" fn bolide_print_tuple(ptr: *const BolideTuple) {
 
     unsafe {
         let len = (*ptr).len;
+        let tags = (*ptr).type_tags();
         let data = (*ptr).data_ptr();
 
         print!("(");
@@ -173,8 +281,54 @@ pub extern "C" fn bolide_print_tuple(ptr: *const BolideTuple) {
             if i > 0 {
                 print!(", ");
             }
-            print!("{}", *data.add(i));
+            let tag = *tags.add(i);
+            let val = *data.add(i);
+            let elem_type: ElementType = unsafe { std::mem::transmute(tag) };
+            print_element_inline(elem_type, val);
         }
         println!(")");
+    }
+}
+
+// ==================== 内部辅助 ====================
+
+fn release_raw_static(elem_type: ElementType, raw: i64) {
+    let ptr = raw as *mut std::ffi::c_void;
+    if ptr.is_null() {
+        return;
+    }
+    use ElementType::*;
+    match elem_type {
+        String => {
+            use crate::BolideString;
+            crate::bolide_string_release(ptr as *mut BolideString);
+        }
+        BigInt => {
+            use crate::BolideBigInt;
+            crate::bolide_bigint_release(ptr as *mut BolideBigInt);
+        }
+        Decimal => {
+            use crate::BolideDecimal;
+            crate::bolide_decimal_release(ptr as *mut BolideDecimal);
+        }
+        List => {
+            use crate::BolideList;
+            crate::bolide_list_release(ptr as *mut BolideList);
+        }
+        Dict => {
+            use crate::BolideDict;
+            crate::bolide_dict_release(ptr as *mut BolideDict);
+        }
+        Dynamic => {
+            use crate::BolideDynamic;
+            crate::bolide_dynamic_release(ptr as *mut BolideDynamic);
+        }
+        _ => {} // Int/Float/Bool/Ptr 不需要释放
+    }
+}
+
+impl From<u8> for ElementType {
+    fn from(v: u8) -> Self {
+        unsafe { std::mem::transmute(v) }
     }
 }

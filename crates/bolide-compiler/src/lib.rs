@@ -3,9 +3,12 @@
 //! 使用 Cranelift 进行代码生成
 
 mod aot;
+mod builtins;
 mod jit;
 
 pub use aot::AotCompileResult;
 pub use aot::AotCompiler;
 pub use aot::RUNTIME_SYMBOLS;
 pub use jit::JitCompiler;
+
+pub(crate) use builtins::inject_builtin_classes;

@@ -71,6 +71,8 @@ pub struct VarDecl {
 pub struct FuncDef {
     pub name: String,
     pub is_async: bool,
+    /// export fn：以裸名（无 mangling）导出，供 C 链接调用
+    pub is_export: bool,
     pub params: Vec<Param>,
     pub return_type: Option<Type>,
     /// 生命周期依赖: from x, y 表示返回值依赖于参数 x 和 y 的生命周期

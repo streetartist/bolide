@@ -121,15 +121,19 @@ fn parse_assign_target(pair: Pair<Rule>) -> Result<Expr, String> {
 fn parse_func_def(pair: Pair<Rule>) -> Result<FuncDef, String> {
     let mut inner = pair.into_inner();
     let mut is_async = false;
+    let mut is_export = false;
 
-    // 检查第一个 token 是否是 async_keyword
-    let first = inner.next().unwrap();
-    let name = if first.as_rule() == Rule::async_keyword {
+    // 前缀修饰符可按任意顺序出现：export? async? fn
+    let mut first = inner.next().unwrap();
+    if first.as_rule() == Rule::export_keyword {
+        is_export = true;
+        first = inner.next().unwrap();
+    }
+    if first.as_rule() == Rule::async_keyword {
         is_async = true;
-        inner.next().unwrap().as_str().to_string()
-    } else {
-        first.as_str().to_string()
-    };
+        first = inner.next().unwrap();
+    }
+    let name = first.as_str().to_string();
 
     let mut params = Vec::new();
     let mut return_type = None;
@@ -165,6 +169,7 @@ fn parse_func_def(pair: Pair<Rule>) -> Result<FuncDef, String> {
     Ok(FuncDef {
         name,
         is_async,
+        is_export,
         params,
         return_type,
         lifetime_deps,

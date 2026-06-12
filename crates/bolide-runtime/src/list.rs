@@ -33,6 +33,24 @@ impl ElementType {
             _ => 8,
         }
     }
+
+    /// 从 u8 标签构造（与 bolide_list_new 的映射一致）
+    #[inline]
+    pub fn from_u8(tag: u8) -> Self {
+        match tag {
+            0 => ElementType::Int,
+            1 => ElementType::Float,
+            2 => ElementType::Bool,
+            3 => ElementType::String,
+            4 => ElementType::BigInt,
+            5 => ElementType::Decimal,
+            6 => ElementType::List,
+            7 => ElementType::Ptr,
+            8 => ElementType::Dict,
+            9 => ElementType::Dynamic,
+            _ => ElementType::Int,
+        }
+    }
 }
 
 /// Bolide 列表类型（带引用计数）
@@ -748,6 +766,86 @@ pub extern "C" fn bolide_list_last(list: *const BolideList) -> i64 {
 pub extern "C" fn bolide_print_list(list: *const BolideList) {
     print_list_inline(list);
     println!();
+}
+
+/// 回调函数指针（裸地址）。实际签名由源/结果元素类型决定，
+/// 调用前 transmute 成正确的 fn 类型——float 走 XMM 寄存器、整数走通用寄存器，
+/// ABI 不同，必须按类型分派，否则参数/返回会错位。
+pub type RawCallback = *const u8;
+
+/// 调用回调：参数和返回值各自可能是 float（按位存于 i64 槽）。
+/// `param_is_float` / `ret_is_float` 决定 transmute 的目标 fn 签名。
+#[inline]
+unsafe fn invoke_callback(cb: RawCallback, arg: i64, param_is_float: bool, ret_is_float: bool) -> i64 {
+    match (param_is_float, ret_is_float) {
+        (false, false) => {
+            let f: extern "C" fn(i64) -> i64 = std::mem::transmute(cb);
+            f(arg)
+        }
+        (false, true) => {
+            let f: extern "C" fn(i64) -> f64 = std::mem::transmute(cb);
+            f(arg).to_bits() as i64
+        }
+        (true, false) => {
+            let f: extern "C" fn(f64) -> i64 = std::mem::transmute(cb);
+            f(f64::from_bits(arg as u64))
+        }
+        (true, true) => {
+            let f: extern "C" fn(f64) -> f64 = std::mem::transmute(cb);
+            f(f64::from_bits(arg as u64)).to_bits() as i64
+        }
+    }
+}
+
+/// 对列表每个元素调用回调，返回新列表。
+/// `result_elem_type` 是回调返回值的元素类型 tag（map 可改变元素类型，如 int->str）。
+/// float 参数/返回经位模式在 i64 槽传递，运行时按元素类型 transmute 回调签名。
+#[no_mangle]
+pub extern "C" fn bolide_list_map(
+    list: *const BolideList,
+    callback: RawCallback,
+    result_elem_type: u8,
+) -> *mut BolideList {
+    if list.is_null() || callback.is_null() {
+        return std::ptr::null_mut();
+    }
+    unsafe {
+        let src = &*list;
+        let result_et = ElementType::from_u8(result_elem_type);
+        let param_is_float = matches!(src.elem_type, ElementType::Float);
+        let ret_is_float = matches!(result_et, ElementType::Float);
+        let dst = BolideList::with_capacity(result_et, src.len);
+        for i in 0..src.len {
+            let val = src.read_at(i);
+            let new_val = invoke_callback(callback, val, param_is_float, ret_is_float);
+            bolide_list_push(dst, new_val);
+        }
+        dst
+    }
+}
+
+/// 过滤列表元素，callback(val) 返回非零则保留（返回值始终是 bool/i64）。
+/// 参数可能是 float，按源元素类型 transmute 回调签名。
+#[no_mangle]
+pub extern "C" fn bolide_list_filter(
+    list: *const BolideList,
+    callback: RawCallback,
+) -> *mut BolideList {
+    if list.is_null() || callback.is_null() {
+        return std::ptr::null_mut();
+    }
+    unsafe {
+        let src = &*list;
+        let param_is_float = matches!(src.elem_type, ElementType::Float);
+        let dst = BolideList::new(src.elem_type);
+        for i in 0..src.len {
+            let val = src.read_at(i);
+            if invoke_callback(callback, val, param_is_float, false) != 0 {
+                bolide_list_push(dst, val);
+            }
+        }
+        dst
+    }
 }
 
 pub(crate) fn print_element_inline(elem_type: ElementType, val: i64) {

@@ -98,6 +98,13 @@ enum Commands {
         /// Output file path
         #[arg(short, long)]
         output: Option<PathBuf>,
+        /// Compile to a C-linkable static library (.lib/.a) instead of an executable.
+        /// Suppresses the synthetic `main` entry; only `export fn` symbols use bare names.
+        #[arg(long)]
+        lib: bool,
+        /// Also emit a C header (.h) declaring all `export fn` functions.
+        #[arg(long)]
+        header: bool,
     },
 }
 
@@ -108,9 +115,25 @@ fn main() -> miette::Result<()> {
         Some(Commands::Run { file }) => {
             run_file(&file)?;
         }
-        Some(Commands::Compile { file, output }) => {
-            let out = output.unwrap_or_else(|| file.with_extension("exe"));
-            compile_file(&file, &out)?;
+        Some(Commands::Compile {
+            file,
+            output,
+            lib,
+            header,
+        }) => {
+            if lib {
+                let out = output.unwrap_or_else(|| {
+                    #[cfg(target_os = "windows")]
+                    let ext = "lib";
+                    #[cfg(not(target_os = "windows"))]
+                    let ext = "a";
+                    file.with_extension(ext)
+                });
+                compile_lib(&file, &out, header)?;
+            } else {
+                let out = output.unwrap_or_else(|| file.with_extension("exe"));
+                compile_file(&file, &out, header)?;
+            }
         }
         None => {
             run_repl()?;
@@ -142,8 +165,19 @@ fn run_file(file: &PathBuf) -> miette::Result<()> {
     Ok(())
 }
 
+/// 写出 C 头文件（如果编译结果包含 export 函数）
+fn write_header_if_present(result: &bolide_compiler::AotCompileResult, output: &PathBuf) {
+    if let Some(ref header) = result.c_header {
+        let header_path = output.with_extension("h");
+        match fs::write(&header_path, header) {
+            Ok(_) => println!("Generated C header: {}", header_path.display()),
+            Err(e) => eprintln!("Warning: failed to write header {}: {}", header_path.display(), e),
+        }
+    }
+}
+
 /// AOT 编译文件
-fn compile_file(file: &PathBuf, output: &PathBuf) -> miette::Result<()> {
+fn compile_file(file: &PathBuf, output: &PathBuf, header: bool) -> miette::Result<()> {
     println!("Compiling: {} -> {}", file.display(), output.display());
 
     // 读取源文件
@@ -171,6 +205,10 @@ fn compile_file(file: &PathBuf, output: &PathBuf) -> miette::Result<()> {
         println!("External libraries: {:?}", result.extern_libs);
     }
 
+    if header {
+        write_header_if_present(&result, output);
+    }
+
     // 写入目标文件
     let obj_path = output.with_extension("o");
     fs::write(&obj_path, &result.object_code)
@@ -186,6 +224,84 @@ fn compile_file(file: &PathBuf, output: &PathBuf) -> miette::Result<()> {
 
     println!("Successfully compiled: {}", output.display());
     Ok(())
+}
+
+/// AOT 编译为 C 可链接静态库（.lib/.a），抑制合成入口 main。
+/// C 端最终链接时仍需带上 bolide_runtime 静态库以解析 bolide_* 运行时符号。
+fn compile_lib(file: &PathBuf, output: &PathBuf, header: bool) -> miette::Result<()> {
+    println!("Compiling library: {} -> {}", file.display(), output.display());
+
+    let source =
+        fs::read_to_string(file).map_err(|e| miette::miette!("Failed to read file: {}", e))?;
+    let ast = parse_source(&source).map_err(|e| miette::miette!("Parse error: {}", e))?;
+
+    let mut compiler =
+        AotCompiler::new().map_err(|e| miette::miette!("Compiler init error: {}", e))?;
+    compiler.set_lib_mode(true);
+    if let Some(parent) = file.parent() {
+        compiler.set_base_dir(&parent.to_string_lossy());
+    }
+
+    let result = compiler
+        .compile(&ast)
+        .map_err(|e| miette::miette!("Compile error: {}", e))?;
+
+    if header {
+        write_header_if_present(&result, output);
+    }
+
+    // 写入目标文件，再打包成静态库
+    let obj_path = output.with_extension("o");
+    fs::write(&obj_path, &result.object_code)
+        .map_err(|e| miette::miette!("Failed to write object file: {}", e))?;
+
+    archive_static_lib(&obj_path, output)?;
+    let _ = fs::remove_file(&obj_path);
+
+    println!("Successfully built static library: {}", output.display());
+    println!(
+        "Note: link your C program with both {} and the bolide runtime static library.",
+        output.display()
+    );
+    Ok(())
+}
+
+/// 把单个 .o 打包成静态库：Windows 用 llvm-lib，Unix 用 ar。
+fn archive_static_lib(obj_path: &PathBuf, output: &PathBuf) -> miette::Result<()> {
+    #[cfg(target_os = "windows")]
+    {
+        let out_arg = format!("/OUT:{}", output.display());
+        // llvm-lib 与 MSVC lib.exe 命令行兼容；优先 llvm-lib（随 LLVM 提供）
+        let candidates = ["llvm-lib", "lib"];
+        let mut last_err = String::new();
+        for tool in candidates {
+            match Command::new(tool)
+                .arg(&out_arg)
+                .arg(obj_path.display().to_string())
+                .status()
+            {
+                Ok(status) if status.success() => return Ok(()),
+                Ok(status) => last_err = format!("{} exited with {}", tool, status),
+                Err(e) => last_err = format!("{} not found: {}", tool, e),
+            }
+        }
+        Err(miette::miette!("Failed to archive static library: {}", last_err))
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let status = Command::new("ar")
+            .arg("rcs")
+            .arg(output.display().to_string())
+            .arg(obj_path.display().to_string())
+            .status()
+            .map_err(|e| miette::miette!("ar not found: {}", e))?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(miette::miette!("ar failed to archive static library"))
+        }
+    }
 }
 
 /// 查找运行时库路径

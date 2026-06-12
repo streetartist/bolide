@@ -33,13 +33,15 @@ function PeakMB([string]$Label, [string]$Exe, [string[]]$Args) {
 Write-Host "Peak memory (WS), single run`n"
 
 Write-Host "===== fib(40) ====="
-PeakMB "C (gcc -O3)"  "$Root\bench\fib_rec_c.exe"
-PeakMB "Go (gc)"      "$Root\bench\fib_rec_go.exe"
-PeakMB "Bolide AOT"   "$Root\bench\fib_rec_bl.exe"
+PeakMB "C (gcc -O3)"   "$Root\bench\fib_rec_c.exe"
+PeakMB "Go (gc)"       "$Root\bench\fib_rec_go.exe"
+PeakMB "Swift 6.3 (-O)" "$Root\bench\fib_rec_swift.exe"
+PeakMB "Bolide AOT"    "$Root\bench\fib_rec_bl.exe"
 
 Write-Host "`n===== sieve(50M) ====="
-PeakMB "C (gcc -O3)"  "$Root\bench\sieve_c.exe"
-PeakMB "Go (gc)"      "$Root\bench\sieve_go.exe"
-PeakMB "Bolide AOT"   "$Root\bench\sieve_bl.exe"
+PeakMB "C (gcc -O3)"   "$Root\bench\sieve_c.exe"
+PeakMB "Go (gc)"       "$Root\bench\sieve_go.exe"
+PeakMB "Swift 6.3 (-O)" "$Root\bench\sieve_swift.exe"
+PeakMB "Bolide AOT"    "$Root\bench\sieve_bl.exe"
 
 Write-Host "`nDone."
