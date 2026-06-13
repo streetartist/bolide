@@ -1,0 +1,21 @@
+// 列表推导式回归测试
+
+let nums: list<int> = [1, 2, 3, 4, 5];
+
+// 基本映射
+print([x * 2 for x in nums]);
+
+// 过滤
+print([x for x in nums if x % 2 == 0]);
+
+// range 迭代
+print([x * x for x in range(5)]);
+
+// 字符串元素
+print([s + "!" for s in ["a", "b", "c"]]);
+
+// 带条件的 range
+print([x for x in range(10) if x % 3 == 0]);
+
+// 嵌套表达式
+print([x + 10 for x in [1, 2, 3]]);

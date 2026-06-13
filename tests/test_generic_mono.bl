@@ -1,0 +1,56 @@
+// 泛型函数单态化回归测试
+
+fn id<T>(x: T) -> T {
+    return x;
+}
+
+fn sum<T>(a: T, b: T) -> T {
+    return a + b;
+}
+
+fn pair<T, U>(a: T, b: U) -> (T, U) {
+    return (a, b);
+}
+
+fn wrap<T>(x: T) -> list<T> {
+    return [x];
+}
+
+fn twice<T>(x: T) -> T {
+    return id(id(x));
+}
+
+fn show<T>(x: T) {
+    print(x);
+}
+
+// int
+print(id(42));
+print(sum(1, 2));
+print(twice(5));
+
+// float
+let f: float = id(3.5);
+print(f);
+print(sum(1.5, 2.5));
+
+// str
+print(id("hello"));
+show("world");
+
+// bool
+print(id(true));
+
+// 多类型参数
+print(pair(10, "x"));
+print(pair("y", 20));
+
+// 嵌套泛型调用
+print(wrap(7));
+print(wrap("item"));
+
+// 从泛型调用推导的变量
+let n: int = id(100);
+let s: str = id("bolide");
+print(n);
+print(s);

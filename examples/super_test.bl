@@ -1,0 +1,42 @@
+// super 调用父类方法 / 字段 —— 完整面向对象继承
+
+class Animal {
+    age: int;
+
+    fn describe() -> int {
+        // 基类的描述：返回年龄
+        return self.age;
+    }
+
+    fn sound() -> int {
+        return 0;
+    }
+}
+
+class Dog: Animal {
+    breed: int;
+
+    // 重写 sound，但通过 super 复用父类逻辑
+    fn describe() -> int {
+        // super.describe() 调用父类 Animal 的 describe，传入同一 self
+        let base: int = super.describe();
+        // 在父类结果上叠加子类信息（品种编号）
+        return base + self.breed;
+    }
+
+    fn sound() -> int {
+        return super.sound() + 100;
+    }
+}
+
+let d: Dog = Dog(5, 3);
+
+print("describe (5 + 3 = 8):");
+print(d.describe());
+
+print("sound (0 + 100 = 100):");
+print(d.sound());
+
+// 直接访问父类字段（super.age 与 self.age 等价，布局兼容）
+print("age via self (5):");
+print(d.age);

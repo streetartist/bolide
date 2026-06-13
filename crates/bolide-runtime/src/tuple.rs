@@ -261,6 +261,55 @@ pub extern "C" fn bolide_tuple_release(ptr: *mut BolideTuple) -> bool {
     }
 }
 
+/// 带步长的元组切片（返回新元组，RC=1）。Python 语义，按元素索引。
+///   flags bit0=has_start, bit1=has_end；step 由编译器恒传具体值（缺省 1）。
+/// 空结果返回 null（与 bolide_tuple_new_typed 对 len==0 的约定一致）。
+#[no_mangle]
+pub extern "C" fn bolide_tuple_slice_step(
+    ptr: *const BolideTuple,
+    start: i64,
+    end: i64,
+    step: i64,
+    flags: i64,
+) -> *mut BolideTuple {
+    if ptr.is_null() {
+        return std::ptr::null_mut();
+    }
+    unsafe {
+        let src = &*ptr;
+        let len = src.len as i64;
+        let step = if step == 0 { 1 } else { step };
+        let has_start = flags & 1 != 0;
+        let has_end = flags & 2 != 0;
+
+        let indices = crate::list::slice_indices(len, start, end, step, has_start, has_end);
+        if indices.is_empty() {
+            return std::ptr::null_mut();
+        }
+
+        let src_tags = src.type_tags();
+        let src_data = src.data_ptr();
+
+        // 收集结果的 tags
+        let new_len = indices.len();
+        let tags: Vec<u8> = indices.iter().map(|&i| *src_tags.add(i as usize)).collect();
+
+        let new_tuple = bolide_tuple_new_typed(new_len, tags.as_ptr());
+        if new_tuple.is_null() {
+            return std::ptr::null_mut();
+        }
+        let dst_data = (*new_tuple).data_ptr_mut();
+        for (di, &si) in indices.iter().enumerate() {
+            let tag = *src_tags.add(si as usize);
+            let val = *src_data.add(si as usize);
+            // 对 RC 类型元素 retain（新元组持有一份引用）
+            retain_raw_static(ElementType::from(tag), val);
+            *dst_data.add(di) = val;
+        }
+        new_tuple
+    }
+}
+
 // ==================== 打印 ====================
 
 /// 类型感知打印元组
@@ -291,6 +340,41 @@ pub extern "C" fn bolide_print_tuple(ptr: *const BolideTuple) {
 }
 
 // ==================== 内部辅助 ====================
+
+fn retain_raw_static(elem_type: ElementType, raw: i64) {
+    let ptr = raw as *mut std::ffi::c_void;
+    if ptr.is_null() {
+        return;
+    }
+    use ElementType::*;
+    match elem_type {
+        String => {
+            use crate::BolideString;
+            crate::bolide_string_retain(ptr as *mut BolideString);
+        }
+        BigInt => {
+            use crate::BolideBigInt;
+            crate::bolide_bigint_retain(ptr as *mut BolideBigInt);
+        }
+        Decimal => {
+            use crate::BolideDecimal;
+            crate::bolide_decimal_retain(ptr as *mut BolideDecimal);
+        }
+        List => {
+            use crate::BolideList;
+            crate::bolide_list_retain(ptr as *mut BolideList);
+        }
+        Dict => {
+            use crate::BolideDict;
+            crate::bolide_dict_retain(ptr as *mut BolideDict);
+        }
+        Dynamic => {
+            use crate::BolideDynamic;
+            crate::bolide_dynamic_retain(ptr as *mut BolideDynamic);
+        }
+        _ => {} // Int/Float/Bool/Ptr 不需要 retain
+    }
+}
 
 fn release_raw_static(elem_type: ElementType, raw: i64) {
     let ptr = raw as *mut std::ffi::c_void;

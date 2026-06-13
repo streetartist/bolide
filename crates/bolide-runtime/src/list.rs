@@ -289,6 +289,53 @@ impl BolideList {
 
 // ==================== FFI 导出 ====================
 
+/// 计算切片选中的下标序列（Python 语义，含负步长）。
+/// `len` 为容器长度；`has_start`/`has_end` 表示对应边界是否显式给出，
+/// 否则按 step 正负取默认边界。返回升序或降序的下标列表。
+pub(crate) fn slice_indices(
+    len: i64,
+    start: i64,
+    end: i64,
+    step: i64,
+    has_start: bool,
+    has_end: bool,
+) -> Vec<i64> {
+    let mut out = Vec::new();
+    if len == 0 || step == 0 {
+        return out;
+    }
+    // 归一化单个边界到 [lo, hi] 钳制范围；def 为缺省值
+    let norm = |v: i64, def_lo: i64, def_hi: i64| -> i64 {
+        let v = if v < 0 { v + len } else { v };
+        v.clamp(def_lo, def_hi)
+    };
+
+    if step > 0 {
+        // 默认 start=0, end=len；钳制到 [0, len]
+        let s = if has_start { norm(start, 0, len) } else { 0 };
+        let e = if has_end { norm(end, 0, len) } else { len };
+        let mut i = s;
+        while i < e {
+            out.push(i);
+            i += step;
+        }
+    } else {
+        // 负步长：默认 start=len-1, end=-1（含 0）；钳制到 [-1, len-1]
+        let s = if has_start {
+            norm(start, -1, len - 1)
+        } else {
+            len - 1
+        };
+        let e = if has_end { norm(end, -1, len - 1) } else { -1 };
+        let mut i = s;
+        while i > e {
+            out.push(i);
+            i += step; // step 为负
+        }
+    }
+    out
+}
+
 /// 创建新列表
 #[no_mangle]
 pub extern "C" fn bolide_list_new(elem_type: u8) -> *mut BolideList {
@@ -712,6 +759,38 @@ pub extern "C" fn bolide_list_slice(
             dst.push(value);
         }
 
+        new_list
+    }
+}
+
+/// 带步长的切片（返回新列表）。Python 语义：
+///   flags bit0=has_start, bit1=has_end；step 由编译器恒传具体值（缺省 1）。
+///   step<0 时反向，默认边界相应调整。
+#[no_mangle]
+pub extern "C" fn bolide_list_slice_step(
+    list: *const BolideList,
+    start: i64,
+    end: i64,
+    step: i64,
+    flags: i64,
+) -> *mut BolideList {
+    if list.is_null() {
+        return std::ptr::null_mut();
+    }
+    unsafe {
+        let src = &*list;
+        let len = src.len as i64;
+        let step = if step == 0 { 1 } else { step };
+        let has_start = flags & 1 != 0;
+        let has_end = flags & 2 != 0;
+
+        let indices = slice_indices(len, start, end, step, has_start, has_end);
+        let new_list = BolideList::with_capacity(src.elem_type, indices.len());
+        let dst = &mut *new_list;
+        for i in indices {
+            // push 内部已 retain
+            dst.push(src.read_at(i as usize));
+        }
         new_list
     }
 }

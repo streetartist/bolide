@@ -24,6 +24,7 @@ program = { SOI ~ (statement)* ~ EOI }
 statement = {
     extern_block |
     func_def |
+    enum_def |
     class_def |
     if_stmt |
     while_stmt |
@@ -32,6 +33,7 @@ statement = {
     continue_stmt |
     throw_stmt |
     try_stmt |
+    match_stmt |
     pool_stmt |
     await_scope_stmt |
     async_select_stmt |
@@ -48,6 +50,17 @@ throw_stmt = { "throw" ~ expr ~ ";" }
 try_stmt  = { "try" ~ block ~ catch_clause+ ~ finally? }
 catch_clause = { "catch" ~ "(" ~ ident ~ ":" ~ type_expr ~ ")" ~ block }
 finally = { "finally" ~ !id_char ~ block }
+
+match_stmt = { "match" ~ expr ~ "{" ~ match_arm* ~ "}" }
+match_arm = { pattern ~ "=>" ~ block ~ ","? }
+pattern = { variant_pattern | wildcard_pattern | none_pattern | bool_pattern | string_pattern | int_pattern | bind_pattern }
+variant_pattern = { (ident ~ ".")? ~ ident ~ "(" ~ (pattern ~ ("," ~ pattern)* ~ ","?)? ~ ")" }
+wildcard_pattern = @{ "_" }
+int_pattern = { int_lit }
+string_pattern = { string_lit }
+bool_pattern = { bool_lit }
+none_pattern = { none_lit }
+bind_pattern = { ident }
 
 // 导入语句
 import_stmt = { "import" ~ (string_lit | module_path) ~ (kw_as ~ ident)? ~ ";" }
@@ -67,12 +80,16 @@ extern_typedef = { "type" ~ ident ~ "=" ~ c_type ~ ";" }
 // 函数定义（支持 async）
 // 生命周期注解: fn foo(ref x: bigint) -> str from x
 func_def = {
-    export_keyword? ~ async_keyword? ~ "fn" ~ ident ~ "(" ~ param_list? ~ ")" ~ ("->" ~ type_expr)? ~ lifetime_clause? ~ block
+    export_keyword? ~ async_keyword? ~ "fn" ~ ident ~ generic_param_list? ~ "(" ~ param_list? ~ ")" ~ ("->" ~ type_expr)? ~ lifetime_clause? ~ block
 }
 async_keyword = { "async" }
 export_keyword = { "export" }
+generic_param_list = { "<" ~ ident ~ ("," ~ ident)* ~ ","? ~ ">" }
 param_list = { param ~ ("," ~ param)* ~ ","? }
-param = { param_mode? ~ ident ~ ":" ~ type_expr }
+param = { kw_variadic_param | variadic_param | normal_param }
+normal_param = { param_mode? ~ ident ~ ":" ~ type_expr ~ ("=" ~ expr)? }
+variadic_param = { "*" ~ ident ~ ":" ~ type_expr }
+kw_variadic_param = { "**" ~ ident ~ ":" ~ type_expr }
 param_mode = { "owned" | "ref" }
 // 生命周期依赖子句: from x 或 from x, y
 lifetime_clause = { kw_from ~ ident ~ ("," ~ ident)* }
@@ -85,6 +102,18 @@ class_body = { class_member* }
 class_member = { field_decl | method_def }
 field_decl = { ident ~ ":" ~ type_expr ~ ("=" ~ expr)? ~ ";" }
 method_def = { func_def }
+
+// 代数数据类型
+enum_def = {
+    ("enum" | "union") ~ ident ~ generic_param_list? ~ "{" ~ enum_variant* ~ "}"
+}
+enum_variant = {
+    ident ~ (tuple_variant_fields | struct_variant_fields)? ~ ","?
+}
+tuple_variant_fields = { "(" ~ (enum_variant_field ~ ("," ~ enum_variant_field)* ~ ","?)? ~ ")" }
+struct_variant_fields = { "{" ~ (named_enum_variant_field ~ ("," ~ named_enum_variant_field)* ~ ","?)? ~ "}" }
+enum_variant_field = { type_expr }
+named_enum_variant_field = { ident ~ ":" ~ type_expr }
 
 // 控制流
 if_stmt = {
@@ -160,8 +189,18 @@ bitand_op = { "&" }
 unary_op = @{ "-" | "not" ~ !id_char }
 
 // 后缀操作
-call_args = { "(" ~ (expr ~ ("," ~ expr)* ~ ","?)? ~ ")" }
-index = { "[" ~ expr ~ "]" }
+call_args = { "(" ~ (call_arg ~ ("," ~ call_arg)* ~ ","?)? ~ ")" }
+call_arg = { kw_spread_arg | spread_arg | named_arg | expr }
+kw_spread_arg = { "**" ~ expr }
+spread_arg = { "*" ~ expr }
+named_arg = { ident ~ (":" | ("=" ~ !"=")) ~ expr }
+index = { "[" ~ (slice | expr) ~ "]" }
+// 切片: start? : end? (: step?)? —— 至少含一个 ":"，与单表达式索引无歧义。
+// 各段用独立规则，缺省时仍产生空 pair，便于按位置区分 start/end/step。
+slice = { slice_start ~ ":" ~ slice_end ~ (":" ~ slice_step)? }
+slice_start = { expr? }
+slice_end = { expr? }
+slice_step = { expr? }
 member = { "." ~ ident }
 
 // 基本表达式
@@ -172,6 +211,7 @@ primary = {
     await_expr |
     spawn_expr |
     recv_expr |
+    closure_expr |
     dict_literal |
     list_literal |
     bigint_lit |
@@ -182,8 +222,12 @@ primary = {
     bool_lit |
     none_lit |
     self_lit |
+    super_lit |
     ident
 }
+
+// 闭包表达式: fn(params) -> ret { body }
+closure_expr = { "fn" ~ "(" ~ param_list? ~ ")" ~ ("->" ~ type_expr)? ~ block }
 
 // await 表达式: await expr（绑定到后缀层级，await a + b 解析为 (await a) + b）
 await_expr = { kw_await ~ postfix_expr }
@@ -194,6 +238,9 @@ await_all_expr = { kw_await ~ "all" ~ "{" ~ (expr ~ ("," ~ expr)* ~ ","?)? ~ "}"
 // self 字面量
 self_lit = @{ "self" ~ !id_char }
 
+// super 字面量（父类方法/字段访问）
+super_lit = @{ "super" ~ !id_char }
+
 // spawn 表达式: spawn func(args)
 spawn_expr = { kw_spawn ~ ident ~ call_args }
 
@@ -201,7 +248,9 @@ spawn_expr = { kw_spawn ~ ident ~ call_args }
 recv_expr = { "<-" ~ ident }
 
 // 字面量
-list_literal = { "[" ~ (expr ~ ("," ~ expr)* ~ ","?)? ~ "]" }
+list_literal = { "[" ~ (list_comprehension | list_items)? ~ "]" }
+list_items = { expr ~ ("," ~ expr)* ~ ","? }
+list_comprehension = { expr ~ "for" ~ ident ~ ("," ~ ident)* ~ "in" ~ expr ~ ("if" ~ expr)? }
 dict_literal = { "{" ~ (dict_entry ~ ("," ~ dict_entry)* ~ ","?)? ~ "}" }
 dict_entry = { expr ~ ":" ~ expr }
 tuple_literal = { "(" ~ expr ~ "," ~ (expr ~ ("," ~ expr)*)? ~ ","? ~ ")" }
@@ -225,7 +274,7 @@ bool_lit = @{ ("true" | "false") ~ !id_char }
 none_lit = @{ "none" ~ !id_char }
 
 // 类型
-type_expr = { ref_mode? ~ (tuple_type | list_type | dict_type | channel_type | func_type | basic_type) }
+type_expr = { ref_mode? ~ (tuple_type | list_type | dict_type | channel_type | func_type | applied_type | basic_type) }
 ref_mode = { "weak" | "unowned" }
 tuple_type = { "(" ~ type_expr ~ ("," ~ type_expr)+ ~ ")" }
 list_type = { "list" ~ "<" ~ type_expr ~ ">" }
@@ -233,6 +282,7 @@ dict_type = { "dict" ~ "<" ~ type_expr ~ "," ~ type_expr ~ ">" }
 channel_type = { "channel" ~ "<" ~ type_expr ~ ">" }
 func_type = { "func" ~ "(" ~ func_type_params? ~ ")" ~ ("->" ~ type_expr)? }
 func_type_params = { type_expr ~ ("," ~ type_expr)* }
+applied_type = { (qualified_type | ident) ~ "<" ~ type_expr ~ ("," ~ type_expr)* ~ ","? ~ ">" }
 // 支持模块限定类型: module.ClassName
 qualified_type = { ident ~ ("." ~ ident)+ }
 // 内建类型名在 convert 层按字符串识别；这里统一走 ident，
@@ -249,7 +299,7 @@ keyword = {
     "true" | "false" | "none" | "and" | "or" | "not" |
     "spawn" | "pool" | "self" | "super" | "select" | "timeout" | "default" |
     "async" | "await" | "scope" | "all" | "extern" | "struct" | "type" | "export" |
-    "from" | "owned" | "ref" | "weak" | "unowned") ~ !(ASCII_ALPHANUMERIC | "_")
+    "from" | "owned" | "ref" | "weak" | "unowned" | "enum" | "union" | "match") ~ !(ASCII_ALPHANUMERIC | "_")
 }
 
 // C 类型系统

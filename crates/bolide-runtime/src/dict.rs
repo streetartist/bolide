@@ -372,6 +372,21 @@ pub extern "C" fn bolide_dict_clone(dict: *const BolideDict) -> *mut BolideDict 
     }
 }
 
+/// 合并字典。src 中已有键会覆盖 dst 中的值。
+#[no_mangle]
+pub extern "C" fn bolide_dict_extend(dict: *mut BolideDict, other: *const BolideDict) {
+    if dict.is_null() || other.is_null() {
+        return;
+    }
+    unsafe {
+        let entries = (&*other).entries();
+        let dict = &mut *dict;
+        for (key, value) in entries {
+            dict.set(key, value);
+        }
+    }
+}
+
 /// 设置键值对
 #[no_mangle]
 pub extern "C" fn bolide_dict_set(dict: *mut BolideDict, key: i64, value: i64) {

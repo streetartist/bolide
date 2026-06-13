@@ -5,6 +5,7 @@
 mod aot;
 mod builtins;
 mod jit;
+mod monomorph;
 
 pub use aot::AotCompileResult;
 pub use aot::AotCompiler;
@@ -12,3 +13,4 @@ pub use aot::RUNTIME_SYMBOLS;
 pub use jit::JitCompiler;
 
 pub(crate) use builtins::inject_builtin_classes;
+pub(crate) use monomorph::monomorphize;

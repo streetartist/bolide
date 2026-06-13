@@ -13,6 +13,7 @@ pub enum Statement {
     Assign(Assign),
     FuncDef(FuncDef),
     ClassDef(ClassDef),
+    EnumDef(EnumDef),
     If(IfStmt),
     While(WhileStmt),
     For(ForStmt),
@@ -30,6 +31,7 @@ pub enum Statement {
     Throw(Expr),
     /// try { ... } catch { ... } - 异常捕获
     Try(TryStmt),
+    Match(MatchStmt),
     Expr(Expr),
     Import(Import),
     ExternBlock(ExternBlock),
@@ -73,6 +75,8 @@ pub struct FuncDef {
     pub is_async: bool,
     /// export fn：以裸名（无 mangling）导出，供 C 链接调用
     pub is_export: bool,
+    /// 泛型参数，如 `fn id<T>(x: T) -> T`
+    pub type_params: Vec<String>,
     pub params: Vec<Param>,
     pub return_type: Option<Type>,
     /// 生命周期依赖: from x, y 表示返回值依赖于参数 x 和 y 的生命周期
@@ -98,6 +102,11 @@ pub struct Param {
     pub name: String,
     pub ty: Type,
     pub mode: ParamMode,
+    pub default_value: Option<Expr>,
+    /// True for `*name: T`; the parameter is compiled as `list<T>`.
+    pub is_variadic: bool,
+    /// True for `**name: T`; the parameter is compiled as `dict<str, T>`.
+    pub is_kw_variadic: bool,
 }
 
 /// 类定义
@@ -107,6 +116,30 @@ pub struct ClassDef {
     pub parent: Option<String>, // 父类名（继承）
     pub fields: Vec<ClassField>,
     pub methods: Vec<FuncDef>,
+}
+
+/// enum/union 定义（代数数据类型）
+#[derive(Debug, Clone)]
+pub struct EnumDef {
+    pub name: String,
+    pub type_params: Vec<String>,
+    pub variants: Vec<EnumVariant>,
+    /// `union` 与 `enum` 共享同一 ADT 表示；该标志保留源码意图。
+    pub is_union: bool,
+}
+
+/// enum/union variant
+#[derive(Debug, Clone)]
+pub struct EnumVariant {
+    pub name: String,
+    pub fields: Vec<EnumVariantField>,
+}
+
+/// variant 字段。`name == None` 表示元组式字段，如 `Some(T)`。
+#[derive(Debug, Clone)]
+pub struct EnumVariantField {
+    pub name: Option<String>,
+    pub ty: Type,
 }
 
 /// 类字段
@@ -204,6 +237,36 @@ pub struct SendStmt {
     pub value: Expr,
 }
 
+/// match 语句
+#[derive(Debug, Clone)]
+pub struct MatchStmt {
+    pub expr: Expr,
+    pub arms: Vec<MatchArm>,
+}
+
+/// match 分支
+#[derive(Debug, Clone)]
+pub struct MatchArm {
+    pub pattern: Pattern,
+    pub body: Vec<Statement>,
+}
+
+/// 模式匹配 pattern
+#[derive(Debug, Clone)]
+pub enum Pattern {
+    Wildcard,
+    Bind(String),
+    Int(i64),
+    Bool(bool),
+    String(String),
+    None,
+    Variant {
+        enum_name: Option<String>,
+        variant: String,
+        fields: Vec<Pattern>,
+    },
+}
+
 /// Import 语句
 #[derive(Debug, Clone)]
 pub struct Import {
@@ -225,7 +288,20 @@ pub enum Expr {
     BinOp(Box<Expr>, BinOp, Box<Expr>),
     UnaryOp(UnaryOp, Box<Expr>),
     Call(Box<Expr>, Vec<Expr>),
+    /// Only valid inside call argument lists: `name: expr`.
+    NamedArg(String, Box<Expr>),
+    /// Only valid inside call argument lists: `*expr`.
+    SpreadArg(Box<Expr>),
+    /// Only valid inside call argument lists: `**expr`.
+    KwSpreadArg(Box<Expr>),
     Index(Box<Expr>, Box<Expr>),
+    /// 切片: base[start:end:step]，三段均可缺省（None 表示采用默认边界）
+    Slice(
+        Box<Expr>,
+        Option<Box<Expr>>,
+        Option<Box<Expr>>,
+        Option<Box<Expr>>,
+    ),
     Member(Box<Expr>, String),
     List(Vec<Expr>),
     /// 字典字面量: {key: value, ...}
@@ -240,6 +316,19 @@ pub enum Expr {
     AwaitAll(Vec<Expr>),
     /// 元组字面量: (expr, expr, ...)
     Tuple(Vec<Expr>),
+    /// 闭包表达式: fn(params) -> ret { body }
+    Closure {
+        params: Vec<Param>,
+        return_type: Option<Type>,
+        body: Vec<Statement>,
+    },
+    /// 列表推导式: [expr for var in iter if cond]
+    ListComprehension {
+        expr: Box<Expr>,
+        vars: Vec<String>,
+        iter: Box<Expr>,
+        filter: Option<Box<Expr>>,
+    },
     None,
 }
 
@@ -291,6 +380,10 @@ pub enum Type {
     List(Box<Type>),
     Dict(Box<Type>, Box<Type>), // dict<K, V>
     Tuple(Vec<Type>),           // 元组类型: (T1, T2, ...)
+    /// 泛型参数类型，如 `T`
+    Generic(String),
+    /// 已应用的代数数据类型，如 `Option<int>` / `Result<int, str>`
+    Adt(String, Vec<Type>),
     Custom(String),
     Weak(Box<Type>),    // 弱引用: weak T
     Unowned(Box<Type>), // 无主引用: unowned T

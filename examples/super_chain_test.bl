@@ -1,0 +1,33 @@
+// 三级继承下的 super：验证 super 从"定义当前方法的类"的父类开始向上查找
+
+class A {
+    n: int;
+    fn val() -> int { return self.n; }       // 仅 A 定义
+    fn tag() -> int { return 1; }
+}
+
+class B: A {
+    fn tag() -> int {
+        // B.tag 通过 super 调用 A.tag (=1)，叠加 10
+        return super.tag() + 10;
+    }
+}
+
+class C: B {
+    fn tag() -> int {
+        // C.tag 通过 super 调用 B.tag (=11)，叠加 100
+        return super.tag() + 100;
+    }
+    fn grand() -> int {
+        // super.val() 在 C 中：C 无 val，B 无 val，解析到 A.val —— 走继承链
+        return super.val();
+    }
+}
+
+let c: C = C(7);
+
+print("tag (1+10+100=111):");
+print(c.tag());
+
+print("grand via super->A.val (7):");
+print(c.grand());

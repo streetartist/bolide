@@ -38,6 +38,7 @@ fn parse_statement(pair: Pair<Rule>) -> Result<Option<Statement>, String> {
             parse_statement(inner)
         }
         Rule::func_def => Ok(Some(Statement::FuncDef(parse_func_def(pair)?))),
+        Rule::enum_def => Ok(Some(Statement::EnumDef(parse_enum_def(pair)?))),
         Rule::var_decl => Ok(Some(Statement::VarDecl(parse_var_decl(pair)?))),
         Rule::assign_stmt => Ok(Some(Statement::Assign(parse_assign(pair)?))),
         Rule::if_stmt => Ok(Some(Statement::If(parse_if_stmt(pair)?))),
@@ -52,6 +53,7 @@ fn parse_statement(pair: Pair<Rule>) -> Result<Option<Statement>, String> {
         Rule::continue_stmt => Ok(Some(Statement::Continue)),
         Rule::throw_stmt => Ok(Some(Statement::Throw(parse_expr(pair.into_inner().next().unwrap())?))),
         Rule::try_stmt => Ok(Some(Statement::Try(parse_try_stmt(pair)?))),
+        Rule::match_stmt => Ok(Some(Statement::Match(parse_match_stmt(pair)?))),
         Rule::return_stmt => Ok(Some(parse_return_stmt(pair)?)),
         Rule::expr_stmt => Ok(Some(Statement::Expr(parse_expr_stmt(pair)?))),
         Rule::import_stmt => Ok(Some(Statement::Import(parse_import(pair)?))),
@@ -135,6 +137,7 @@ fn parse_func_def(pair: Pair<Rule>) -> Result<FuncDef, String> {
     }
     let name = first.as_str().to_string();
 
+    let mut type_params = Vec::new();
     let mut params = Vec::new();
     let mut return_type = None;
     let mut lifetime_deps = None;
@@ -142,10 +145,14 @@ fn parse_func_def(pair: Pair<Rule>) -> Result<FuncDef, String> {
 
     for item in inner {
         match item.as_rule() {
+            Rule::generic_param_list => {
+                type_params = parse_generic_param_list(item);
+            }
             Rule::param_list => {
                 for param_pair in item.into_inner() {
                     params.push(parse_param(param_pair)?);
                 }
+                validate_params(&params)?;
             }
             Rule::type_expr => {
                 return_type = Some(parse_type(item)?);
@@ -166,10 +173,18 @@ fn parse_func_def(pair: Pair<Rule>) -> Result<FuncDef, String> {
         }
     }
 
+    for param in &mut params {
+        rewrite_type_generics(&mut param.ty, &type_params);
+    }
+    if let Some(ref mut ret_ty) = return_type {
+        rewrite_type_generics(ret_ty, &type_params);
+    }
+
     Ok(FuncDef {
         name,
         is_async,
         is_export,
+        type_params,
         params,
         return_type,
         lifetime_deps,
@@ -178,8 +193,55 @@ fn parse_func_def(pair: Pair<Rule>) -> Result<FuncDef, String> {
 }
 
 fn parse_param(pair: Pair<Rule>) -> Result<Param, String> {
-    let mut inner = pair.into_inner();
+    let inner_pair = pair
+        .into_inner()
+        .next()
+        .ok_or("Parameter is missing body")?;
+    let inner_rule = inner_pair.as_rule();
+    let mut inner = inner_pair.into_inner();
     let mut mode = ParamMode::Borrow; // 默认借用
+
+    if inner_rule == Rule::variadic_param {
+        let name = inner
+            .next()
+            .ok_or("Variadic parameter is missing name")?
+            .as_str()
+            .to_string();
+        let elem_ty = parse_type(
+            inner
+                .next()
+                .ok_or("Variadic parameter is missing type")?,
+        )?;
+        return Ok(Param {
+            name,
+            ty: Type::List(Box::new(elem_ty)),
+            mode,
+            default_value: None,
+            is_variadic: true,
+            is_kw_variadic: false,
+        });
+    }
+
+    if inner_rule == Rule::kw_variadic_param {
+        let name = inner
+            .next()
+            .ok_or("Keyword variadic parameter is missing name")?
+            .as_str()
+            .to_string();
+        let value_ty = parse_type(
+            inner
+                .next()
+                .ok_or("Keyword variadic parameter is missing type")?,
+        )?;
+        return Ok(Param {
+            name,
+            ty: Type::Dict(Box::new(Type::Str), Box::new(value_ty)),
+            mode,
+            default_value: None,
+            is_variadic: false,
+            is_kw_variadic: true,
+        });
+    }
 
     // 检查是否有参数模式
     let first = inner.next().unwrap();
@@ -195,7 +257,192 @@ fn parse_param(pair: Pair<Rule>) -> Result<Param, String> {
     };
 
     let ty = parse_type(inner.next().unwrap())?;
-    Ok(Param { name, ty, mode })
+    let default_value = inner.next().map(parse_expr).transpose()?;
+    if mode == ParamMode::Ref && default_value.is_some() {
+        return Err(format!(
+            "ref parameter '{}' cannot have a default value",
+            name
+        ));
+    }
+    Ok(Param {
+        name,
+        ty,
+        mode,
+        default_value,
+        is_variadic: false,
+        is_kw_variadic: false,
+    })
+}
+
+fn parse_generic_param_list(pair: Pair<Rule>) -> Vec<String> {
+    pair.into_inner()
+        .filter(|p| p.as_rule() == Rule::ident)
+        .map(|p| p.as_str().to_string())
+        .collect()
+}
+
+fn rewrite_type_generics(ty: &mut Type, type_params: &[String]) {
+    match ty {
+        Type::Custom(name) if type_params.iter().any(|p| p == name) => {
+            *ty = Type::Generic(name.clone());
+        }
+        Type::Channel(inner)
+        | Type::List(inner)
+        | Type::Weak(inner)
+        | Type::Unowned(inner) => rewrite_type_generics(inner, type_params),
+        Type::Dict(k, v) => {
+            rewrite_type_generics(k, type_params);
+            rewrite_type_generics(v, type_params);
+        }
+        Type::Tuple(items) => {
+            for item in items {
+                rewrite_type_generics(item, type_params);
+            }
+        }
+        Type::FuncSig(params, ret) => {
+            for param in params {
+                rewrite_type_generics(param, type_params);
+            }
+            if let Some(ret) = ret {
+                rewrite_type_generics(ret, type_params);
+            }
+        }
+        Type::Adt(_, args) => {
+            for arg in args {
+                rewrite_type_generics(arg, type_params);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn validate_params(params: &[Param]) -> Result<(), String> {
+    let mut seen_variadic = false;
+    let mut seen_kw_variadic = false;
+    for (i, param) in params.iter().enumerate() {
+        if params[..i].iter().any(|p| p.name == param.name) {
+            return Err(format!("Duplicate parameter '{}'", param.name));
+        }
+        if param.is_variadic {
+            if seen_variadic {
+                return Err("Only one *args parameter is allowed".to_string());
+            }
+            if seen_kw_variadic {
+                return Err("*args parameter must appear before **kwargs".to_string());
+            }
+            seen_variadic = true;
+        }
+        if param.is_kw_variadic {
+            if seen_kw_variadic {
+                return Err("Only one **kwargs parameter is allowed".to_string());
+            }
+            if i + 1 != params.len() {
+                return Err(format!(
+                    "Keyword variadic parameter '{}' must be the last parameter",
+                    param.name
+                ));
+            }
+            seen_kw_variadic = true;
+        }
+        if param.is_variadic && params[i + 1..].iter().any(|p| !p.is_kw_variadic) {
+            return Err(format!(
+                "Variadic parameter '{}' must appear after normal parameters",
+                param.name
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn parse_enum_def(pair: Pair<Rule>) -> Result<EnumDef, String> {
+    let is_union = pair.as_str().trim_start().starts_with("union");
+    let mut inner = pair.into_inner();
+    let name = inner
+        .next()
+        .ok_or("enum/union is missing name")?
+        .as_str()
+        .to_string();
+    let mut type_params = Vec::new();
+    let mut variants = Vec::new();
+
+    for item in inner {
+        match item.as_rule() {
+            Rule::generic_param_list => {
+                type_params = parse_generic_param_list(item);
+            }
+            Rule::enum_variant => {
+                variants.push(parse_enum_variant(item, &type_params)?);
+            }
+            _ => {}
+        }
+    }
+
+    if variants.is_empty() {
+        return Err(format!("enum/union '{}' must declare at least one variant", name));
+    }
+
+    Ok(EnumDef {
+        name,
+        type_params,
+        variants,
+        is_union,
+    })
+}
+
+fn parse_enum_variant(
+    pair: Pair<Rule>,
+    type_params: &[String],
+) -> Result<EnumVariant, String> {
+    let mut inner = pair.into_inner();
+    let name = inner
+        .next()
+        .ok_or("enum variant is missing name")?
+        .as_str()
+        .to_string();
+    let mut fields = Vec::new();
+
+    if let Some(field_group) = inner.next() {
+        match field_group.as_rule() {
+            Rule::tuple_variant_fields => {
+                for field_pair in field_group.into_inner() {
+                    if field_pair.as_rule() == Rule::enum_variant_field {
+                        let ty_pair = field_pair
+                            .into_inner()
+                            .next()
+                            .ok_or("enum variant field is missing type")?;
+                        let mut ty = parse_type(ty_pair)?;
+                        rewrite_type_generics(&mut ty, type_params);
+                        fields.push(EnumVariantField { name: None, ty });
+                    }
+                }
+            }
+            Rule::struct_variant_fields => {
+                for field_pair in field_group.into_inner() {
+                    if field_pair.as_rule() == Rule::named_enum_variant_field {
+                        let mut field_inner = field_pair.into_inner();
+                        let field_name = field_inner
+                            .next()
+                            .ok_or("named enum field is missing name")?
+                            .as_str()
+                            .to_string();
+                        let mut ty = parse_type(
+                            field_inner
+                                .next()
+                                .ok_or("named enum field is missing type")?,
+                        )?;
+                        rewrite_type_generics(&mut ty, type_params);
+                        fields.push(EnumVariantField {
+                            name: Some(field_name),
+                            ty,
+                        });
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    Ok(EnumVariant { name, fields })
 }
 
 fn parse_type(pair: Pair<Rule>) -> Result<Type, String> {
@@ -251,6 +498,20 @@ fn parse_type(pair: Pair<Rule>) -> Result<Type, String> {
                 }
             }
             Type::FuncSig(param_types, return_type)
+        }
+        Rule::applied_type => {
+            let mut inner = type_pair.into_inner();
+            let name_pair = inner
+                .next()
+                .ok_or("Applied type is missing type name")?;
+            let name = name_pair
+                .as_str()
+                .split('.')
+                .map(|p| p.trim())
+                .collect::<Vec<&str>>()
+                .join(".");
+            let args: Result<Vec<_>, _> = inner.map(parse_type).collect();
+            Type::Adt(name, args?)
         }
         Rule::basic_type => {
             let s = type_pair.as_str().trim();
@@ -506,6 +767,86 @@ fn parse_try_stmt(pair: Pair<Rule>) -> Result<TryStmt, String> {
     Ok(TryStmt { try_body, catch_clauses, finally })
 }
 
+fn parse_match_stmt(pair: Pair<Rule>) -> Result<MatchStmt, String> {
+    let mut inner = pair.into_inner();
+    let expr = parse_expr(inner.next().ok_or("match is missing expression")?)?;
+    let mut arms = Vec::new();
+    for item in inner {
+        if item.as_rule() == Rule::match_arm {
+            let mut arm_inner = item.into_inner();
+            let pattern = parse_pattern(
+                arm_inner
+                    .next()
+                    .ok_or("match arm is missing pattern")?,
+            )?;
+            let body = parse_block(
+                arm_inner
+                    .next()
+                    .ok_or("match arm is missing body")?,
+            )?;
+            arms.push(MatchArm { pattern, body });
+        }
+    }
+    Ok(MatchStmt { expr, arms })
+}
+
+fn parse_pattern(pair: Pair<Rule>) -> Result<Pattern, String> {
+    let inner = if pair.as_rule() == Rule::pattern {
+        pair.into_inner()
+            .next()
+            .ok_or("pattern is missing body")?
+    } else {
+        pair
+    };
+
+    match inner.as_rule() {
+        Rule::wildcard_pattern => Ok(Pattern::Wildcard),
+        Rule::bind_pattern => Ok(Pattern::Bind(inner.as_str().to_string())),
+        Rule::int_pattern => {
+            let s = inner.as_str().replace('_', "");
+            let value = if let Some(hex) = s.strip_prefix("0x") {
+                i64::from_str_radix(hex, 16)
+                    .map_err(|e| format!("Invalid int pattern {}: {}", inner.as_str(), e))?
+            } else {
+                s.parse::<i64>()
+                    .map_err(|e| format!("Invalid int pattern {}: {}", inner.as_str(), e))?
+            };
+            Ok(Pattern::Int(value))
+        }
+        Rule::string_pattern => {
+            let s = inner.as_str();
+            Ok(Pattern::String(unescape_string(&s[1..s.len() - 1])))
+        }
+        Rule::bool_pattern => Ok(Pattern::Bool(inner.as_str() == "true")),
+        Rule::none_pattern => Ok(Pattern::None),
+        Rule::variant_pattern => {
+            let mut enum_name = None;
+            let mut variant = None;
+            let mut fields = Vec::new();
+            for item in inner.into_inner() {
+                match item.as_rule() {
+                    Rule::ident => {
+                        if variant.is_none() {
+                            variant = Some(item.as_str().to_string());
+                        } else {
+                            enum_name = variant.take();
+                            variant = Some(item.as_str().to_string());
+                        }
+                    }
+                    Rule::pattern => fields.push(parse_pattern(item)?),
+                    _ => {}
+                }
+            }
+            Ok(Pattern::Variant {
+                enum_name,
+                variant: variant.ok_or("variant pattern is missing variant name")?,
+                fields,
+            })
+        }
+        _ => Err(format!("Unknown pattern: {:?}", inner.as_rule())),
+    }
+}
+
 fn parse_expr_stmt(pair: Pair<Rule>) -> Result<Expr, String> {
     parse_expr(pair.into_inner().next().unwrap())
 }
@@ -741,12 +1082,21 @@ fn parse_postfix_expr(pair: Pair<Rule>) -> Result<Expr, String> {
     for item in inner {
         match item.as_rule() {
             Rule::call_args => {
-                let args: Result<Vec<_>, _> = item.into_inner().map(parse_expr).collect();
+                let args: Result<Vec<_>, _> = item.into_inner().map(parse_call_arg).collect();
                 expr = Expr::Call(Box::new(expr), args?);
             }
             Rule::index => {
-                let idx = parse_expr(item.into_inner().next().unwrap())?;
-                expr = Expr::Index(Box::new(expr), Box::new(idx));
+                let inner = item.into_inner().next().unwrap();
+                match inner.as_rule() {
+                    Rule::slice => {
+                        let (start, end, step) = parse_slice(inner)?;
+                        expr = Expr::Slice(Box::new(expr), start, end, step);
+                    }
+                    _ => {
+                        let idx = parse_expr(inner)?;
+                        expr = Expr::Index(Box::new(expr), Box::new(idx));
+                    }
+                }
             }
             Rule::member => {
                 let name = item.into_inner().next().unwrap().as_str().to_string();
@@ -756,6 +1106,146 @@ fn parse_postfix_expr(pair: Pair<Rule>) -> Result<Expr, String> {
         }
     }
     Ok(expr)
+}
+
+fn parse_call_arg(pair: Pair<Rule>) -> Result<Expr, String> {
+    let inner = pair
+        .into_inner()
+        .next()
+        .ok_or("Call argument is missing body")?;
+    match inner.as_rule() {
+        Rule::spread_arg => {
+            let value = parse_expr(
+                inner
+                    .into_inner()
+                    .next()
+                    .ok_or("Spread argument is missing value")?,
+            )?;
+            Ok(Expr::SpreadArg(Box::new(value)))
+        }
+        Rule::kw_spread_arg => {
+            let value = parse_expr(
+                inner
+                    .into_inner()
+                    .next()
+                    .ok_or("Keyword spread argument is missing value")?,
+            )?;
+            Ok(Expr::KwSpreadArg(Box::new(value)))
+        }
+        Rule::named_arg => {
+            let mut named = inner.into_inner();
+            let name = named
+                .next()
+                .ok_or("Named argument is missing name")?
+                .as_str()
+                .to_string();
+            let value = parse_expr(named.next().ok_or("Named argument is missing value")?)?;
+            Ok(Expr::NamedArg(name, Box::new(value)))
+        }
+        Rule::expr => parse_expr(inner),
+        _ => Err(format!("Unknown call argument: {:?}", inner.as_rule())),
+    }
+}
+
+/// 解析切片 start? : end? (: step?)? 为三个 Option<Box<Expr>>。
+/// 各段为独立规则（slice_start/slice_end/slice_step），内部 expr 可缺省。
+fn parse_slice(
+    pair: Pair<Rule>,
+) -> Result<
+    (
+        Option<Box<Expr>>,
+        Option<Box<Expr>>,
+        Option<Box<Expr>>,
+    ),
+    String,
+> {
+    let mut start = None;
+    let mut end = None;
+    let mut step = None;
+    for seg in pair.into_inner() {
+        let rule = seg.as_rule();
+        // 段内若有 expr 则解析，否则保持 None
+        let inner_expr = seg.into_inner().next();
+        let parsed = match inner_expr {
+            Some(e) => Some(Box::new(parse_expr(e)?)),
+            None => None,
+        };
+        match rule {
+            Rule::slice_start => start = parsed,
+            Rule::slice_end => end = parsed,
+            Rule::slice_step => step = parsed,
+            _ => {}
+        }
+    }
+    Ok((start, end, step))
+}
+
+fn parse_list_comprehension(pair: Pair<Rule>) -> Result<Expr, String> {
+    let mut inner = pair.into_inner();
+    let expr = parse_expr(inner.next().ok_or("list comprehension missing expression")?)?;
+
+    let mut vars = Vec::new();
+    let mut iter = None;
+    let mut filter = None;
+
+    for item in inner {
+        match item.as_rule() {
+            Rule::ident => {
+                vars.push(item.as_str().to_string());
+            }
+            Rule::expr => {
+                if iter.is_none() {
+                    iter = Some(parse_expr(item)?);
+                } else {
+                    filter = Some(Box::new(parse_expr(item)?));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if vars.is_empty() {
+        return Err("list comprehension must have at least one loop variable".to_string());
+    }
+    let iter = iter.ok_or("list comprehension missing iterator")?;
+
+    Ok(Expr::ListComprehension {
+        expr: Box::new(expr),
+        vars,
+        iter: Box::new(iter),
+        filter,
+    })
+}
+
+fn parse_closure_expr(pair: Pair<Rule>) -> Result<Expr, String> {
+    let mut inner = pair.into_inner();
+    let mut params = Vec::new();
+    let mut return_type = None;
+    let mut body = Vec::new();
+
+    for item in inner {
+        match item.as_rule() {
+            Rule::param_list => {
+                for param_pair in item.into_inner() {
+                    params.push(parse_param(param_pair)?);
+                }
+                validate_params(&params)?;
+            }
+            Rule::type_expr => {
+                return_type = Some(parse_type(item)?);
+            }
+            Rule::block => {
+                body = parse_block(item)?;
+            }
+            _ => {}
+        }
+    }
+
+    Ok(Expr::Closure {
+        params,
+        return_type,
+        body,
+    })
 }
 
 fn unescape_string(s: &str) -> String {
@@ -825,9 +1315,23 @@ fn parse_primary(pair: Pair<Rule>) -> Result<Expr, String> {
         Rule::none_lit => Ok(Expr::None),
         Rule::ident => Ok(Expr::Ident(inner.as_str().to_string())),
         Rule::list_literal => {
-            let items: Result<Vec<_>, _> = inner.into_inner().map(parse_expr).collect();
-            Ok(Expr::List(items?))
+            let mut inner_iter = inner.into_inner();
+            if let Some(first) = inner_iter.next() {
+                match first.as_rule() {
+                    Rule::list_comprehension => {
+                        return parse_list_comprehension(first);
+                    }
+                    Rule::list_items => {
+                        let items: Result<Vec<_>, _> =
+                            first.into_inner().map(parse_expr).collect();
+                        return Ok(Expr::List(items?));
+                    }
+                    _ => {}
+                }
+            }
+            Ok(Expr::List(Vec::new()))
         }
+        Rule::closure_expr => parse_closure_expr(inner),
         Rule::dict_literal => {
             let mut entries = Vec::new();
             for entry in inner.into_inner() {
@@ -852,7 +1356,7 @@ fn parse_primary(pair: Pair<Rule>) -> Result<Expr, String> {
                 .next()
                 .unwrap()
                 .into_inner()
-                .map(parse_expr)
+                .map(parse_call_arg)
                 .collect();
             Ok(Expr::Spawn(func_name, args?))
         }
@@ -883,6 +1387,7 @@ fn parse_primary(pair: Pair<Rule>) -> Result<Expr, String> {
             Ok(Expr::Tuple(exprs?))
         }
         Rule::self_lit => Ok(Expr::Ident("self".to_string())),
+        Rule::super_lit => Ok(Expr::Ident("super".to_string())),
         Rule::expr => parse_expr(inner),
         _ => Err(format!("Unknown primary: {:?}", inner.as_rule())),
     }

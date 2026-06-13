@@ -398,6 +398,269 @@ pub fn bolide_string_from_rust(s: &str) -> *mut BolideString {
     BolideString::new(s)
 }
 
+// ==================== 切片 / 索引（按 Unicode 码点） ====================
+
+/// 把可能为负的码点下标归一化到 [0, char_len]，正向截断到 char_len。
+#[inline]
+fn norm_index(idx: i64, char_len: i64) -> i64 {
+    if idx < 0 {
+        (char_len + idx).max(0)
+    } else {
+        idx.min(char_len)
+    }
+}
+
+/// 字符串切片 s[start:end:step]，按 Unicode 码点索引。
+///
+/// flags: bit0 = 提供了 start，bit1 = 提供了 end。step 恒由调用方传入（缺省 1）。
+/// 遵循 Python 语义：step<0 时默认从尾到头。结果为新串（RC=1）。
+#[no_mangle]
+pub extern "C" fn bolide_string_slice(
+    s: *const BolideString,
+    start: i64,
+    end: i64,
+    step: i64,
+    flags: i64,
+) -> *mut BolideString {
+    if s.is_null() {
+        return BolideString::new("");
+    }
+    let src = unsafe { (*s).as_str() };
+    let chars: Vec<char> = src.chars().collect();
+    let char_len = chars.len() as i64;
+
+    let step = if step == 0 { 1 } else { step };
+    let has_start = flags & 1 != 0;
+    let has_end = flags & 2 != 0;
+
+    let mut out = String::new();
+    if step > 0 {
+        let begin = if has_start { norm_index(start, char_len) } else { 0 };
+        let stop = if has_end { norm_index(end, char_len) } else { char_len };
+        let mut i = begin;
+        while i < stop {
+            out.push(chars[i as usize]);
+            i += step;
+        }
+    } else {
+        // 负步长：默认从 char_len-1 走到 -1（含 0）
+        let begin = if has_start {
+            // 负步长起点截断到 char_len-1
+            let b = if start < 0 { char_len + start } else { start };
+            b.min(char_len - 1)
+        } else {
+            char_len - 1
+        };
+        let stop = if has_end {
+            let e = if end < 0 { char_len + end } else { end };
+            e.max(-1)
+        } else {
+            -1
+        };
+        let mut i = begin;
+        while i > stop {
+            if i >= 0 && i < char_len {
+                out.push(chars[i as usize]);
+            }
+            i += step;
+        }
+    }
+    BolideString::new(&out)
+}
+
+/// 字符串索引 s[i]，按码点；返回单码点新串。越界返回空串。
+#[no_mangle]
+pub extern "C" fn bolide_string_char_at(s: *const BolideString, idx: i64) -> *mut BolideString {
+    if s.is_null() {
+        return BolideString::new("");
+    }
+    let src = unsafe { (*s).as_str() };
+    let chars: Vec<char> = src.chars().collect();
+    let char_len = chars.len() as i64;
+    let i = if idx < 0 { char_len + idx } else { idx };
+    if i < 0 || i >= char_len {
+        return BolideString::new("");
+    }
+    let mut out = String::new();
+    out.push(chars[i as usize]);
+    BolideString::new(&out)
+}
+
+// ==================== 完整常用字符串方法 ====================
+
+/// 转大写（新串，RC=1）
+#[no_mangle]
+pub extern "C" fn bolide_string_upper(s: *const BolideString) -> *mut BolideString {
+    if s.is_null() {
+        return BolideString::new("");
+    }
+    let src = unsafe { (*s).as_str() };
+    BolideString::new(&src.to_uppercase())
+}
+
+/// 转小写（新串，RC=1）
+#[no_mangle]
+pub extern "C" fn bolide_string_lower(s: *const BolideString) -> *mut BolideString {
+    if s.is_null() {
+        return BolideString::new("");
+    }
+    let src = unsafe { (*s).as_str() };
+    BolideString::new(&src.to_lowercase())
+}
+
+/// 去首尾空白（新串，RC=1）
+#[no_mangle]
+pub extern "C" fn bolide_string_trim(s: *const BolideString) -> *mut BolideString {
+    if s.is_null() {
+        return BolideString::new("");
+    }
+    let src = unsafe { (*s).as_str() };
+    BolideString::new(src.trim())
+}
+
+/// 替换所有 old 为 new（新串，RC=1）
+#[no_mangle]
+pub extern "C" fn bolide_string_replace(
+    s: *const BolideString,
+    old: *const BolideString,
+    new: *const BolideString,
+) -> *mut BolideString {
+    if s.is_null() {
+        return BolideString::new("");
+    }
+    let src = unsafe { (*s).as_str() };
+    let old_str = if old.is_null() { "" } else { unsafe { (*old).as_str() } };
+    let new_str = if new.is_null() { "" } else { unsafe { (*new).as_str() } };
+    if old_str.is_empty() {
+        return BolideString::new(src);
+    }
+    BolideString::new(&src.replace(old_str, new_str))
+}
+
+/// 重复 n 次（新串，RC=1）
+#[no_mangle]
+pub extern "C" fn bolide_string_repeat(s: *const BolideString, n: i64) -> *mut BolideString {
+    if s.is_null() || n <= 0 {
+        return BolideString::new("");
+    }
+    let src = unsafe { (*s).as_str() };
+    BolideString::new(&src.repeat(n as usize))
+}
+
+/// 子串首次出现的码点下标，无则 -1
+#[no_mangle]
+pub extern "C" fn bolide_string_find(s: *const BolideString, sub: *const BolideString) -> i64 {
+    if s.is_null() {
+        return -1;
+    }
+    let src = unsafe { (*s).as_str() };
+    let sub_str = if sub.is_null() { "" } else { unsafe { (*sub).as_str() } };
+    match src.find(sub_str) {
+        Some(byte_off) => src[..byte_off].chars().count() as i64,
+        None => -1,
+    }
+}
+
+/// 是否包含子串
+#[no_mangle]
+pub extern "C" fn bolide_string_contains(s: *const BolideString, sub: *const BolideString) -> i64 {
+    if s.is_null() {
+        return 0;
+    }
+    let src = unsafe { (*s).as_str() };
+    let sub_str = if sub.is_null() { "" } else { unsafe { (*sub).as_str() } };
+    if src.contains(sub_str) {
+        1
+    } else {
+        0
+    }
+}
+
+/// 是否以前缀开头
+#[no_mangle]
+pub extern "C" fn bolide_string_starts_with(
+    s: *const BolideString,
+    pre: *const BolideString,
+) -> i64 {
+    if s.is_null() {
+        return 0;
+    }
+    let src = unsafe { (*s).as_str() };
+    let pre_str = if pre.is_null() { "" } else { unsafe { (*pre).as_str() } };
+    if src.starts_with(pre_str) {
+        1
+    } else {
+        0
+    }
+}
+
+/// 是否以后缀结尾
+#[no_mangle]
+pub extern "C" fn bolide_string_ends_with(
+    s: *const BolideString,
+    suf: *const BolideString,
+) -> i64 {
+    if s.is_null() {
+        return 0;
+    }
+    let src = unsafe { (*s).as_str() };
+    let suf_str = if suf.is_null() { "" } else { unsafe { (*suf).as_str() } };
+    if src.ends_with(suf_str) {
+        1
+    } else {
+        0
+    }
+}
+
+/// 不重叠出现次数
+#[no_mangle]
+pub extern "C" fn bolide_string_count(s: *const BolideString, sub: *const BolideString) -> i64 {
+    if s.is_null() {
+        return 0;
+    }
+    let src = unsafe { (*s).as_str() };
+    let sub_str = if sub.is_null() { "" } else { unsafe { (*sub).as_str() } };
+    if sub_str.is_empty() {
+        return 0;
+    }
+    src.matches(sub_str).count() as i64
+}
+
+/// 按分隔符拆分，返回 list<str>。sep 为空串时按单字符拆。
+#[no_mangle]
+pub extern "C" fn bolide_string_split(
+    s: *const BolideString,
+    sep: *const BolideString,
+) -> *mut crate::list::BolideList {
+    use crate::list::{BolideList, ElementType};
+    let result = BolideList::new(ElementType::String);
+    if s.is_null() {
+        return result;
+    }
+    let src = unsafe { (*s).as_str() };
+    let sep_str = if sep.is_null() { "" } else { unsafe { (*sep).as_str() } };
+
+    let dst = unsafe { &mut *result };
+    if sep_str.is_empty() {
+        // 空分隔符：按单码点拆
+        for ch in src.chars() {
+            let mut tmp = String::new();
+            tmp.push(ch);
+            let part = BolideString::new(&tmp);
+            // push 内部会 retain，这里把本地 RC=1 释放，避免泄漏
+            dst.push(part as i64);
+            bolide_string_release(part);
+        }
+    } else {
+        for piece in src.split(sep_str) {
+            let part = BolideString::new(piece);
+            dst.push(part as i64);
+            bolide_string_release(part);
+        }
+    }
+    result
+}
+
 /// 获取 BolideString 的 C 字符串指针（用于 FFI）
 #[no_mangle]
 pub extern "C" fn bolide_string_as_cstr(s: *const BolideString) -> *const c_char {

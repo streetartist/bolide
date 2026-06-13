@@ -32,6 +32,8 @@
 - **JIT 编译** - 基于 Cranelift 的即时编译，快速启动
 - **AOT 编译** - 提前编译为原生可执行文件，无需运行时
 - **一等函数** - 函数可作为值传递、存入列表、作为参数与返回值，支持 `map`/`filter` 等高阶方法
+- **函数参数** - 支持默认值、具名调用、`*args` 列表变长参数和 `**kwargs` 字典变长参数
+- **字符串与切片** - 内置字符串方法，支持字符串、列表、元组的 Python 风格切片
 - **异步协程** - 一等公民的 async/await 支持
 - **双向 FFI** - 无缝调用 C 库（支持回调）；也可将 Bolide 编译为静态库供 C 调用（`export fn` + `.h` 生成）
 - **模块系统** - 命名空间隔离的模块导入
@@ -168,6 +170,35 @@ let m: bigint = bigint(100);     // int -> bigint
 let n: decimal = decimal(3.14);  // float -> decimal
 ```
 
+### 字符串方法
+
+`str` 提供常用库函数，方法调用风格类似 Python：
+
+```bolide
+let s: str = "Hello, World";
+
+print(s.len());              // 12
+print(s.upper());            // HELLO, WORLD
+print(s.lower());            // hello, world
+print(s.contains("World"));  // 1
+print(s.find("World"));      // 7
+print(s.starts_with("Hell"));// 1
+print(s.ends_with("rld"));   // 1
+print(s.replace("l", "L"));  // HeLLo, WorLd
+print(s.count("l"));         // 3
+
+print("  trim me  ".trim()); // trim me
+print("ab".repeat(3));       // ababab
+print(s.substring(0, 5));    // Hello
+print(s.char_at(1));         // e
+
+let parts: list<str> = "a,b,c".split(",");
+print(parts);                // ["a", "b", "c"]
+```
+
+常用别名包括 `length()`/`size()`、`strip()`、`index_of()`、`includes()`、`substr()`。
+字符串索引和切片按 Unicode 码点处理；`len()` 当前返回 UTF-8 字节长度。
+
 ### 函数
 
 ```bolide
@@ -175,10 +206,41 @@ fn add(a: int, b: int) -> int {
     return a + b;
 }
 
-fn greet(name: str) {
-    print(name);
+fn greet(name: str = "world", punctuation: str = "!") {
+    print("hello " + name + punctuation);
 }
+
+greet();                         // 使用默认值
+greet(name="Bolide");            // 具名参数，等价于 name: "Bolide"
+greet(punctuation="?", name="B");// 具名参数可调整顺序
+
+fn total(base: int = 10, *nums: int, **opts: int) -> int {
+    let sum: int = base;
+    for n in nums {              // nums 的类型是 list<int>
+        sum += n;
+    }
+    if opts.contains("bonus") {  // opts 的类型是 dict<str, int>
+        sum += opts["bonus"];
+    }
+    return sum;
+}
+
+let xs: list<int> = [2, 3];
+let kwargs: dict<str, int> = {"bonus": 4};
+
+print(total());                  // 10
+print(total(1, *xs, **kwargs));  // 10
+print(total(base=5, bonus=7));   // 12，未知具名参数进入 **opts
 ```
+
+函数形参支持：
+- `name: T = expr`：默认值；
+- `*args: T`：接收多余位置参数，函数体中类型为 `list<T>`；
+- `**kwargs: T`：接收多余具名参数，函数体中类型为 `dict<str, T>`；
+- 调用侧支持 `name=value`、`name: value`、`*list_expr`、`**dict_expr`。
+
+`*args` 必须位于普通参数之后，`**kwargs` 必须是最后一个参数。没有对应形参或
+`**kwargs` 时，未知具名参数会编译报错。
 
 ### 一等函数 (First-Class Functions)
 
@@ -301,6 +363,33 @@ for k, v in scores {
 }
 ```
 
+### 切片
+
+字符串、列表和元组支持 `seq[start:end:step]` 切片语法。`start`、`end`、
+`step` 都可省略，负索引和负步长可用于从末尾索引或反向遍历：
+
+```bolide
+let text: str = "Hello, World";
+print(text[0:5]);       // Hello
+print(text[7:]);        // World
+print(text[:5]);        // Hello
+print(text[::2]);       // Hlo ol
+print(text[::-1]);      // dlroW ,olleH
+print(text[-1]);        // d
+
+let nums: list<int> = [10, 20, 30, 40, 50];
+print(nums[1:4]);       // [20, 30, 40]
+print(nums[-2:]);       // [40, 50]
+print(nums[::-1]);      // [50, 40, 30, 20, 10]
+
+let t: (int, int, int, int) = (1, 2, 3, 4);
+let mid: (int, int) = t[1:3];
+print(mid);             // (2, 3)
+```
+
+单下标访问仍使用 `seq[index]`。字符串单下标返回单字符 `str`，字符串切片按
+Unicode 码点截取。
+
 ### 列表操作
 
 Bolide 提供了丰富的 Python 风格列表操作：
@@ -336,7 +425,9 @@ nums.reverse();          // 原地反转
 nums.sort();             // 原地排序
 
 // 切片和扩展
-let sliced: list<int> = nums.slice(1, 4);  // 切片 [1:4)
+let sliced: list<int> = nums[1:4];   // 切片 [1:4)，也可用 nums.slice(1, 4)
+let every2: list<int> = nums[::2];   // 步长切片
+let rev: list<int> = nums[::-1];     // 反向切片
 let more: list<int> = [100, 200];
 nums.extend(more);       // 扩展列表
 
