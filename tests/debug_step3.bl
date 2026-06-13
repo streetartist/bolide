@@ -1,0 +1,5 @@
+fn make_adder(n: int) -> func(int) -> int {
+    return fn(x: int) -> int { return x + n; };
+}
+let add5 = make_adder(5);
+print(add5(10));

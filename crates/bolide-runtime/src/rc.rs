@@ -536,6 +536,10 @@ unsafe fn drop_by_type(ptr: *mut c_void, type_tag: u8) {
             // List
             crate::bolide_list_free(ptr as *mut crate::BolideList);
         }
+        6 => {
+            // Closure：释放 env 内存与 RC 捕获
+            crate::closure::closure_drop_hook(ptr);
+        }
         _ => {
             // 其他类型暂不处理
         }

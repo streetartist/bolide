@@ -16,6 +16,7 @@
 
 mod bigint;
 mod channel;
+mod closure;
 mod coroutine;
 mod decimal;
 pub mod dict;
@@ -32,6 +33,7 @@ mod tuple;
 
 pub use bigint::*;
 pub use channel::*;
+pub use closure::*;
 pub use coroutine::*;
 pub use decimal::*;
 pub use dict::*;

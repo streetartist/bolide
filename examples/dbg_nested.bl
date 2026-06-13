@@ -1,0 +1,6 @@
+let nested = fn(x: int) -> func(int) -> int {
+    let inner = fn(y: int) -> int { return y + x; };
+    return inner;
+};
+let f = nested(3);
+print(f(2));

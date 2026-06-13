@@ -171,7 +171,11 @@ fn write_header_if_present(result: &bolide_compiler::AotCompileResult, output: &
         let header_path = output.with_extension("h");
         match fs::write(&header_path, header) {
             Ok(_) => println!("Generated C header: {}", header_path.display()),
-            Err(e) => eprintln!("Warning: failed to write header {}: {}", header_path.display(), e),
+            Err(e) => eprintln!(
+                "Warning: failed to write header {}: {}",
+                header_path.display(),
+                e
+            ),
         }
     }
 }
@@ -229,7 +233,11 @@ fn compile_file(file: &PathBuf, output: &PathBuf, header: bool) -> miette::Resul
 /// AOT 编译为 C 可链接静态库（.lib/.a），抑制合成入口 main。
 /// C 端最终链接时仍需带上 bolide_runtime 静态库以解析 bolide_* 运行时符号。
 fn compile_lib(file: &PathBuf, output: &PathBuf, header: bool) -> miette::Result<()> {
-    println!("Compiling library: {} -> {}", file.display(), output.display());
+    println!(
+        "Compiling library: {} -> {}",
+        file.display(),
+        output.display()
+    );
 
     let source =
         fs::read_to_string(file).map_err(|e| miette::miette!("Failed to read file: {}", e))?;
@@ -285,7 +293,10 @@ fn archive_static_lib(obj_path: &PathBuf, output: &PathBuf) -> miette::Result<()
                 Err(e) => last_err = format!("{} not found: {}", tool, e),
             }
         }
-        Err(miette::miette!("Failed to archive static library: {}", last_err))
+        Err(miette::miette!(
+            "Failed to archive static library: {}",
+            last_err
+        ))
     }
 
     #[cfg(not(target_os = "windows"))]

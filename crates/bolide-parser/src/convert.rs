@@ -51,7 +51,9 @@ fn parse_statement(pair: Pair<Rule>) -> Result<Option<Statement>, String> {
         Rule::send_stmt => Ok(Some(Statement::Send(parse_send_stmt(pair)?))),
         Rule::break_stmt => Ok(Some(Statement::Break)),
         Rule::continue_stmt => Ok(Some(Statement::Continue)),
-        Rule::throw_stmt => Ok(Some(Statement::Throw(parse_expr(pair.into_inner().next().unwrap())?))),
+        Rule::throw_stmt => Ok(Some(Statement::Throw(parse_expr(
+            pair.into_inner().next().unwrap(),
+        )?))),
         Rule::try_stmt => Ok(Some(Statement::Try(parse_try_stmt(pair)?))),
         Rule::match_stmt => Ok(Some(Statement::Match(parse_match_stmt(pair)?))),
         Rule::return_stmt => Ok(Some(parse_return_stmt(pair)?)),
@@ -207,11 +209,7 @@ fn parse_param(pair: Pair<Rule>) -> Result<Param, String> {
             .ok_or("Variadic parameter is missing name")?
             .as_str()
             .to_string();
-        let elem_ty = parse_type(
-            inner
-                .next()
-                .ok_or("Variadic parameter is missing type")?,
-        )?;
+        let elem_ty = parse_type(inner.next().ok_or("Variadic parameter is missing type")?)?;
         return Ok(Param {
             name,
             ty: Type::List(Box::new(elem_ty)),
@@ -286,10 +284,9 @@ fn rewrite_type_generics(ty: &mut Type, type_params: &[String]) {
         Type::Custom(name) if type_params.iter().any(|p| p == name) => {
             *ty = Type::Generic(name.clone());
         }
-        Type::Channel(inner)
-        | Type::List(inner)
-        | Type::Weak(inner)
-        | Type::Unowned(inner) => rewrite_type_generics(inner, type_params),
+        Type::Channel(inner) | Type::List(inner) | Type::Weak(inner) | Type::Unowned(inner) => {
+            rewrite_type_generics(inner, type_params)
+        }
         Type::Dict(k, v) => {
             rewrite_type_generics(k, type_params);
             rewrite_type_generics(v, type_params);
@@ -378,7 +375,10 @@ fn parse_enum_def(pair: Pair<Rule>) -> Result<EnumDef, String> {
     }
 
     if variants.is_empty() {
-        return Err(format!("enum/union '{}' must declare at least one variant", name));
+        return Err(format!(
+            "enum/union '{}' must declare at least one variant",
+            name
+        ));
     }
 
     Ok(EnumDef {
@@ -389,10 +389,7 @@ fn parse_enum_def(pair: Pair<Rule>) -> Result<EnumDef, String> {
     })
 }
 
-fn parse_enum_variant(
-    pair: Pair<Rule>,
-    type_params: &[String],
-) -> Result<EnumVariant, String> {
+fn parse_enum_variant(pair: Pair<Rule>, type_params: &[String]) -> Result<EnumVariant, String> {
     let mut inner = pair.into_inner();
     let name = inner
         .next()
@@ -501,9 +498,7 @@ fn parse_type(pair: Pair<Rule>) -> Result<Type, String> {
         }
         Rule::applied_type => {
             let mut inner = type_pair.into_inner();
-            let name_pair = inner
-                .next()
-                .ok_or("Applied type is missing type name")?;
+            let name_pair = inner.next().ok_or("Applied type is missing type name")?;
             let name = name_pair
                 .as_str()
                 .split('.')
@@ -764,7 +759,11 @@ fn parse_try_stmt(pair: Pair<Rule>) -> Result<TryStmt, String> {
             _ => {}
         }
     }
-    Ok(TryStmt { try_body, catch_clauses, finally })
+    Ok(TryStmt {
+        try_body,
+        catch_clauses,
+        finally,
+    })
 }
 
 fn parse_match_stmt(pair: Pair<Rule>) -> Result<MatchStmt, String> {
@@ -774,16 +773,8 @@ fn parse_match_stmt(pair: Pair<Rule>) -> Result<MatchStmt, String> {
     for item in inner {
         if item.as_rule() == Rule::match_arm {
             let mut arm_inner = item.into_inner();
-            let pattern = parse_pattern(
-                arm_inner
-                    .next()
-                    .ok_or("match arm is missing pattern")?,
-            )?;
-            let body = parse_block(
-                arm_inner
-                    .next()
-                    .ok_or("match arm is missing body")?,
-            )?;
+            let pattern = parse_pattern(arm_inner.next().ok_or("match arm is missing pattern")?)?;
+            let body = parse_block(arm_inner.next().ok_or("match arm is missing body")?)?;
             arms.push(MatchArm { pattern, body });
         }
     }
@@ -792,9 +783,7 @@ fn parse_match_stmt(pair: Pair<Rule>) -> Result<MatchStmt, String> {
 
 fn parse_pattern(pair: Pair<Rule>) -> Result<Pattern, String> {
     let inner = if pair.as_rule() == Rule::pattern {
-        pair.into_inner()
-            .next()
-            .ok_or("pattern is missing body")?
+        pair.into_inner().next().ok_or("pattern is missing body")?
     } else {
         pair
     };
@@ -1151,14 +1140,7 @@ fn parse_call_arg(pair: Pair<Rule>) -> Result<Expr, String> {
 /// 各段为独立规则（slice_start/slice_end/slice_step），内部 expr 可缺省。
 fn parse_slice(
     pair: Pair<Rule>,
-) -> Result<
-    (
-        Option<Box<Expr>>,
-        Option<Box<Expr>>,
-        Option<Box<Expr>>,
-    ),
-    String,
-> {
+) -> Result<(Option<Box<Expr>>, Option<Box<Expr>>, Option<Box<Expr>>), String> {
     let mut start = None;
     let mut end = None;
     let mut step = None;
@@ -1182,7 +1164,11 @@ fn parse_slice(
 
 fn parse_list_comprehension(pair: Pair<Rule>) -> Result<Expr, String> {
     let mut inner = pair.into_inner();
-    let expr = parse_expr(inner.next().ok_or("list comprehension missing expression")?)?;
+    let expr = parse_expr(
+        inner
+            .next()
+            .ok_or("list comprehension missing expression")?,
+    )?;
 
     let mut vars = Vec::new();
     let mut iter = None;
@@ -1322,8 +1308,7 @@ fn parse_primary(pair: Pair<Rule>) -> Result<Expr, String> {
                         return parse_list_comprehension(first);
                     }
                     Rule::list_items => {
-                        let items: Result<Vec<_>, _> =
-                            first.into_inner().map(parse_expr).collect();
+                        let items: Result<Vec<_>, _> = first.into_inner().map(parse_expr).collect();
                         return Ok(Expr::List(items?));
                     }
                     _ => {}

@@ -435,8 +435,16 @@ pub extern "C" fn bolide_string_slice(
 
     let mut out = String::new();
     if step > 0 {
-        let begin = if has_start { norm_index(start, char_len) } else { 0 };
-        let stop = if has_end { norm_index(end, char_len) } else { char_len };
+        let begin = if has_start {
+            norm_index(start, char_len)
+        } else {
+            0
+        };
+        let stop = if has_end {
+            norm_index(end, char_len)
+        } else {
+            char_len
+        };
         let mut i = begin;
         while i < stop {
             out.push(chars[i as usize]);
@@ -529,8 +537,16 @@ pub extern "C" fn bolide_string_replace(
         return BolideString::new("");
     }
     let src = unsafe { (*s).as_str() };
-    let old_str = if old.is_null() { "" } else { unsafe { (*old).as_str() } };
-    let new_str = if new.is_null() { "" } else { unsafe { (*new).as_str() } };
+    let old_str = if old.is_null() {
+        ""
+    } else {
+        unsafe { (*old).as_str() }
+    };
+    let new_str = if new.is_null() {
+        ""
+    } else {
+        unsafe { (*new).as_str() }
+    };
     if old_str.is_empty() {
         return BolideString::new(src);
     }
@@ -554,7 +570,11 @@ pub extern "C" fn bolide_string_find(s: *const BolideString, sub: *const BolideS
         return -1;
     }
     let src = unsafe { (*s).as_str() };
-    let sub_str = if sub.is_null() { "" } else { unsafe { (*sub).as_str() } };
+    let sub_str = if sub.is_null() {
+        ""
+    } else {
+        unsafe { (*sub).as_str() }
+    };
     match src.find(sub_str) {
         Some(byte_off) => src[..byte_off].chars().count() as i64,
         None => -1,
@@ -568,7 +588,11 @@ pub extern "C" fn bolide_string_contains(s: *const BolideString, sub: *const Bol
         return 0;
     }
     let src = unsafe { (*s).as_str() };
-    let sub_str = if sub.is_null() { "" } else { unsafe { (*sub).as_str() } };
+    let sub_str = if sub.is_null() {
+        ""
+    } else {
+        unsafe { (*sub).as_str() }
+    };
     if src.contains(sub_str) {
         1
     } else {
@@ -586,7 +610,11 @@ pub extern "C" fn bolide_string_starts_with(
         return 0;
     }
     let src = unsafe { (*s).as_str() };
-    let pre_str = if pre.is_null() { "" } else { unsafe { (*pre).as_str() } };
+    let pre_str = if pre.is_null() {
+        ""
+    } else {
+        unsafe { (*pre).as_str() }
+    };
     if src.starts_with(pre_str) {
         1
     } else {
@@ -596,15 +624,16 @@ pub extern "C" fn bolide_string_starts_with(
 
 /// 是否以后缀结尾
 #[no_mangle]
-pub extern "C" fn bolide_string_ends_with(
-    s: *const BolideString,
-    suf: *const BolideString,
-) -> i64 {
+pub extern "C" fn bolide_string_ends_with(s: *const BolideString, suf: *const BolideString) -> i64 {
     if s.is_null() {
         return 0;
     }
     let src = unsafe { (*s).as_str() };
-    let suf_str = if suf.is_null() { "" } else { unsafe { (*suf).as_str() } };
+    let suf_str = if suf.is_null() {
+        ""
+    } else {
+        unsafe { (*suf).as_str() }
+    };
     if src.ends_with(suf_str) {
         1
     } else {
@@ -619,7 +648,11 @@ pub extern "C" fn bolide_string_count(s: *const BolideString, sub: *const Bolide
         return 0;
     }
     let src = unsafe { (*s).as_str() };
-    let sub_str = if sub.is_null() { "" } else { unsafe { (*sub).as_str() } };
+    let sub_str = if sub.is_null() {
+        ""
+    } else {
+        unsafe { (*sub).as_str() }
+    };
     if sub_str.is_empty() {
         return 0;
     }
@@ -638,7 +671,11 @@ pub extern "C" fn bolide_string_split(
         return result;
     }
     let src = unsafe { (*s).as_str() };
-    let sep_str = if sep.is_null() { "" } else { unsafe { (*sep).as_str() } };
+    let sep_str = if sep.is_null() {
+        ""
+    } else {
+        unsafe { (*sep).as_str() }
+    };
 
     let dst = unsafe { &mut *result };
     if sep_str.is_empty() {

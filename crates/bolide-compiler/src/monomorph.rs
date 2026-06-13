@@ -85,11 +85,7 @@ impl Monomorphizer {
                     let ty = decl
                         .ty
                         .clone()
-                        .or_else(|| {
-                            decl.value
-                                .as_ref()
-                                .map(|v| Self::infer_literal_type(v))
-                        })
+                        .or_else(|| decl.value.as_ref().map(|v| Self::infer_literal_type(v)))
                         .unwrap_or(Type::Int);
                     global_var_types.insert(decl.name.clone(), ty);
                 }
@@ -168,15 +164,17 @@ impl Monomorphizer {
             .drain()
             .map(|(_, func)| Statement::FuncDef(func))
             .collect();
-        new_program
-            .statements
-            .splice(0..0, instances);
+        new_program.statements.splice(0..0, instances);
 
         Ok(new_program)
     }
 
     /// 处理一个具体函数：替换其体内的泛型调用，并建立局部变量类型上下文。
-    fn process_function(&mut self, func: &mut FuncDef, subst: &HashMap<String, Type>) -> Result<(), String> {
+    fn process_function(
+        &mut self,
+        func: &mut FuncDef,
+        subst: &HashMap<String, Type>,
+    ) -> Result<(), String> {
         // 先替换类型注解中的泛型参数。
         func.params
             .iter_mut()
@@ -426,7 +424,8 @@ impl Monomorphizer {
                         // 模块化的泛型函数：名称为 @module_func，需要识别。
                         if let Some(base) = name.splitn(2, '_').nth(1) {
                             if self.generic_defs.contains_key(base) {
-                                let instance_name = self.instantiate_module_call(name, base, args, var_types, subst);
+                                let instance_name = self
+                                    .instantiate_module_call(name, base, args, var_types, subst);
                                 *callee = Box::new(Expr::Ident(instance_name));
                             }
                         }
@@ -505,7 +504,15 @@ impl Monomorphizer {
         let type_args = self.infer_generic_type_args(&gen_def, args, var_types, outer_subst);
         let instance_base = self.create_instance(base_name, &gen_def, &type_args, outer_subst);
         // 保留模块前缀：@module_func@... -> @module_func@...
-        format!("{}@{}", full_name.split('@').next().unwrap_or(full_name), instance_base.split('@').skip(1).collect::<Vec<_>>().join("@"))
+        format!(
+            "{}@{}",
+            full_name.split('@').next().unwrap_or(full_name),
+            instance_base
+                .split('@')
+                .skip(1)
+                .collect::<Vec<_>>()
+                .join("@")
+        )
     }
 
     fn infer_generic_type_args(
@@ -562,10 +569,7 @@ impl Monomorphizer {
             Expr::BigInt(_) => Type::BigInt,
             Expr::Decimal(_) => Type::Decimal,
             Expr::None => Type::Int,
-            Expr::Ident(name) => var_types
-                .get(name)
-                .cloned()
-                .unwrap_or(Type::Int),
+            Expr::Ident(name) => var_types.get(name).cloned().unwrap_or(Type::Int),
             Expr::List(items) => {
                 let elem_ty = if items.is_empty() {
                     Type::Int
@@ -667,10 +671,8 @@ impl Monomorphizer {
         if let Expr::Member(base, variant_name) = callee {
             if let Expr::Ident(adt_name) = base.as_ref() {
                 if let Some(adt_info) = self.adts.get(adt_name) {
-                    if let Some(variant) = adt_info
-                        .variants
-                        .iter()
-                        .find(|v| v.name == *variant_name)
+                    if let Some(variant) =
+                        adt_info.variants.iter().find(|v| v.name == *variant_name)
                     {
                         let type_args =
                             self.infer_adt_type_args(adt_info, variant, args, var_types);
@@ -760,10 +762,7 @@ impl Monomorphizer {
             "input" => Some(Type::Str),
             "join" => Some(Type::Int),
             "channel" => {
-                let elem = args
-                    .first()
-                    .map(|_| Type::Int)
-                    .unwrap_or(Type::Int);
+                let elem = args.first().map(|_| Type::Int).unwrap_or(Type::Int);
                 Some(Type::Channel(Box::new(elem)))
             }
             _ => None,
@@ -848,7 +847,10 @@ fn serialize_type(ty: &Type) -> String {
 
 fn substitute_type(ty: &Type, subst: &HashMap<String, Type>) -> Type {
     match ty {
-        Type::Generic(name) => subst.get(name).cloned().unwrap_or_else(|| Type::Generic(name.clone())),
+        Type::Generic(name) => subst
+            .get(name)
+            .cloned()
+            .unwrap_or_else(|| Type::Generic(name.clone())),
         Type::List(inner) => Type::List(Box::new(substitute_type(inner, subst))),
         Type::Dict(k, v) => Type::Dict(
             Box::new(substitute_type(k, subst)),
@@ -982,13 +984,18 @@ fn substitute_stmt_types(stmt: &Statement, subst: &HashMap<String, Type>) -> Sta
 }
 
 fn substitute_block_types(stmts: &[Statement], subst: &HashMap<String, Type>) -> Vec<Statement> {
-    stmts.iter().map(|s| substitute_stmt_types(s, subst)).collect()
+    stmts
+        .iter()
+        .map(|s| substitute_stmt_types(s, subst))
+        .collect()
 }
 
 fn unify_types(pattern: &Type, actual: &Type, bindings: &mut HashMap<String, Type>) {
     match pattern {
         Type::Generic(name) => {
-            bindings.entry(name.clone()).or_insert_with(|| actual.clone());
+            bindings
+                .entry(name.clone())
+                .or_insert_with(|| actual.clone());
         }
         Type::List(p) => {
             if let Type::List(a) = actual {

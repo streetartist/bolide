@@ -10,15 +10,17 @@ use bolide_parser::{
 
 /// 内置类名集合（用于判断用户是否已自定义同名类）。
 fn user_defines_class(program: &Program, name: &str) -> bool {
-    program.statements.iter().any(|s| {
-        matches!(s, Statement::ClassDef(c) if c.name == name)
-    })
+    program
+        .statements
+        .iter()
+        .any(|s| matches!(s, Statement::ClassDef(c) if c.name == name))
 }
 
 fn user_defines_enum(program: &Program, name: &str) -> bool {
-    program.statements.iter().any(|s| {
-        matches!(s, Statement::EnumDef(e) if e.name == name)
-    })
+    program
+        .statements
+        .iter()
+        .any(|s| matches!(s, Statement::EnumDef(e) if e.name == name))
 }
 
 /// 构造内置 `Error` 类：单字段 `message: str`。

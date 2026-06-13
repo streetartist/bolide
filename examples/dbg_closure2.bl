@@ -1,0 +1,3 @@
+let answer: func(int) -> int = fn(x: int) -> int { return 42; };
+print(1);
+print(answer(0));

@@ -1,0 +1,17 @@
+// 嵌套闭包
+
+let outer: int = 5;
+let nested = fn(x: int) -> func(int) -> int {
+    let inner = fn(y: int) -> int { return y * outer + x; };
+    return inner;
+};
+
+let f = nested(3);
+print(f(2));
+
+let chain = fn(x: int) -> int {
+    let step1 = fn(a: int) -> int { return a + outer; };
+    let step2 = fn(b: int) -> int { return b * 2; };
+    return step2(step1(x));
+};
+print(chain(4));

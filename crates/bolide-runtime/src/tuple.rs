@@ -23,13 +23,11 @@ pub struct BolideTuple {
 
 impl BolideTuple {
     unsafe fn type_tags(&self) -> *const u8 {
-        (self as *const Self as *const u8)
-            .add(std::mem::size_of::<BolideTuple>())
+        (self as *const Self as *const u8).add(std::mem::size_of::<BolideTuple>())
     }
 
     unsafe fn type_tags_mut(&mut self) -> *mut u8 {
-        (self as *mut Self as *mut u8)
-            .add(std::mem::size_of::<BolideTuple>())
+        (self as *mut Self as *mut u8).add(std::mem::size_of::<BolideTuple>())
     }
 
     unsafe fn data_ptr(&self) -> *const i64 {
@@ -113,18 +111,21 @@ pub extern "C" fn bolide_tuple_free(ptr: *mut BolideTuple) {
         for i in 0..len {
             let tag = *tags.add(i);
             let val = *data.add(i);
-            release_raw_static(match tag {
-                3 => ElementType::String,
-                4 => ElementType::BigInt,
-                5 => ElementType::Decimal,
-                6 => ElementType::List,
-                8 => ElementType::Dict,
-                9 => ElementType::Dynamic,
-                _ => {
-                    // 基本类型（Int/Float/Bool）不需释放
-                    continue;
-                }
-            }, val);
+            release_raw_static(
+                match tag {
+                    3 => ElementType::String,
+                    4 => ElementType::BigInt,
+                    5 => ElementType::Decimal,
+                    6 => ElementType::List,
+                    8 => ElementType::Dict,
+                    9 => ElementType::Dynamic,
+                    _ => {
+                        // 基本类型（Int/Float/Bool）不需释放
+                        continue;
+                    }
+                },
+                val,
+            );
         }
 
         let header_size = std::mem::size_of::<BolideTuple>();

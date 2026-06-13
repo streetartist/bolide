@@ -1,0 +1,13 @@
+// 基础闭包回归测试
+
+let double: func(int) -> int = fn(x: int) -> int { return x * 2; };
+print(double(21));
+
+let n: int = 10;
+let addN: func(int) -> int = fn(x: int) -> int { return x + n; };
+print(addN(5));
+
+let a: int = 100;
+let b: int = 7;
+let combine: func(int) -> int = fn(x: int) -> int { return x + a - b; };
+print(combine(3));

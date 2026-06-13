@@ -1,0 +1,10 @@
+fn make_adder(n: int) -> func(int) -> int {
+    return fn(x: int) -> int { return x + n; };
+}
+
+fn get_fn() -> func(int) -> int {
+    return make_adder(5);
+}
+
+print(get_fn()(10));
+print(make_adder(3)(4));

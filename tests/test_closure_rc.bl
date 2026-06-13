@@ -1,0 +1,23 @@
+// 闭包捕获 RC 类型
+
+let prefix: str = "val:";
+let make_label = fn(x: int) -> str {
+    return prefix + str(x);
+};
+print(make_label(7));
+
+let nums: list<int> = [1, 2, 3];
+let sum_nums = fn() -> int {
+    let total: int = 0;
+    for n in nums {
+        total = total + n;
+    }
+    return total;
+};
+print(sum_nums());
+
+let suffix: str = "!";
+let greet = fn(name: str) -> str {
+    return "hi " + name + suffix;
+};
+print(greet("bob"));

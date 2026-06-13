@@ -855,7 +855,12 @@ pub type RawCallback = *const u8;
 /// 调用回调：参数和返回值各自可能是 float（按位存于 i64 槽）。
 /// `param_is_float` / `ret_is_float` 决定 transmute 的目标 fn 签名。
 #[inline]
-unsafe fn invoke_callback(cb: RawCallback, arg: i64, param_is_float: bool, ret_is_float: bool) -> i64 {
+unsafe fn invoke_callback(
+    cb: RawCallback,
+    arg: i64,
+    param_is_float: bool,
+    ret_is_float: bool,
+) -> i64 {
     match (param_is_float, ret_is_float) {
         (false, false) => {
             let f: extern "C" fn(i64) -> i64 = std::mem::transmute(cb);
