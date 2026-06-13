@@ -1061,6 +1061,23 @@ bolide/
 └── README.md
 ```
 
+## 标准库实现方式
+
+Bolide 标准库通常由 `.bl` 包装层加底层实现组成，目前主要有两种写法：
+
+1. **Rust runtime 内置库**
+   - 适合语言核心标准库、跨平台能力，以及需要和 Bolide 运行时对象配合的功能。
+   - 底层实现位于 `crates/bolide-runtime/src/`，通过 `extern "bolide"` 暴露给 `.bl` 标准库。
+   - 例如 `std/fs/fs.bl` 的文件读写接口由 runtime 中的 `bolide_fs_*` 函数实现。
+
+2. **外部 C 动态库 FFI**
+   - 适合绑定系统 API、第三方 C 库，或不希望编入 runtime 的平台能力。
+   - `.bl` 文件直接声明 `extern "xxx.dll"` / `extern "libxxx.so"`，AOT 时链接对应外部库，JIT 时动态加载。
+   - 例如 `std/gui/gui.bl` 通过 `std/gui/gui.dll` 提供原生 GUI 能力。
+
+选择原则：和 `str`、列表、对象、线程、文件系统等运行时模型紧密相关的功能优先放入
+Rust runtime；绑定已有系统库或第三方库时优先使用外部 C FFI。
+
 ## VS Code 插件
 
 Bolide 提供了 VS Code 插件，支持语法高亮和一键运行。

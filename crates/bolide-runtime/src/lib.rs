@@ -11,6 +11,7 @@
 //! - `list`: 列表类型
 //! - `dict`: 字典类型
 //! - `print`: 统一打印功能
+//! - `fs`: 文件读写
 //! - `thread`: 线程和线程池
 //! - `channel`: 线程安全通道
 
@@ -23,6 +24,7 @@ pub mod dict;
 mod dynamic;
 mod exception;
 mod ffi;
+mod fs;
 pub mod list;
 mod object;
 mod print;
@@ -40,6 +42,7 @@ pub use dict::*;
 pub use dynamic::*;
 pub use exception::*;
 pub use ffi::*;
+pub use fs::*;
 pub use list::*;
 pub use object::*;
 pub use print::*;

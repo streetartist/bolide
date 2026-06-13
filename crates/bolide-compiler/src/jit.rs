@@ -786,6 +786,30 @@ impl JitCompiler {
             bolide_runtime::bolide_test_callback as *const u8,
         );
         builder.symbol("@_map_int", bolide_runtime::bolide_map_int as *const u8);
+        builder.symbol(
+            "bolide_fs_read_text",
+            bolide_runtime::bolide_fs_read_text as *const u8,
+        );
+        builder.symbol(
+            "bolide_fs_write_text",
+            bolide_runtime::bolide_fs_write_text as *const u8,
+        );
+        builder.symbol(
+            "bolide_fs_append_text",
+            bolide_runtime::bolide_fs_append_text as *const u8,
+        );
+        builder.symbol(
+            "bolide_fs_exists",
+            bolide_runtime::bolide_fs_exists as *const u8,
+        );
+        builder.symbol(
+            "bolide_fs_remove_file",
+            bolide_runtime::bolide_fs_remove_file as *const u8,
+        );
+        builder.symbol(
+            "bolide_fs_create_dir_all",
+            bolide_runtime::bolide_fs_create_dir_all as *const u8,
+        );
 
         // 注册运行时函数 - RC 引用计数管理
         builder.symbol(
@@ -5177,11 +5201,51 @@ impl JitCompiler {
         let lib_path = &eb.lib_path;
         for decl in &eb.declarations {
             if let bolide_parser::ExternDecl::Function(func) = decl {
+                if lib_path == "bolide" {
+                    let mut sig = self.module.make_signature();
+                    for param in &func.params {
+                        sig.params
+                            .push(AbiParam::new(self.extern_ctype_to_cranelift(&param.ty)));
+                    }
+                    if let Some(ref ret_ty) = func.return_type {
+                        sig.returns
+                            .push(AbiParam::new(self.extern_ctype_to_cranelift(ret_ty)));
+                    }
+                    let id = self
+                        .module
+                        .declare_function(&func.name, Linkage::Import, &sig)
+                        .map_err(|e| format!("{}", e))?;
+                    self.functions.insert(func.name.clone(), id);
+                }
                 self.extern_funcs
                     .insert(func.name.clone(), (lib_path.clone(), func.clone()));
             }
         }
         Ok(())
+    }
+
+    fn extern_ctype_to_cranelift(&self, ctype: &bolide_parser::CType) -> types::Type {
+        use bolide_parser::CType;
+        match ctype {
+            CType::Void => types::I64,
+            CType::Char | CType::I8 | CType::UChar | CType::U8 => types::I8,
+            CType::Short | CType::I16 | CType::UShort | CType::U16 => types::I16,
+            CType::Int | CType::I32 | CType::UInt | CType::U32 => types::I32,
+            CType::Long
+            | CType::LongLong
+            | CType::I64
+            | CType::ULong
+            | CType::ULongLong
+            | CType::U64
+            | CType::SizeT
+            | CType::PtrDiffT => types::I64,
+            CType::Float => types::F32,
+            CType::Double => types::F64,
+            CType::Bool => types::I8,
+            CType::Ptr(_) | CType::Array(_, _) | CType::FuncPtr { .. } | CType::Struct(_) => {
+                self.ptr_type
+            }
+        }
     }
 }
 
@@ -12855,6 +12919,10 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         extern_func: &bolide_parser::ExternFunc,
         args: &[Expr],
     ) -> Result<Value, String> {
+        if lib_path == "bolide" {
+            return self.compile_linked_extern_call(extern_func, args);
+        }
+
         // 1. 创建库路径字符串常量
         let lib_path_ptr = self.create_string_constant(lib_path)?;
 
@@ -12983,6 +13051,85 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             } else {
                 Ok(result)
             }
+        }
+    }
+
+    fn compile_linked_extern_call(
+        &mut self,
+        extern_func: &bolide_parser::ExternFunc,
+        args: &[Expr],
+    ) -> Result<Value, String> {
+        let func_ref = *self
+            .func_refs
+            .get(&extern_func.name)
+            .ok_or_else(|| format!("Extern function not declared: {}", extern_func.name))?;
+
+        let mut arg_values = Vec::new();
+        for (i, arg) in args.iter().enumerate() {
+            if let Some(param) = extern_func.params.get(i) {
+                if matches!(param.ty, bolide_parser::CType::FuncPtr { .. }) {
+                    if let Expr::Ident(func_name) = arg {
+                        if let Some(&func_ref) = self.func_refs.get(func_name) {
+                            let func_addr = self.builder.ins().func_addr(self.ptr_type, func_ref);
+                            arg_values.push(func_addr);
+                            continue;
+                        }
+                    }
+                }
+            }
+
+            let val = self.compile_expr(arg)?;
+
+            if let Some(param) = extern_func.params.get(i) {
+                if let bolide_parser::CType::Ptr(inner) = &param.ty {
+                    if matches!(inner.as_ref(), bolide_parser::CType::Char) {
+                        let as_cstr_ref = *self
+                            .func_refs
+                            .get("@_string_as_cstr")
+                            .ok_or("string_as_cstr not found")?;
+                        let call = self.builder.ins().call(as_cstr_ref, &[val]);
+                        arg_values.push(self.builder.inst_results(call)[0]);
+                        continue;
+                    }
+                }
+            }
+
+            if let Some(param) = extern_func.params.get(i) {
+                let expected_ty = self.ctype_to_cranelift(&param.ty);
+                let actual_ty = self.builder.func.dfg.value_type(val);
+                let converted = if actual_ty == types::I64 && expected_ty == types::I32 {
+                    self.builder.ins().ireduce(types::I32, val)
+                } else if actual_ty == types::I64 && expected_ty == types::I16 {
+                    self.builder.ins().ireduce(types::I16, val)
+                } else if actual_ty == types::I64 && expected_ty == types::I8 {
+                    self.builder.ins().ireduce(types::I8, val)
+                } else if actual_ty == types::F64 && expected_ty == types::F32 {
+                    self.builder.ins().fdemote(types::F32, val)
+                } else {
+                    val
+                };
+                arg_values.push(converted);
+            } else {
+                arg_values.push(val);
+            }
+        }
+
+        let call = self.builder.ins().call(func_ref, &arg_values);
+        let results = self.builder.inst_results(call);
+        if results.is_empty() {
+            return Ok(self.builder.ins().iconst(types::I64, 0));
+        }
+
+        let result = results[0];
+        let result_ty = self.builder.func.dfg.value_type(result);
+        if result_ty == types::I32 {
+            Ok(self.builder.ins().sextend(types::I64, result))
+        } else if result_ty == types::I8 || result_ty == types::I16 {
+            Ok(self.builder.ins().sextend(types::I64, result))
+        } else if result_ty == types::F32 {
+            Ok(self.builder.ins().fpromote(types::F64, result))
+        } else {
+            Ok(result)
         }
     }
 

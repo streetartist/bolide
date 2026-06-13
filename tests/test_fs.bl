@@ -1,0 +1,18 @@
+import "../std/fs/fs.bl" as fs;
+
+let dir: str = "target";
+let path: str = "target/bolide_fs_test.txt";
+let path2: str = "target/bolide_fs_delete_test.txt";
+
+print(fs.create_dir_all(dir));
+print(fs.write_text(path2, "delete me"));
+print(fs.remove_file(path2));
+print(fs.exists(path2));
+print(fs.write_text(path, "hello"));
+print(fs.append_text(path, " bolide"));
+print(fs.exists(path));
+let content: str = fs.read_text(path);
+print(content);
+print(fs.remove_file(path));
+print(fs.exists(path));
+print(999);

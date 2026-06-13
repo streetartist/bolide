@@ -888,6 +888,7 @@ impl AotCompiler {
             .extern_funcs
             .values()
             .map(|(lib_path, _)| lib_path.clone())
+            .filter(|lib_path| lib_path != "bolide")
             .collect::<HashSet<_>>()
             .into_iter()
             .collect();

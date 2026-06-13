@@ -1,0 +1,35 @@
+// Bolide file-system standard library.
+// Usage: import "std/fs/fs.bl" as fs;
+
+extern "bolide" {
+    fn bolide_fs_read_text(path: *char) -> *void;
+    fn bolide_fs_write_text(path: *char, content: *char) -> i64;
+    fn bolide_fs_append_text(path: *char, content: *char) -> i64;
+    fn bolide_fs_exists(path: *char) -> i64;
+    fn bolide_fs_remove_file(path: *char) -> i64;
+    fn bolide_fs_create_dir_all(path: *char) -> i64;
+}
+
+fn read_text(path: str) -> str {
+    return bolide_fs_read_text(path);
+}
+
+fn write_text(path: str, content: str) -> bool {
+    return bolide_fs_write_text(path, content) != 0;
+}
+
+fn append_text(path: str, content: str) -> bool {
+    return bolide_fs_append_text(path, content) != 0;
+}
+
+fn exists(path: str) -> bool {
+    return bolide_fs_exists(path) != 0;
+}
+
+fn remove_file(path: str) -> bool {
+    return bolide_fs_remove_file(path) != 0;
+}
+
+fn create_dir_all(path: str) -> bool {
+    return bolide_fs_create_dir_all(path) != 0;
+}
