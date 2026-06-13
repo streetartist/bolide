@@ -32,6 +32,8 @@
 - **JIT 编译** - 基于 Cranelift 的即时编译，快速启动
 - **AOT 编译** - 提前编译为原生可执行文件，无需运行时
 - **一等函数** - 函数可作为值传递、存入列表、作为参数与返回值，支持 `map`/`filter` 等高阶方法
+- **闭包** - 支持 `fn(...) -> T { ... }` 闭包字面量、自动捕获局部变量、闭包参数与返回闭包
+- **泛型函数** - 支持 `fn id<T>(x: T) -> T` 形式的类型参数，调用点自动推断并单态化
 - **函数参数** - 支持默认值、具名调用、`*args` 列表变长参数和 `**kwargs` 字典变长参数
 - **字符串与切片** - 内置字符串方法，支持字符串、列表、元组的 Python 风格切片
 - **异步协程** - 一等公民的 async/await 支持
@@ -242,6 +244,36 @@ print(total(base=5, bonus=7));   // 12，未知具名参数进入 **opts
 `*args` 必须位于普通参数之后，`**kwargs` 必须是最后一个参数。没有对应形参或
 `**kwargs` 时，未知具名参数会编译报错。
 
+### 泛型函数
+
+函数名后可使用 `<T>` 或 `<T, U>` 声明类型参数。调用时无需显式写类型实参，编译器会根据实参类型推断，并在 JIT/AOT 后端编译前单态化为具体函数实例。
+
+```bolide
+fn id<T>(x: T) -> T {
+    return x;
+}
+
+fn pair<T, U>(a: T, b: U) -> (T, U) {
+    return (a, b);
+}
+
+fn wrap<T>(x: T) -> list<T> {
+    return [x];
+}
+
+print(id(42));           // 42
+print(id("hello"));      // hello
+print(pair(10, "x"));    // (10, "x")
+print(wrap(7));          // [7]
+
+let n: int = id(100);
+let s: str = id("bolide");
+print(n);
+print(s);
+```
+
+当前泛型函数支持顶层函数的直接调用和嵌套调用；泛型方法、把未实例化的泛型函数作为一等值传递暂未支持。
+
 ### 一等函数 (First-Class Functions)
 
 函数是一等值：可以赋给变量、作为参数传递、从函数返回、存入列表。无需类型标注，编译器会自动推断函数签名。
@@ -276,6 +308,48 @@ print(pick(1)(7));       // 14
 let fns: list<func(int) -> int> = [add1, double];
 print(fns[0](5));        // 6
 print(fns[1](5));        // 10
+```
+
+### 闭包 (Closures)
+
+闭包使用 `fn(...) -> T { ... }` 表达式创建，类型仍然是 `func(...) -> T`。闭包可以捕获外层局部变量，也可以作为参数传递或从函数返回。
+
+```bolide
+// 闭包字面量赋给变量
+let double: func(int) -> int = fn(x: int) -> int {
+    return x * 2;
+};
+print(double(21));       // 42
+
+// 自动捕获外层变量
+let n: int = 10;
+let add_n = fn(x: int) -> int {
+    return x + n;
+};
+print(add_n(5));         // 15
+
+// 闭包作为参数
+fn apply(callback: func(int) -> int, x: int) -> int {
+    return callback(x);
+}
+print(apply(fn(x: int) -> int { return x * 3; }, 7)); // 21
+
+// 返回闭包，形成高阶函数
+fn make_adder(n: int) -> func(int) -> int {
+    return fn(x: int) -> int {
+        return x + n;
+    };
+}
+
+let add5 = make_adder(5);
+print(add5(10));         // 15
+
+// 捕获 ARC 管理的对象也会自动保活
+let prefix: str = "val:";
+let label = fn(x: int) -> str {
+    return prefix + str(x);
+};
+print(label(7));         // val:7
 ```
 
 ### 高阶列表方法 (map / filter)
