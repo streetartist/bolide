@@ -1,7 +1,21 @@
 # Rust 编译产物
 /target/
+target-codex-*/
 **/*.rs.bk
 Cargo.lock
+
+# 本地编译/链接产物
+*.exe
+*.o
+*.obj
+*.lib
+*.exp
+*.pdb
+*.dll
+*.so
+*.dylib
+*.a
+*.rlib
 
 # IDE
 .idea/
@@ -20,7 +34,13 @@ test_*.bl
 
 # 日志
 *.log
+bench/*stdout*.txt
+bench/*stderr*.txt
 
 # 临时文件
 *.tmp
 *.temp
+.go-work/
+data/
+examples/blog/data/
+tests/tmp_*/
