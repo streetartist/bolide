@@ -115,26 +115,26 @@ print(v3);  // 300
 print(v1 + v2 + v3);  // 600
 
 // ============================================================
-// 4. await all - 并发等待多个 async 任务
-//    Concurrent await for multiple async tasks
+// 4. spawn all - 并行启动多个任务并等待全部完成
+//    Spawn multiple tasks in parallel and wait for all
 // ============================================================
 
-async fn data_fetch_1() -> int {
+fn data_fetch_1() -> int {
     return 10;
 }
 
-async fn data_fetch_2() -> int {
+fn data_fetch_2() -> int {
     return 20;
 }
 
-async fn data_fetch_3() -> int {
+fn data_fetch_3() -> int {
     return 30;
 }
 
-print("=== 4. Await All ===");
+print("=== 4. Spawn All ===");
 
-// await all 并发等待所有任务完成，返回元组
-let results: (int, int, int) = await all {
+// spawn all 并行启动所有任务并等待完成，返回元组
+let results: (int, int, int) = spawn all {
     data_fetch_1(),
     data_fetch_2(),
     data_fetch_3()
@@ -146,26 +146,26 @@ print(results[1]);     // 20
 print(results[2]);     // 30
 
 // ============================================================
-// 5. async select - 竞争等待（第一个完成的获胜）
+// 5. spawn select - 竞争等待（第一个完成的获胜）
 //    Race condition: first completed wins
 // ============================================================
 
-async fn fast_api() -> int {
+fn fast_api() -> int {
     return 1;
 }
 
-async fn slow_api() -> int {
+fn slow_api() -> int {
     return 2;
 }
 
-async fn medium_api() -> int {
+fn medium_api() -> int {
     return 3;
 }
 
-print("=== 5. Async Select ===");
+print("=== 5. Spawn Select ===");
 
-// async select 等待第一个完成的任务
-async select {
+// spawn select 并行启动所有任务，等待第一个完成的任务
+spawn select {
     result = fast_api() => {
         print("Fast API won:");
         print(result);  // 1

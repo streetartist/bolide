@@ -23,6 +23,7 @@ pub enum TypeTag {
     Closure = 6, // 闭包
     Future = 7,  // Future/Promise
     Dict = 8,    // 字典/哈希表
+    Bytes = 9,   // 二进制缓冲区
 }
 
 /// 对象头，位于每个堆分配对象之前

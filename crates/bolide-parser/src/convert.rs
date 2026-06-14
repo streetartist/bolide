@@ -47,7 +47,7 @@ fn parse_statement(pair: Pair<Rule>) -> Result<Option<Statement>, String> {
         Rule::pool_stmt => Ok(Some(Statement::Pool(parse_pool_stmt(pair)?))),
         Rule::select_stmt => Ok(Some(Statement::Select(parse_select_stmt(pair)?))),
         Rule::await_scope_stmt => Ok(Some(Statement::AwaitScope(parse_await_scope_stmt(pair)?))),
-        Rule::async_select_stmt => Ok(Some(Statement::AsyncSelect(parse_async_select_stmt(pair)?))),
+        Rule::spawn_select_stmt => Ok(Some(Statement::SpawnSelect(parse_spawn_select_stmt(pair)?))),
         Rule::send_stmt => Ok(Some(Statement::Send(parse_send_stmt(pair)?))),
         Rule::break_stmt => Ok(Some(Statement::Break)),
         Rule::continue_stmt => Ok(Some(Statement::Continue)),
@@ -525,6 +525,7 @@ fn parse_type(pair: Pair<Rule>) -> Result<Type, String> {
                 "float" => Type::Float,
                 "bool" => Type::Bool,
                 "str" => Type::Str,
+                "bytes" => Type::Bytes,
                 "bigint" => Type::BigInt,
                 "decimal" => Type::Decimal,
                 "dynamic" => Type::Dynamic,
@@ -698,32 +699,35 @@ fn parse_await_scope_stmt(pair: Pair<Rule>) -> Result<AwaitScopeStmt, String> {
     Ok(AwaitScopeStmt { body })
 }
 
-fn parse_async_select_stmt(pair: Pair<Rule>) -> Result<AsyncSelectStmt, String> {
+fn parse_spawn_select_stmt(pair: Pair<Rule>) -> Result<SpawnSelectStmt, String> {
     let mut branches = Vec::new();
     for branch_pair in pair.into_inner() {
-        branches.push(parse_async_select_branch(branch_pair)?);
+        if branch_pair.as_rule() == Rule::kw_spawn {
+            continue;
+        }
+        branches.push(parse_spawn_select_branch(branch_pair)?);
     }
-    Ok(AsyncSelectStmt { branches })
+    Ok(SpawnSelectStmt { branches })
 }
 
-fn parse_async_select_branch(pair: Pair<Rule>) -> Result<AsyncSelectBranch, String> {
+fn parse_spawn_select_branch(pair: Pair<Rule>) -> Result<SpawnSelectBranch, String> {
     let inner = pair.into_inner().next().unwrap();
     match inner.as_rule() {
-        Rule::async_select_bind => {
+        Rule::spawn_select_bind => {
             let mut bind_inner = inner.into_inner();
             let var = bind_inner.next().unwrap().as_str().to_string();
             let expr = parse_expr(bind_inner.next().unwrap())?;
             let body = parse_block(bind_inner.next().unwrap())?;
-            Ok(AsyncSelectBranch::Bind { var, expr, body })
+            Ok(SpawnSelectBranch::Bind { var, expr, body })
         }
-        Rule::async_select_expr => {
+        Rule::spawn_select_expr => {
             let mut expr_inner = inner.into_inner();
             let expr = parse_expr(expr_inner.next().unwrap())?;
             let body = parse_block(expr_inner.next().unwrap())?;
-            Ok(AsyncSelectBranch::Expr { expr, body })
+            Ok(SpawnSelectBranch::Expr { expr, body })
         }
         _ => Err(format!(
-            "Unknown async select branch: {:?}",
+            "Unknown spawn select branch: {:?}",
             inner.as_rule()
         )),
     }
@@ -1358,14 +1362,14 @@ fn parse_primary(pair: Pair<Rule>) -> Result<Expr, String> {
             let expr = parse_postfix_expr(postfix)?;
             Ok(Expr::Await(Box::new(expr)))
         }
-        Rule::await_all_expr => {
-            // 跳过 kw_await 关键字对，只收集表达式
+        Rule::spawn_all_expr => {
+            // 跳过 kw_spawn 关键字对，只收集表达式
             let exprs: Result<Vec<_>, _> = inner
                 .into_inner()
                 .filter(|p| p.as_rule() == Rule::expr)
                 .map(parse_expr)
                 .collect();
-            Ok(Expr::AwaitAll(exprs?))
+            Ok(Expr::SpawnAll(exprs?))
         }
         Rule::tuple_literal => {
             let exprs: Result<Vec<_>, _> = inner.into_inner().map(parse_expr).collect();

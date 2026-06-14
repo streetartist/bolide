@@ -1,0 +1,47 @@
+import "../std/fs/fs.bl" as fs;
+
+let dir: str = "target/bolide_bytes_suite";
+let path: str = fs.join(dir, "data.bin");
+let out: str = fs.join(dir, "out.bin");
+
+fs.create_dir_all(dir);
+if fs.exists(path) {
+    fs.remove_file(path);
+}
+if fs.exists(out) {
+    fs.remove_file(out);
+}
+
+let data: bytes = bytes();
+data.push(65);
+data.push(0);
+data.push(255);
+
+print(data.len());
+print(data[0]);
+print(data.get(1));
+print(data.set(1, 66));
+print(data[1]);
+print(data);
+
+print(fs.write_bytes(path, data));
+
+let read_back: bytes = fs.read_bytes(path);
+print(read_back.len());
+print(read_back[0]);
+print(read_back[1]);
+print(read_back[2]);
+
+let copy: bytes = read_back.copy();
+copy.push(67);
+print(copy.len());
+print(copy[3]);
+print(fs.write_bytes(out, copy));
+print(fs.len(out));
+
+print(fs.append_bytes(out, data));
+print(fs.len(out));
+
+print(fs.remove_file(path));
+print(fs.remove_file(out));
+print(fs.remove_dir_all(dir));

@@ -1,0 +1,70 @@
+<section class="shell">
+  <article class="article">
+    <div>
+      <img class="article-cover" src="{{ post.cover }}" alt="{{ post.title }}">
+      <h1>{{ post.title }}</h1>
+      <div class="meta">
+        <span>{{ post.date }}</span>
+        <span>{{ post.author }}</span>
+        <span class="tag">{{ post.tags }}</span>
+      </div>
+      <div class="article-body">{{ post.content }}</div>
+
+      <section class="comments">
+        <div class="section-head">
+          <div>
+            <h2>评论</h2>
+            <p>{{ comment_count }} 条已通过评论</p>
+          </div>
+        </div>
+
+        {% if comment_count %}
+          <div class="comment-list">
+            {% for comment in comments %}
+              <div class="comment-item">
+                <div class="meta">
+                  <strong>{{ comment.author }}</strong>
+                  <span>{{ comment.date }}</span>
+                </div>
+                <p>{{ comment.content }}</p>
+              </div>
+            {% endfor %}
+          </div>
+        {% else %}
+          <div class="empty">还没有评论。</div>
+        {% endif %}
+
+        {% if user.logged_in %}
+          <div class="comment-box">
+            <h3>写评论</h3>
+            <p>普通用户提交后进入审核，管理员可以在后台通过或删除。</p>
+            <form class="comment-form" method="post" action="/posts/{{ post.id }}/comments">
+              <div class="field">
+                <label for="content">评论内容</label>
+                <textarea id="content" name="content"></textarea>
+              </div>
+              <div class="actions">
+                <button class="btn" type="submit">提交评论</button>
+              </div>
+            </form>
+          </div>
+        {% else %}
+          <div class="notice">
+            登录后可以发表评论。<a class="read-link" href="/login">去登录</a>
+          </div>
+        {% endif %}
+      </section>
+    </div>
+
+    <aside class="side-panel">
+      <p><strong>摘要</strong></p>
+      <p>{{ post.excerpt }}</p>
+      <div class="actions">
+        <a class="btn secondary" href="/">所有文章</a>
+        {% if user.is_admin %}
+          <a class="btn secondary" href="/admin/edit/{{ post.id }}">编辑文章</a>
+        {% endif %}
+      </div>
+    </aside>
+  </article>
+</section>

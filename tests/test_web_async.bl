@@ -1,0 +1,19 @@
+import "std/web/web.bl";
+
+fn index(req: web.Request) -> web.Response {
+    let res: web.Response = web.text("async " + req.path());
+    res.set_header("X-Async", "ok");
+    return res;
+}
+
+let app: web.App = web.app();
+print(app.get_async("/", index));
+
+let r: web.Response = app.handle_request("GET", "/", "");
+print(r.status());
+print(r.header("X-Async"));
+print(r.body_text());
+r.free();
+
+app.free();
+print("web async tests completed");

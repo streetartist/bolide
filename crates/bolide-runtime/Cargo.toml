@@ -13,3 +13,5 @@ rust_decimal.workspace = true
 once_cell.workspace = true
 rustc-hash.workspace = true
 libloading = "0.8"
+mio = { version = "1", features = ["net", "os-poll"] }
+socket2 = "0.5"

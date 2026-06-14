@@ -1,0 +1,229 @@
+import "../std/web/web.bl";
+import "../std/template/template.bl";
+import "../std/fs/fs.bl";
+
+fn style_from(path: str) -> str {
+    let text: str = fs.read_text(path);
+    if text == "" {
+        return "";
+    }
+    let parts: list<str> = text.split("<style>");
+    if parts.len() < 2 {
+        return "";
+    }
+    let rest: list<str> = parts[1].split("</style>");
+    if rest.len() < 1 {
+        return "";
+    }
+    return "<style>" + rest[0] + "</style>";
+}
+
+fn load_style() -> str {
+    let style: str = style_from("examples/blog/templates/layout.html");
+    if style != "" {
+        return style;
+    }
+    style = style_from("templates/layout.html");
+    if style != "" {
+        return style;
+    }
+    return "<style>body{margin:0;font-family:ui-sans-serif,system-ui,\"Microsoft YaHei\",sans-serif}.shell{width:min(1120px,calc(100% - 32px));margin:0 auto;padding:36px 0}.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px}.post-card,.panel{border:1px solid #d9dee3;border-radius:8px;background:#fff;padding:18px}.hero{min-height:360px;background:#202124;color:#fff;display:flex;align-items:flex-end}.hero-inner{width:min(1120px,calc(100% - 32px));margin:0 auto;padding:72px 0 58px}.btn{display:inline-flex;border:1px solid #202124;border-radius:8px;padding:8px 14px}</style>";
+}
+
+fn esc(value: str) -> str {
+    return value;
+}
+
+fn post_row(id: int, title: str, excerpt: str, content: str, author: str, date: str, tags: str, cover: str, published: bool) -> dict<str, dynamic> {
+    return {
+        "id": id,
+        "title": title,
+        "excerpt": excerpt,
+        "content": content,
+        "author": author,
+        "date": date,
+        "tags": tags,
+        "cover": cover,
+        "published": published,
+    };
+}
+
+fn comment_row(post_id: int, author: str, content: str, date: str, status: str) -> dict<str, dynamic> {
+    return {
+        "post_id": post_id,
+        "author": author,
+        "content": content,
+        "date": date,
+        "status": status,
+    };
+}
+
+fn post_1() -> dict<str, dynamic> {
+    return post_row(
+        1,
+        "给 Bolide 写一个够用的标准库",
+        "一个小语言的标准库不应该显得笨重，但也要能支撑真实网站、工具和自动化任务。",
+        "Bolide 的标准库目标很明确：普通用户不需要接触裸指针，也不需要理解运行时内部的所有权细节。\n\nWeb、模板和本地数据库这几块能力放在一起后，语言就能写出完整应用。路由、会话、HTML 渲染、持久化行数据都保持在 Bolide 的值语义里，AOT 编译后也能独立运行。",
+        "Bolide 团队",
+        "2026-06-15",
+        "标准库",
+        "https://images.unsplash.com/photo-1518005020951-eccb494ad742?auto=format&fit=crop&w=1200&q=80",
+        true,
+    );
+}
+
+fn post_2() -> dict<str, dynamic> {
+    return post_row(
+        2,
+        "模板引擎要保持克制",
+        "默认转义、显式原样输出、循环、条件和点路径，已经能覆盖大多数内容站页面。",
+        "模板引擎最容易失控的地方，是把自己做成另一门复杂语言。这个示例故意只保留几个稳定能力：变量默认 HTML 转义，确实需要时才使用原样输出，数据通过 dict 和 list 传入。\n\n这样模板足够直观，也方便 AOT 与 JIT 共用同一套行为。",
+        "Bolide 团队",
+        "2026-06-14",
+        "模板",
+        "https://images.unsplash.com/photo-1497215728101-856f4ea42174?auto=format&fit=crop&w=1200&q=80",
+        true,
+    );
+}
+
+fn post_3() -> dict<str, dynamic> {
+    return post_row(
+        3,
+        "文件数据库先解决早期应用",
+        "CRUD、动态值和稳定 API 先跑起来，未来仍然可以替换成真正的 SQL 后端。",
+        "早期标准库的数据库不必马上和 SQLite 拼性能。它更重要的任务，是让示例和小应用可以可靠地保存数据。\n\n文章、用户、评论和站点设置都能用 typed dynamic 表示。等语言和 ABI 更稳定后，底层再替换为 SQL 后端也不会破坏用户代码。",
+        "Bolide 团队",
+        "2026-06-13",
+        "数据库",
+        "https://images.unsplash.com/photo-1516321318423-f06f85e504b3?auto=format&fit=crop&w=1200&q=80",
+        true,
+    );
+}
+
+fn post_4() -> dict<str, dynamic> {
+    return post_row(
+        4,
+        "草稿：后台工作流",
+        "草稿只出现在管理后台，不会进入公开首页。",
+        "这篇草稿用于检查后台列表、编辑表单和发布状态。管理员可以继续编辑它，也可以把它发布到首页。\n\n普通用户不会在公开页面看到草稿内容。",
+        "Bolide 团队",
+        "2026-06-12",
+        "后台",
+        "https://images.unsplash.com/photo-1500530855697-b586d89ba3ee?auto=format&fit=crop&w=1200&q=80",
+        false,
+    );
+}
+
+fn published_posts() -> list<dict<str, dynamic>> {
+    let posts: list<dict<str, dynamic>> = [];
+    posts.push(post_1());
+    posts.push(post_2());
+    posts.push(post_3());
+    return posts;
+}
+
+fn load_post(id: int) -> dict<str, dynamic> {
+    if id == 1 {
+        return post_1();
+    }
+    if id == 2 {
+        return post_2();
+    }
+    if id == 3 {
+        return post_3();
+    }
+    if id == 4 {
+        return post_4();
+    }
+    return {};
+}
+
+fn comments_for(post_id: int) -> list<dict<str, dynamic>> {
+    let comments: list<dict<str, dynamic>> = [];
+    if post_id == 1 {
+        comments.push(comment_row(1, "普通读者", "这个示例已经能覆盖登录、评论和后台审核流程。", "2026-06-15", "已通过"));
+    }
+    if post_id == 2 {
+        comments.push(comment_row(2, "站点管理员", "管理员评论会直接通过，普通用户评论进入后台审核。", "2026-06-15", "已通过"));
+    }
+    return comments;
+}
+
+fn layout_page(page_title: str, body: str) -> str {
+    let style: str = "<style>body{margin:0;background:#fbfbf8;color:#202124;font-family:ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,\"Segoe UI\",\"Microsoft YaHei\",sans-serif;line-height:1.62}a{color:inherit;text-decoration:none}img{display:block;max-width:100%}.topbar{position:sticky;top:0;z-index:10;border-bottom:1px solid rgba(32,33,36,.1);background:rgba(251,251,248,.94);backdrop-filter:blur(14px)}.nav{width:min(1120px,calc(100% - 32px));min-height:64px;margin:0 auto;display:flex;align-items:center;justify-content:space-between;gap:24px}.brand{display:flex;align-items:center;gap:10px;font-weight:850}.brand-mark{width:34px;height:34px;border-radius:8px;background:#202124;color:#fff;display:grid;place-items:center;font-size:17px}.nav-links,.account{display:flex;align-items:center;gap:14px;color:#626b74;font-size:14px;font-weight:650}.page{min-height:calc(100vh - 64px)}.hero{min-height:360px;color:#fff;background:linear-gradient(90deg,rgba(18,22,24,.84),rgba(18,22,24,.36)),url(\"https://images.unsplash.com/photo-1497366754035-f200968a6e72?auto=format&fit=crop&w=1600&q=80\") center/cover;display:flex;align-items:flex-end}.hero-inner{width:min(1120px,calc(100% - 32px));margin:0 auto;padding:72px 0 58px}.eyebrow{margin:0 0 12px;color:#f0c36a;font-size:13px;font-weight:850;letter-spacing:.08em}.hero h1{max-width:780px;margin:0;font-size:72px;line-height:1}.hero p{max-width:640px;margin:18px 0 0;color:rgba(255,255,255,.9);font-size:18px}.shell{width:min(1120px,calc(100% - 32px));margin:0 auto;padding:36px 0 64px}.section-head{display:flex;align-items:end;justify-content:space-between;gap:18px;margin:0 0 20px}.section-head h1,.section-head h2{margin:0;font-size:28px;line-height:1.14}.section-head p{margin:8px 0 0;color:#626b74}.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px}.post-card,.panel,.login-card,.comment-box{border:1px solid #d9dee3;border-radius:8px;background:#fff;box-shadow:0 14px 34px rgba(32,33,36,.06)}.post-card{overflow:hidden}.post-card img{width:100%;aspect-ratio:16/10;object-fit:cover;background:#d8d6ce}.post-card-body,.panel,.login-card,.comment-box{padding:18px}.meta{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 10px;color:#626b74;font-size:13px;font-weight:650}.tag{display:inline-flex;min-height:24px;align-items:center;border-radius:999px;padding:2px 9px;font-size:12px;font-weight:800;border:1px solid #d9c796;color:#7a5413;background:#fff8e8}.post-card h3,.panel h3{margin:0;font-size:20px;line-height:1.24}.post-card p,.panel p{margin:10px 0 0;color:#626b74;font-size:15px}.read-link{display:inline-flex;margin-top:16px;color:#0f5954;font-weight:850}.article{display:grid;grid-template-columns:minmax(0,760px) 280px;gap:38px;align-items:start}.article-cover{width:100%;aspect-ratio:16/8;object-fit:cover;border-radius:8px;border:1px solid #d9dee3}.article h1{margin:22px 0 12px;font-size:56px;line-height:1.06}.article-body{color:#303439;font-size:18px;white-space:pre-wrap}.side-panel{border-left:3px solid #167a72;padding-left:18px;color:#626b74;font-size:14px}.btn{display:inline-flex;min-height:38px;align-items:center;justify-content:center;border:1px solid #202124;border-radius:8px;padding:8px 14px;background:#202124;color:#fff;font-weight:800;white-space:nowrap}.btn.secondary{border-color:#d9dee3;background:#fff;color:#202124}.notice,.empty{border:1px dashed #c8cdd2;border-radius:8px;padding:18px;background:#fff;color:#626b74}.comments{margin-top:34px;display:grid;gap:16px}.comment-list{display:grid;gap:12px}.comment-item{border-left:3px solid #167a72;padding:12px 14px;background:#fff;border-radius:0 8px 8px 0}.footer{border-top:1px solid #d9dee3;padding:24px 0;color:#626b74;font-size:14px}.footer-inner{width:min(1120px,calc(100% - 32px));margin:0 auto;display:flex;justify-content:space-between;gap:16px}</style>";
+    return "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>" + esc(page_title) + "</title>" + style + "</head><body><header class=\"topbar\"><nav class=\"nav\"><a class=\"brand\" href=\"/\"><span class=\"brand-mark\">博</span><span>Bolide 中文博客</span></a><div class=\"nav-links\"><a href=\"/\">首页</a><a href=\"/about\">关于</a></div><div class=\"account\"><a class=\"btn secondary\" href=\"/login\">登录</a></div></nav></header><main class=\"page\">" + body + "</main><footer class=\"footer\"><div class=\"footer-inner\"><span>Bolide 中文博客</span><span>Bolide 内存博客对照</span></div></footer></body></html>";
+}
+
+fn post_card(id: str, title: str, excerpt: str, author: str, date: str, tags: str, cover: str) -> str {
+    return "<article class=\"post-card\"><a href=\"/posts/" + id + "\"><img src=\"" + cover + "\" alt=\"" + title + "\"></a><div class=\"post-card-body\"><div class=\"meta\"><span>" + date + "</span><span>" + author + "</span><span class=\"tag\">" + tags + "</span></div><h3><a href=\"/posts/" + id + "\">" + title + "</a></h3><p>" + excerpt + "</p><a class=\"read-link\" href=\"/posts/" + id + "\">阅读全文</a></div></article>";
+}
+
+fn post_card_1() -> str {
+    return post_card("1", "给 Bolide 写一个够用的标准库", "一个小语言的标准库不应该显得笨重，但也要能支撑真实网站、工具和自动化任务。", "Bolide 团队", "2026-06-15", "标准库", "https://images.unsplash.com/photo-1518005020951-eccb494ad742?auto=format&fit=crop&w=1200&q=80");
+}
+
+fn post_card_2() -> str {
+    return post_card("2", "模板引擎要保持克制", "默认转义、显式原样输出、循环、条件和点路径，已经能覆盖大多数内容站页面。", "Bolide 团队", "2026-06-14", "模板", "https://images.unsplash.com/photo-1497215728101-856f4ea42174?auto=format&fit=crop&w=1200&q=80");
+}
+
+fn post_card_3() -> str {
+    return post_card("3", "文件数据库先解决早期应用", "CRUD、动态值和稳定 API 先跑起来，未来仍然可以替换成真正的 SQL 后端。", "Bolide 团队", "2026-06-13", "数据库", "https://images.unsplash.com/photo-1516321318423-f06f85e504b3?auto=format&fit=crop&w=1200&q=80");
+}
+
+fn index(req: web.Request) -> web.Response {
+    let cards: str = post_card_1() + post_card_2() + post_card_3();
+    let body: str = "<section class=\"hero\"><div class=\"hero-inner\"><p class=\"eyebrow\">工程札记</p><h1>Bolide 中文博客</h1><p>记录语言设计、运行时、AOT 编译、标准库和小型 Web 应用的实践笔记。</p></div></section><section class=\"shell\"><div class=\"section-head\"><div><h2>最新文章</h2><p>当前共有 3 篇已发布文章</p></div></div><div class=\"grid\">" + cards + "</div></section>";
+    return web.html(layout_page("Bolide 中文博客", body));
+}
+
+fn about(req: web.Request) -> web.Response {
+    let body: str = "<section class=\"shell\"><div class=\"section-head\"><div><h1>关于这个示例</h1><p>一个用 Bolide 内存数据和直接 HTML 渲染写出的博客对照。</p></div></div><div class=\"article\"><div class=\"article-body\">这个示例用于和 Go 标准库博客做同机压测对照。\n\n公开页面负责阅读体验；登录后，普通用户可以发表评论；管理员可以新建文章、编辑文章、管理用户，并审核或删除评论。\n\n这里不访问文件数据库，也不在请求时读取模板文件。</div><aside class=\"side-panel\"><p><strong>内置账号</strong></p><p>管理员：admin / admin123<br>普通用户：user / user123</p></aside></div></section>";
+    return web.html(layout_page("关于这个示例", body));
+}
+
+fn login(req: web.Request) -> web.Response {
+    let body: str = "<section class=\"shell\"><div class=\"section-head\"><div><h1>登录</h1><p>管理员可以进入后台，普通用户可以发表评论。</p></div></div><div class=\"login-card\"><form class=\"login-form\" method=\"post\" action=\"/login\"><div class=\"field\"><label for=\"username\">用户名</label><input id=\"username\" name=\"username\" autocomplete=\"username\"></div><div class=\"field\"><label for=\"password\">密码</label><input id=\"password\" type=\"password\" name=\"password\" autocomplete=\"current-password\"></div><div class=\"actions\"><button class=\"btn\" type=\"submit\">登录</button></div></form></div></section>";
+    return web.html(layout_page("登录", body));
+}
+
+fn admin(req: web.Request) -> web.Response {
+    return web.redirect("/login", 303);
+}
+
+fn comment_item(author: str, date: str, content: str) -> str {
+    return "<div class=\"comment-item\"><div class=\"meta\"><strong>" + author + "</strong><span>" + date + "</span></div><p>" + content + "</p></div>";
+}
+
+fn post_page(id: str, title: str, excerpt: str, content: str, author: str, date: str, tags: str, cover: str, comments: str, comment_count: int) -> web.Response {
+    let comment_html: str = "<div class=\"empty\">还没有评论。</div>";
+    if comment_count > 0 {
+        comment_html = "<div class=\"comment-list\">" + comments + "</div>";
+    }
+    let body: str = "<section class=\"shell\"><article class=\"article\"><div><img class=\"article-cover\" src=\"" + cover + "\" alt=\"" + title + "\"><h1>" + title + "</h1><div class=\"meta\"><span>" + date + "</span><span>" + author + "</span><span class=\"tag\">" + tags + "</span></div><div class=\"article-body\">" + content + "</div><section class=\"comments\"><div class=\"section-head\"><div><h2>评论</h2><p>" + str(comment_count) + " 条已通过评论</p></div></div>" + comment_html + "<div class=\"notice\">登录后可以发表评论。<a class=\"read-link\" href=\"/login\">去登录</a></div></section></div><aside class=\"side-panel\"><p><strong>摘要</strong></p><p>" + excerpt + "</p><div class=\"actions\"><a class=\"btn secondary\" href=\"/\">所有文章</a></div></aside></article></section>";
+    return web.html(layout_page(title, body));
+}
+
+fn post_detail(req: web.Request) -> web.Response {
+    let id: int = int(req.path_param("id"));
+    if id == 1 {
+        return post_page("1", "给 Bolide 写一个够用的标准库", "一个小语言的标准库不应该显得笨重，但也要能支撑真实网站、工具和自动化任务。", "Bolide 的标准库目标很明确：普通用户不需要接触裸指针，也不需要理解运行时内部的所有权细节。\n\nWeb、模板和本地数据库这几块能力放在一起后，语言就能写出完整应用。路由、会话、HTML 渲染、持久化行数据都保持在 Bolide 的值语义里，AOT 编译后也能独立运行。", "Bolide 团队", "2026-06-15", "标准库", "https://images.unsplash.com/photo-1518005020951-eccb494ad742?auto=format&fit=crop&w=1200&q=80", comment_item("普通读者", "2026-06-15", "这个示例已经能覆盖登录、评论和后台审核流程。"), 1);
+    }
+    if id == 2 {
+        return post_page("2", "模板引擎要保持克制", "默认转义、显式原样输出、循环、条件和点路径，已经能覆盖大多数内容站页面。", "模板引擎最容易失控的地方，是把自己做成另一门复杂语言。这个示例故意只保留几个稳定能力：变量默认 HTML 转义，确实需要时才使用原样输出，数据通过 dict 和 list 传入。\n\n这样模板足够直观，也方便 AOT 与 JIT 共用同一套行为。", "Bolide 团队", "2026-06-14", "模板", "https://images.unsplash.com/photo-1497215728101-856f4ea42174?auto=format&fit=crop&w=1200&q=80", comment_item("站点管理员", "2026-06-15", "管理员评论会直接通过，普通用户评论进入后台审核。"), 1);
+    }
+    if id == 3 {
+        return post_page("3", "文件数据库先解决早期应用", "CRUD、动态值和稳定 API 先跑起来，未来仍然可以替换成真正的 SQL 后端。", "早期标准库的数据库不必马上和 SQLite 拼性能。它更重要的任务，是让示例和小应用可以可靠地保存数据。\n\n文章、用户、评论和站点设置都能用 typed dynamic 表示。等语言和 ABI 更稳定后，底层再替换为 SQL 后端也不会破坏用户代码。", "Bolide 团队", "2026-06-13", "数据库", "https://images.unsplash.com/photo-1516321318423-f06f85e504b3?auto=format&fit=crop&w=1200&q=80", "", 0);
+    }
+    return web.empty(404);
+}
+
+let app: web.App = web.app();
+app.set_workers(8);
+app.get_async("/", index);
+app.get_async("/about", about);
+app.get_async("/login", login);
+app.get_async("/admin", admin);
+app.get_async("/posts/{id}", post_detail);
+
+print("Bolide fast blog listening on http://127.0.0.1:18084");
+app.run("127.0.0.1", 18084);

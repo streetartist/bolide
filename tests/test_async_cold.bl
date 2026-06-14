@@ -1,0 +1,33 @@
+// 测试 async fn 调用只创建 Future，不隐式并行执行。
+
+async fn side_effect() -> int {
+    print("inner");
+    return 7;
+}
+
+let f: future = side_effect();
+print("after-call");
+let value: int = await f;
+print(value);
+print("after-await");
+
+fn first() -> int {
+    return 1;
+}
+
+fn second() -> int {
+    return 2;
+}
+
+spawn select {
+    x = first() => {
+        print("select");
+        print(x);
+    }
+    y = second() => {
+        print("select");
+        print(y);
+    }
+}
+
+print("async cold tests completed");

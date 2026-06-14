@@ -1,0 +1,43 @@
+<section class="hero">
+  <div class="hero-inner">
+    <p class="eyebrow">工程札记</p>
+    <h1>Bolide 中文博客</h1>
+    <p>记录语言设计、运行时、AOT 编译、标准库和小型 Web 应用的实践笔记。</p>
+  </div>
+</section>
+
+<section class="shell">
+  <div class="section-head">
+    <div>
+      <h2>最新文章</h2>
+      <p>当前共有 {{ count }} 篇已发布文章</p>
+    </div>
+    {% if user.is_admin %}
+      <a class="btn" href="/admin/new">新建文章</a>
+    {% endif %}
+  </div>
+
+  {% if count %}
+    <div class="grid">
+      {% for post in posts %}
+        <article class="post-card">
+          <a href="/posts/{{ post.id }}">
+            <img src="{{ post.cover }}" alt="{{ post.title }}">
+          </a>
+          <div class="post-card-body">
+            <div class="meta">
+              <span>{{ post.date }}</span>
+              <span>{{ post.author }}</span>
+              <span class="tag">{{ post.tags }}</span>
+            </div>
+            <h3><a href="/posts/{{ post.id }}">{{ post.title }}</a></h3>
+            <p>{{ post.excerpt }}</p>
+            <a class="read-link" href="/posts/{{ post.id }}">阅读全文</a>
+          </div>
+        </article>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="empty">还没有已发布文章。</div>
+  {% endif %}
+</section>

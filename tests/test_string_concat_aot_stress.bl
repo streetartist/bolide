@@ -1,0 +1,23 @@
+fn wrap(title: str, body: str) -> str {
+    return "<html><head><title>" + title + "</title></head><body>" + body + "</body></html>";
+}
+
+fn card(id: int, title: str, text: str) -> str {
+    return "<article id=\"post-" + str(id) + "\"><h2>" + title + "</h2><p>" + text + "</p></article>";
+}
+
+fn render_once(n: int) -> str {
+    let items: str = "";
+    items = items + card(n, "alpha", "one");
+    items = items + card(n + 1, "beta", "two");
+    items = items + card(n + 2, "gamma", "three");
+    return wrap("page " + str(n), "<main>" + items + "</main>");
+}
+
+let total: int = 0;
+for i in range(2000) {
+    let page: str = render_once(i);
+    total = total + page.len();
+}
+
+print(total > 0);

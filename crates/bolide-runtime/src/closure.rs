@@ -108,6 +108,7 @@ unsafe fn release_capture(value: i64, tag: i64) {
             crate::bolide_tuple_release(ptr as *mut crate::BolideTuple);
         }
         11 => crate::object_weak_release(ptr as *mut u8),
+        12 => crate::bolide_bytes_release(ptr as *mut crate::BolideBytes),
         _ => {}
     }
 }

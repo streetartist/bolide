@@ -1,18 +1,63 @@
 import "../std/fs/fs.bl" as fs;
 
-let dir: str = "target";
-let path: str = "target/bolide_fs_test.txt";
-let path2: str = "target/bolide_fs_delete_test.txt";
+let root: str = "target/bolide_fs_suite";
+let nested: str = fs.join(root, "nested");
+let path: str = fs.join(root, "note.txt");
+let copy_path: str = fs.join(root, "copy.txt");
+let moved_path: str = fs.join(root, "moved.txt");
+let empty_path: str = fs.join(nested, "empty.txt");
 
-print(fs.create_dir_all(dir));
-print(fs.write_text(path2, "delete me"));
-print(fs.remove_file(path2));
-print(fs.exists(path2));
+fs.remove_dir_all(root);
+
+print(fs.create_dir_all(nested));
 print(fs.write_text(path, "hello"));
-print(fs.append_text(path, " bolide"));
+print(fs.append_text(path, "\nbolide"));
 print(fs.exists(path));
+print(fs.is_file(path));
+print(fs.is_dir(root));
+
 let content: str = fs.read_text(path);
 print(content);
+
+let lines: list<str> = fs.read_lines(path);
+print(lines.len());
+print(lines[0]);
+print(lines[1]);
+
+print(fs.len(path));
+print(fs.copy(path, copy_path));
+print(fs.rename(copy_path, moved_path));
+print(fs.exists(copy_path));
+print(fs.exists(moved_path));
+
+let name: str = fs.file_name(path);
+let parent: str = fs.parent(path);
+let ext: str = fs.extension(path);
+let stem: str = fs.stem(path);
+print(name);
+print(parent);
+print(ext);
+print(stem);
+
+let cwd: str = fs.current_dir();
+print(cwd != "");
+
+let abs: str = fs.canonicalize(path);
+print(abs != "");
+
+let entries: list<str> = fs.read_dir(root);
+print(entries.len() >= 2);
+
+print(fs.touch(empty_path));
+print(fs.exists(empty_path));
+print(fs.modified(path) > 0);
+print(fs.created(path) >= -1);
+print(fs.readonly(path));
+print(fs.set_readonly(path, false));
+
 print(fs.remove_file(path));
-print(fs.exists(path));
+print(fs.remove_file(moved_path));
+print(fs.remove_file(empty_path));
+print(fs.remove_dir_all(root));
+print(fs.exists(root));
 print(999);

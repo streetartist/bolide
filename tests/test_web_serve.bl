@@ -1,0 +1,20 @@
+import "std/web/web.bl";
+
+fn index(req: web.Request) -> web.Response {
+    let res: web.Response = web.text("ok " + req.path());
+    res.set_header("X-Test", "serve");
+    return res;
+}
+
+fn about(req: web.Request) -> web.Response {
+    return web.text("about");
+}
+
+let app: web.App = web.app();
+app.set_workers(4);
+app.get("/", index);
+app.get("/about", about);
+
+let served: int = app.serve("127.0.0.1", 18081, 2);
+print(served);
+app.free();

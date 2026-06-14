@@ -11,7 +11,7 @@ use crate::list::{print_element_inline, ElementType};
 use crate::rc::{RcHeader, TypeTag};
 
 /// 元组头部结构
-/// 布局：[RcHeader][len: usize][padding: 4 bytes][type_tags: ElementType[len]][data: i64[len]]
+/// 布局：[RcHeader][len: usize][padding: 4 bytes][type_tags: ElementType[len]][padding][data: i64[len]]
 #[repr(C)]
 pub struct BolideTuple {
     header: RcHeader,
@@ -22,6 +22,10 @@ pub struct BolideTuple {
 }
 
 impl BolideTuple {
+    fn padded_tags_len(&self) -> usize {
+        align_up(self.len, std::mem::align_of::<i64>())
+    }
+
     unsafe fn type_tags(&self) -> *const u8 {
         (self as *const Self as *const u8).add(std::mem::size_of::<BolideTuple>())
     }
@@ -31,12 +35,17 @@ impl BolideTuple {
     }
 
     unsafe fn data_ptr(&self) -> *const i64 {
-        self.type_tags().add(self.len) as *const i64
+        self.type_tags().add(self.padded_tags_len()) as *const i64
     }
 
     unsafe fn data_ptr_mut(&mut self) -> *mut i64 {
-        self.type_tags_mut().add(self.len) as *mut i64
+        self.type_tags_mut().add(self.padded_tags_len()) as *mut i64
     }
+}
+
+fn align_up(value: usize, align: usize) -> usize {
+    debug_assert!(align.is_power_of_two());
+    (value + align - 1) & !(align - 1)
 }
 
 use std::sync::atomic::{AtomicI64, Ordering};
@@ -53,7 +62,7 @@ pub extern "C" fn bolide_tuple_new_typed(len: usize, type_tags_ptr: *const u8) -
     }
 
     let header_size = std::mem::size_of::<BolideTuple>();
-    let tags_size = len; // 每个元素 1 字节
+    let tags_size = align_up(len, std::mem::align_of::<i64>());
     let data_size = len * 8;
     let total_size = header_size + tags_size + data_size;
 
@@ -119,6 +128,7 @@ pub extern "C" fn bolide_tuple_free(ptr: *mut BolideTuple) {
                     6 => ElementType::List,
                     8 => ElementType::Dict,
                     9 => ElementType::Dynamic,
+                    10 => ElementType::Bytes,
                     _ => {
                         // 基本类型（Int/Float/Bool）不需释放
                         continue;
@@ -129,7 +139,7 @@ pub extern "C" fn bolide_tuple_free(ptr: *mut BolideTuple) {
         }
 
         let header_size = std::mem::size_of::<BolideTuple>();
-        let tags_size = len;
+        let tags_size = align_up(len, std::mem::align_of::<i64>());
         let data_size = len * 8;
         let total_size = header_size + tags_size + data_size;
 
@@ -246,6 +256,13 @@ pub extern "C" fn bolide_tuple_retain(ptr: *mut BolideTuple) {
     }
 }
 
+/// 增加引用计数并返回原指针，供编译器按 clone ABI 使用。
+#[no_mangle]
+pub extern "C" fn bolide_tuple_clone(ptr: *mut BolideTuple) -> *mut BolideTuple {
+    bolide_tuple_retain(ptr);
+    ptr
+}
+
 /// 减少引用计数，返回是否已释放
 #[no_mangle]
 pub extern "C" fn bolide_tuple_release(ptr: *mut BolideTuple) -> bool {
@@ -333,7 +350,7 @@ pub extern "C" fn bolide_print_tuple(ptr: *const BolideTuple) {
             }
             let tag = *tags.add(i);
             let val = *data.add(i);
-            let elem_type: ElementType = unsafe { std::mem::transmute(tag) };
+            let elem_type: ElementType = std::mem::transmute(tag);
             print_element_inline(elem_type, val);
         }
         println!(")");
@@ -373,6 +390,10 @@ fn retain_raw_static(elem_type: ElementType, raw: i64) {
             use crate::BolideDynamic;
             crate::bolide_dynamic_retain(ptr as *mut BolideDynamic);
         }
+        Bytes => {
+            use crate::BolideBytes;
+            crate::bolide_bytes_retain(ptr as *mut BolideBytes);
+        }
         _ => {} // Int/Float/Bool/Ptr 不需要 retain
     }
 }
@@ -408,6 +429,10 @@ fn release_raw_static(elem_type: ElementType, raw: i64) {
             use crate::BolideDynamic;
             crate::bolide_dynamic_release(ptr as *mut BolideDynamic);
         }
+        Bytes => {
+            use crate::BolideBytes;
+            crate::bolide_bytes_release(ptr as *mut BolideBytes);
+        }
         _ => {} // Int/Float/Bool/Ptr 不需要释放
     }
 }
@@ -415,5 +440,31 @@ fn release_raw_static(elem_type: ElementType, raw: i64) {
 impl From<u8> for ElementType {
     fn from(v: u8) -> Self {
         unsafe { std::mem::transmute(v) }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tuple_slice_retains_and_releases_bytes() {
+        unsafe {
+            let tag = [ElementType::Bytes as u8];
+            let tuple = bolide_tuple_new_typed(1, tag.as_ptr());
+            let bytes = crate::BolideBytes::from_slice(&[1, 2, 3]);
+
+            bolide_tuple_set_typed(tuple, 0, bytes as i64, ElementType::Bytes as u8);
+            assert_eq!((*bytes).ref_count(), 1);
+
+            let sliced = bolide_tuple_slice_step(tuple, 0, 1, 1, 3);
+            assert!(!sliced.is_null());
+            assert_eq!((*bytes).ref_count(), 2);
+
+            bolide_tuple_release(tuple);
+            assert_eq!((*bytes).ref_count(), 1);
+
+            bolide_tuple_release(sliced);
+        }
     }
 }

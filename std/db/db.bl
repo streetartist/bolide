@@ -1,0 +1,97 @@
+// Bolide embedded database standard library.
+// Usage: import "std/db/db.bl";
+
+extern "bolide" {
+    fn bolide_db_open(path: *char) -> *void;
+    fn bolide_db_close(db: *void);
+    fn bolide_db_last_error(db: *void) -> str;
+    fn bolide_db_create_table(db: *void, table: *char, columns: *char) -> i64;
+    fn bolide_db_insert(db: *void, table: *char, row: *void) -> i64;
+    fn bolide_db_update(db: *void, table: *char, id: i64, row: *void) -> i64;
+    fn bolide_db_delete(db: *void, table: *char, id: i64) -> i64;
+    fn bolide_db_get(db: *void, table: *char, id: i64) -> dict;
+    fn bolide_db_all(db: *void, table: *char) -> list;
+    fn bolide_db_where_eq(db: *void, table: *char, column: *char, value: *dynamic) -> list;
+    fn bolide_db_count(db: *void, table: *char) -> i64;
+}
+
+class Database {
+    handle: ptr;
+
+    fn create_table(table: str, columns: str) -> bool {
+        return bolide_db_create_table(self.handle, table, columns) != 0;
+    }
+
+    fn insert(table: str, row: dict<str, dynamic>) -> int {
+        return bolide_db_insert(self.handle, table, row);
+    }
+
+    fn update(table: str, id: int, row: dict<str, dynamic>) -> bool {
+        return bolide_db_update(self.handle, table, id, row) != 0;
+    }
+
+    fn delete(table: str, id: int) -> bool {
+        return bolide_db_delete(self.handle, table, id) != 0;
+    }
+
+    fn get(table: str, id: int) -> dict<str, dynamic> {
+        return bolide_db_get(self.handle, table, id);
+    }
+
+    fn all(table: str) -> list<dict<str, dynamic>> {
+        return bolide_db_all(self.handle, table);
+    }
+
+    fn where_eq(table: str, column: str, value: dynamic) -> list<dict<str, dynamic>> {
+        return bolide_db_where_eq(self.handle, table, column, value);
+    }
+
+    fn count(table: str) -> int {
+        return bolide_db_count(self.handle, table);
+    }
+
+    fn last_error() -> str {
+        return bolide_db_last_error(self.handle);
+    }
+
+    fn close() {
+        bolide_db_close(self.handle);
+        self.handle = 0;
+    }
+}
+
+fn open(path: str) -> Database {
+    return Database(bolide_db_open(path));
+}
+
+fn create_table(database: Database, table: str, columns: str) -> bool {
+    return database.create_table(table, columns);
+}
+
+fn insert(database: Database, table: str, row: dict<str, dynamic>) -> int {
+    return database.insert(table, row);
+}
+
+fn update(database: Database, table: str, id: int, row: dict<str, dynamic>) -> bool {
+    return database.update(table, id, row);
+}
+
+fn delete(database: Database, table: str, id: int) -> bool {
+    return database.delete(table, id);
+}
+
+fn get(database: Database, table: str, id: int) -> dict<str, dynamic> {
+    return database.get(table, id);
+}
+
+fn all(database: Database, table: str) -> list<dict<str, dynamic>> {
+    return database.all(table);
+}
+
+fn where_eq(database: Database, table: str, column: str, value: dynamic) -> list<dict<str, dynamic>> {
+    return database.where_eq(table, column, value);
+}
+
+fn count(database: Database, table: str) -> int {
+    return database.count(table);
+}

@@ -1,0 +1,58 @@
+<section class="shell">
+  <div class="section-head">
+    <div>
+      <h1>{{ form_title }}</h1>
+      <p>{{ form_note }}</p>
+    </div>
+    <a class="btn secondary" href="/admin">返回后台</a>
+  </div>
+
+  <form class="form" method="post" action="{{ action }}">
+    <div class="field wide">
+      <label for="title">标题</label>
+      <input id="title" name="title" value="{{ post.title }}">
+    </div>
+
+    <div class="field">
+      <label for="author">作者</label>
+      <input id="author" name="author" value="{{ post.author }}">
+    </div>
+
+    <div class="field">
+      <label for="date">日期</label>
+      <input id="date" name="date" value="{{ post.date }}">
+    </div>
+
+    <div class="field">
+      <label for="tags">标签</label>
+      <input id="tags" name="tags" value="{{ post.tags }}">
+    </div>
+
+    <div class="field">
+      <label for="cover">封面图地址</label>
+      <input id="cover" name="cover" value="{{ post.cover }}">
+    </div>
+
+    <div class="field wide">
+      <label for="excerpt">摘要</label>
+      <input id="excerpt" name="excerpt" value="{{ post.excerpt }}">
+    </div>
+
+    <div class="field wide">
+      <label for="content">正文</label>
+      <textarea class="post-body-textarea" id="content" name="content">{{ post.content }}</textarea>
+    </div>
+
+    <div class="field wide">
+      <label class="check-row">
+        <input type="checkbox" name="published" {% if post.published %}checked{% endif %}>
+        发布到首页
+      </label>
+    </div>
+
+    <div class="actions">
+      <button class="btn" type="submit">保存文章</button>
+      <a class="btn secondary" href="/admin">取消</a>
+    </div>
+  </form>
+</section>

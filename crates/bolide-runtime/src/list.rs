@@ -22,6 +22,7 @@ pub enum ElementType {
     Ptr = 7,     // 通用指针
     Dict = 8,    // 字典
     Dynamic = 9, // 动态类型
+    Bytes = 10,  // 二进制缓冲区
 }
 
 impl ElementType {
@@ -48,6 +49,7 @@ impl ElementType {
             7 => ElementType::Ptr,
             8 => ElementType::Dict,
             9 => ElementType::Dynamic,
+            10 => ElementType::Bytes,
             _ => ElementType::Int,
         }
     }
@@ -245,6 +247,9 @@ impl BolideList {
             ElementType::Dynamic => {
                 crate::bolide_dynamic_retain(ptr as *mut crate::dynamic::BolideDynamic);
             }
+            ElementType::Bytes => {
+                crate::bolide_bytes_retain(ptr as *mut crate::BolideBytes);
+            }
             _ => {}
         }
     }
@@ -273,6 +278,9 @@ impl BolideList {
             }
             ElementType::Dynamic => {
                 crate::bolide_dynamic_release(ptr as *mut crate::dynamic::BolideDynamic);
+            }
+            ElementType::Bytes => {
+                crate::bolide_bytes_release(ptr as *mut crate::BolideBytes);
             }
             _ => {}
         }
@@ -350,6 +358,7 @@ pub extern "C" fn bolide_list_new(elem_type: u8) -> *mut BolideList {
         7 => ElementType::Ptr,
         8 => ElementType::Dict,
         9 => ElementType::Dynamic,
+        10 => ElementType::Bytes,
         _ => ElementType::Int,
     };
     BolideList::new(elem_type)
@@ -366,6 +375,9 @@ pub extern "C" fn bolide_list_with_capacity(elem_type: u8, capacity: usize) -> *
         4 => ElementType::BigInt,
         5 => ElementType::Decimal,
         6 => ElementType::List,
+        8 => ElementType::Dict,
+        9 => ElementType::Dynamic,
+        10 => ElementType::Bytes,
         _ => ElementType::Ptr,
     };
     BolideList::with_capacity(elem_type, capacity)
@@ -971,6 +983,7 @@ pub(crate) fn print_element_inline(elem_type: ElementType, val: i64) {
                 print!("null");
             }
         }
+        ElementType::Bytes => crate::bolide_print_bytes_inline(val as *const crate::BolideBytes),
         ElementType::Ptr => print!("0x{:x}", val),
     }
 }

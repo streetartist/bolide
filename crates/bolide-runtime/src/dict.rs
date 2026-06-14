@@ -6,6 +6,7 @@
 //! - 键为 string 时按内容哈希/比较（而非指针），并对键持有强引用
 //! - 哈希器使用 FxHash（键来自程序内部，无需抗碰撞攻击的 SipHash）
 
+use std::borrow::Borrow;
 use std::hash::{Hash, Hasher};
 use std::os::raw::c_void;
 
@@ -47,6 +48,12 @@ impl PartialEq for StringKey {
 }
 
 impl Eq for StringKey {}
+
+impl Borrow<str> for StringKey {
+    fn borrow(&self) -> &str {
+        self.as_str().unwrap_or("")
+    }
+}
 
 impl Hash for StringKey {
     fn hash<H: Hasher>(&self, state: &mut H) {
@@ -139,6 +146,15 @@ impl BolideDict {
         match &self.map {
             DictMap::String(map) => map.get(&Self::make_string_key(key)).copied(),
             DictMap::Raw(map) => map.get(&key).copied(),
+        }
+    }
+
+    /// 用 Rust str 查询字符串键，避免为只读查找临时分配 BolideString。
+    #[inline]
+    pub fn get_str(&self, key: &str) -> Option<i64> {
+        match &self.map {
+            DictMap::String(map) => map.get(key).copied(),
+            DictMap::Raw(_) => None,
         }
     }
 
@@ -278,6 +294,9 @@ fn retain_raw_static(elem_type: ElementType, raw: i64) {
         ElementType::Dynamic => {
             crate::bolide_dynamic_retain(ptr as *mut crate::dynamic::BolideDynamic);
         }
+        ElementType::Bytes => {
+            crate::bolide_bytes_retain(ptr as *mut crate::BolideBytes);
+        }
         _ => {}
     }
 }
@@ -305,6 +324,9 @@ fn release_raw_static(elem_type: ElementType, raw: i64) {
         }
         ElementType::Dynamic => {
             crate::bolide_dynamic_release(ptr as *mut crate::dynamic::BolideDynamic);
+        }
+        ElementType::Bytes => {
+            crate::bolide_bytes_release(ptr as *mut crate::BolideBytes);
         }
         _ => {}
     }
@@ -348,6 +370,7 @@ pub extern "C" fn bolide_dict_release(dict: *mut BolideDict) {
     }
     unsafe {
         if (*dict).release() {
+            (*dict).clear();
             let _ = Box::from_raw(dict);
         }
     }
@@ -690,6 +713,47 @@ mod tests {
             let probe = crate::BolideString::new("key");
             assert_eq!(bolide_dict_get(dict, probe as i64), 7);
             crate::bolide_string_release(probe);
+
+            bolide_dict_release(dict);
+        }
+    }
+
+    #[test]
+    fn test_dict_release_releases_entries() {
+        let dict = BolideDict::new(ElementType::String, ElementType::String);
+        unsafe {
+            let key = crate::BolideString::new("body");
+            let value = crate::BolideString::new("rendered html");
+
+            bolide_dict_set(dict, key as i64, value as i64);
+            assert_eq!((*key).ref_count(), 2);
+            assert_eq!((*value).ref_count(), 2);
+
+            crate::bolide_string_release(key);
+            crate::bolide_string_release(value);
+
+            assert_eq!((*key).ref_count(), 1);
+            assert_eq!((*value).ref_count(), 1);
+
+            bolide_dict_release(dict);
+        }
+    }
+
+    #[test]
+    fn test_dict_retains_and_releases_bytes_value() {
+        let dict = BolideDict::new(ElementType::String, ElementType::Bytes);
+        unsafe {
+            let key = crate::BolideString::new("blob");
+            let value = crate::BolideBytes::from_slice(&[1, 2, 3, 4]);
+
+            bolide_dict_set(dict, key as i64, value as i64);
+            assert_eq!((*key).ref_count(), 2);
+            assert_eq!((*value).ref_count(), 2);
+
+            crate::bolide_string_release(key);
+            crate::bolide_bytes_release(value);
+
+            assert_eq!((*value).ref_count(), 1);
 
             bolide_dict_release(dict);
         }

@@ -94,6 +94,57 @@ impl BolideString {
         Self::from_parts(a, Some(b))
     }
 
+    /// 拼接多个字符串为新字符串（单次分配，无中间拷贝）
+    unsafe fn concat_ptrs(parts: *const *const Self, count: usize) -> *mut Self {
+        if parts.is_null() || count == 0 {
+            return Self::new("");
+        }
+
+        let parts = std::slice::from_raw_parts(parts, count);
+        let mut len = 0usize;
+        for &part in parts {
+            if !part.is_null() {
+                len = len
+                    .checked_add((*part).len)
+                    .expect("BolideString concatenation size overflow");
+            }
+        }
+
+        let layout = Self::layout_for_len(len);
+        let ptr = alloc(layout);
+        if ptr.is_null() {
+            std::alloc::handle_alloc_error(layout);
+        }
+
+        let string = ptr as *mut Self;
+        std::ptr::write(
+            string,
+            Self {
+                header: RcHeader::new(TypeTag::String),
+                len,
+            },
+        );
+
+        let data = (*string).data_ptr() as *mut u8;
+        let mut offset = 0usize;
+        for &part in parts {
+            if part.is_null() {
+                continue;
+            }
+            let part_ref = &*part;
+            let part_len = part_ref.len;
+            std::ptr::copy_nonoverlapping(
+                part_ref.data_ptr() as *const u8,
+                data.add(offset),
+                part_len,
+            );
+            offset += part_len;
+        }
+        *data.add(len) = 0;
+
+        string
+    }
+
     /// 获取字符串内容
     ///
     /// O(1)：直接用 len 字段构造切片。内容在创建时已保证是合法 UTF-8，
@@ -277,6 +328,15 @@ pub extern "C" fn bolide_string_concat(
         unsafe { (*b).as_str() }
     };
     BolideString::concat(a_str, b_str)
+}
+
+/// 多段字符串拼接（parts 为 BolideString* 数组，返回新字符串，ref_count = 1）
+#[no_mangle]
+pub extern "C" fn bolide_string_concat_many(
+    parts: *const *const BolideString,
+    count: usize,
+) -> *mut BolideString {
+    unsafe { BolideString::concat_ptrs(parts, count) }
 }
 
 /// 字符串比较
@@ -763,6 +823,27 @@ mod tests {
             bolide_string_release(a);
             bolide_string_release(b);
             bolide_string_release(c);
+        }
+    }
+
+    #[test]
+    fn test_string_concat_many() {
+        let a = BolideString::new("hello");
+        let b = BolideString::new(" ");
+        let c = BolideString::new("world");
+        let parts = [
+            a as *const BolideString,
+            b as *const BolideString,
+            c as *const BolideString,
+        ];
+        let out = bolide_string_concat_many(parts.as_ptr(), parts.len());
+        unsafe {
+            assert_eq!((*out).as_str(), "hello world");
+
+            bolide_string_release(a);
+            bolide_string_release(b);
+            bolide_string_release(c);
+            bolide_string_release(out);
         }
     }
 

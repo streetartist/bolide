@@ -1,0 +1,31 @@
+import "std/fs/fs.bl";
+import "std/db/db.bl";
+import "std/template/template.bl";
+
+let path: str = "tests/tmp_template_db";
+fs.remove_dir_all(path);
+
+let database: db.Database = db.open(path);
+print(database.create_table("posts", "title,published,views"));
+
+let row: dict<str, dynamic> = {
+    "title": "<Bolide>",
+    "published": true,
+    "views": 7,
+};
+
+let id: int = database.insert("posts", row);
+print(id);
+
+let posts: list<dict<str, dynamic>> = database.where_eq("posts", "published", true);
+print(database.all("posts").len());
+let ctx: dict<str, dynamic> = {
+    "title": "<hello>",
+    "posts": posts,
+};
+
+let html: str = template.render("{{ title }} {% for post in posts %}{{ post.title }}:{{ post.views }}{% endfor %}", ctx);
+print(html);
+
+database.close();
+fs.remove_dir_all(path);

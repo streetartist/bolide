@@ -7,6 +7,67 @@ use std::process::Command;
 use bolide_compiler::{AotCompiler, JitCompiler};
 use bolide_parser::parse_source;
 
+const STD_GUI_LIB: &str = "std:gui";
+const NATIVE_LIB_PREFIX: &str = "lib:";
+
+fn is_shared_library_path(lib: &str) -> bool {
+    let lower = lib.to_ascii_lowercase();
+    lower.ends_with(".dll") || lower.ends_with(".so") || lower.ends_with(".dylib")
+}
+
+fn native_lib_name(lib: &str) -> miette::Result<Option<&str>> {
+    if let Some(name) = lib.strip_prefix(NATIVE_LIB_PREFIX) {
+        if name.is_empty() {
+            return Err(miette::miette!("extern \"lib:\" is missing a library name"));
+        }
+        return Ok(Some(name));
+    }
+    Ok(None)
+}
+
+#[cfg(target_os = "windows")]
+fn native_link_arg_windows(lib: &str) -> miette::Result<String> {
+    if lib.starts_with("std:") {
+        return Err(miette::miette!("Unknown standard native library: {}", lib));
+    }
+    if is_shared_library_path(lib) {
+        return Err(miette::miette!(
+            "extern \"{}\" is a shared library path. Use `lib:name` or a .lib import/static library.",
+            lib
+        ));
+    }
+    if let Some(name) = native_lib_name(lib)? {
+        if matches!(name, "c" | "m") {
+            return Ok("msvcrt.lib".to_string());
+        }
+        return Ok(format!("{}.lib", name));
+    }
+    Ok(lib.to_string())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn native_link_arg_unix(lib: &str) -> miette::Result<String> {
+    if lib.starts_with("std:") {
+        return Err(miette::miette!("Unknown standard native library: {}", lib));
+    }
+    if is_shared_library_path(lib) {
+        return Err(miette::miette!(
+            "extern \"{}\" is a shared library path. Use `lib:name`, -lname, or a static archive path.",
+            lib
+        ));
+    }
+    if let Some(name) = native_lib_name(lib)? {
+        if name == "c" {
+            return Ok("-lc".to_string());
+        }
+        if name == "m" {
+            return Ok("-lm".to_string());
+        }
+        return Ok(format!("-l{}", name));
+    }
+    Ok(lib.to_string())
+}
+
 /// REPL 状态，维护累积的代码
 struct ReplState {
     /// 函数定义
@@ -381,9 +442,11 @@ fn link_windows(
     let runtime_lib_path = PathBuf::from(find_runtime_lib()?);
     let runtime_lib_dir = runtime_lib_path.parent().unwrap().display().to_string();
     let runtime_lib_name = runtime_lib_path.file_name().unwrap().to_str().unwrap();
+    let runtime_lib_arg = runtime_lib_path.display().to_string();
 
     println!("Runtime lib dir: {}", runtime_lib_dir);
     println!("Runtime lib name: {}", runtime_lib_name);
+    println!("Runtime lib path: {}", runtime_lib_arg);
 
     // 构建链接参数
     let libpath_arg = format!("/LIBPATH:{}", runtime_lib_dir);
@@ -394,7 +457,7 @@ fn link_windows(
         "/SUBSYSTEM:CONSOLE".to_string(),
         out_arg,
         obj_path.display().to_string(),
-        runtime_lib_name.to_string(),
+        runtime_lib_arg,
         libpath_arg,
         "kernel32.lib".to_string(),
         "msvcrt.lib".to_string(),
@@ -409,15 +472,40 @@ fn link_windows(
         "legacy_stdio_definitions.lib".to_string(),
     ];
 
-    // 添加外部库 (将 .dll 转换为 .lib)
+    let mut needs_std_gui = false;
+    let mut user_lib_args = Vec::new();
     for lib in extern_libs {
-        let lib_name = if lib.to_lowercase().ends_with(".dll") {
-            lib[..lib.len() - 4].to_string() + ".lib"
+        if lib == STD_GUI_LIB {
+            needs_std_gui = true;
         } else {
-            lib.clone()
-        };
-        println!("Adding external library: {}", lib_name);
-        args.push(lib_name);
+            user_lib_args.push(native_link_arg_windows(lib)?);
+        }
+    }
+
+    let std_gui_obj = if needs_std_gui {
+        let gui_obj = compile_std_gui_object(output)?;
+        println!("Adding std:gui object: {}", gui_obj.display());
+        args.push(gui_obj.display().to_string());
+
+        for lib in [
+            "user32.lib",
+            "gdi32.lib",
+            "comctl32.lib",
+            "comdlg32.lib",
+            "shell32.lib",
+            "ole32.lib",
+        ] {
+            args.push(lib.to_string());
+        }
+
+        Some(gui_obj)
+    } else {
+        None
+    };
+
+    for lib in user_lib_args {
+        println!("Adding external library: {}", lib);
+        args.push(lib);
     }
 
     println!("Running lld-link...");
@@ -426,6 +514,10 @@ fn link_windows(
         .status()
         .map_err(|e| miette::miette!("Linker not found: {}", e))?;
 
+    if let Some(path) = std_gui_obj {
+        let _ = fs::remove_file(path);
+    }
+
     if status.success() {
         Ok(())
     } else {
@@ -433,8 +525,130 @@ fn link_windows(
     }
 }
 
+#[cfg(target_os = "windows")]
+fn compile_std_gui_object(output: &Path) -> miette::Result<PathBuf> {
+    let source = find_std_gui_source()?;
+    let output_dir = output.parent().unwrap_or_else(|| Path::new("."));
+    let stem = output
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("bolide");
+    let obj_path = output_dir.join(format!("{}.std_gui.{}.obj", stem, std::process::id()));
+
+    println!("Compiling std:gui C library: {}", source.display());
+
+    let source_arg = source.display().to_string();
+    let obj_arg = obj_path.display().to_string();
+    let attempts = vec![
+        (
+            "clang",
+            vec![
+                "-x".to_string(),
+                "c".to_string(),
+                "-c".to_string(),
+                source_arg.clone(),
+                "-DBOLIDE_GUI_STATIC".to_string(),
+                "-DUNICODE".to_string(),
+                "-D_UNICODE".to_string(),
+                "-o".to_string(),
+                obj_arg.clone(),
+            ],
+        ),
+        (
+            "clang-cl",
+            vec![
+                "/nologo".to_string(),
+                "/TC".to_string(),
+                "/c".to_string(),
+                "/DBOLIDE_GUI_STATIC".to_string(),
+                "/DUNICODE".to_string(),
+                "/D_UNICODE".to_string(),
+                format!("/Fo{}", obj_arg),
+                source_arg.clone(),
+            ],
+        ),
+        (
+            "cl",
+            vec![
+                "/nologo".to_string(),
+                "/TC".to_string(),
+                "/c".to_string(),
+                "/DBOLIDE_GUI_STATIC".to_string(),
+                "/DUNICODE".to_string(),
+                "/D_UNICODE".to_string(),
+                format!("/Fo{}", obj_path.display()),
+                source_arg,
+            ],
+        ),
+    ];
+
+    let mut last_err = String::new();
+    for (tool, args) in attempts {
+        match Command::new(tool).args(&args).output() {
+            Ok(output) if output.status.success() && obj_path.exists() => return Ok(obj_path),
+            Ok(output) => {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                last_err = format!(
+                    "{} failed with {}: {}{}",
+                    tool, output.status, stdout, stderr
+                );
+            }
+            Err(e) => {
+                last_err = format!("{} not found: {}", tool, e);
+            }
+        }
+    }
+
+    Err(miette::miette!(
+        "Failed to compile std:gui C library. Install clang or MSVC cl.exe. Last error: {}",
+        last_err
+    ))
+}
+
+#[cfg(target_os = "windows")]
+fn find_std_gui_source() -> miette::Result<PathBuf> {
+    let rel = Path::new("std").join("gui").join("gui.c");
+    let mut candidates = Vec::new();
+
+    if let Ok(cwd) = std::env::current_dir() {
+        candidates.push(cwd.join(&rel));
+    }
+
+    candidates.push(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join(&rel),
+    );
+
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(exe_dir) = exe_path.parent() {
+            candidates.push(exe_dir.join(&rel));
+            candidates.push(exe_dir.join("..").join(&rel));
+            candidates.push(exe_dir.join("..").join("..").join(&rel));
+        }
+    }
+
+    for candidate in candidates {
+        if candidate.exists() {
+            return Ok(candidate.canonicalize().unwrap_or(candidate));
+        }
+    }
+
+    Err(miette::miette!(
+        "std:gui source not found; expected std/gui/gui.c near the current directory or compiler installation"
+    ))
+}
+
 #[cfg(not(target_os = "windows"))]
 fn link_unix(obj_path: &PathBuf, output: &PathBuf, extern_libs: &[String]) -> miette::Result<()> {
+    if extern_libs.iter().any(|lib| lib == STD_GUI_LIB) {
+        return Err(miette::miette!(
+            "std:gui is currently a Win32 C library and can only be AOT-linked on Windows"
+        ));
+    }
+
     let runtime_lib = find_runtime_lib()?;
 
     let mut args = vec![
@@ -447,20 +661,10 @@ fn link_unix(obj_path: &PathBuf, output: &PathBuf, extern_libs: &[String]) -> mi
         "-ldl".to_string(),
     ];
 
-    // 添加外部库 (将 .so 转换为 -l 参数)
     for lib in extern_libs {
-        let lib_name = if lib.starts_with("lib") && lib.ends_with(".so") {
-            // libfoo.so -> -lfoo
-            format!("-l{}", &lib[3..lib.len() - 3])
-        } else if lib.ends_with(".so") {
-            // foo.so -> -l:foo.so
-            format!("-l:{}", lib)
-        } else {
-            // 直接使用
-            lib.clone()
-        };
-        println!("Adding external library: {}", lib_name);
-        args.push(lib_name);
+        let arg = native_link_arg_unix(lib)?;
+        println!("Adding external library: {}", arg);
+        args.push(arg);
     }
 
     let status = Command::new("cc")

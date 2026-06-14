@@ -1,15 +1,19 @@
-// await / await all 类型自动推断测试
+// await / spawn all 类型自动推断测试
 async fn fetch_a() -> int { return 100; }
 async fn fetch_b() -> int { return 200; }
 async fn fetch_s() -> str { return "hello"; }
 async fn fetch_s2() -> str { return "world"; }
+fn calc_a() -> int { return 100; }
+fn calc_b() -> int { return 200; }
+fn calc_s() -> str { return "hello"; }
+fn calc_s2() -> str { return "world"; }
 
-// await all 无标注：推断为元组
-let nums = await all { fetch_a(), fetch_b() };
+// spawn all 无标注：推断为元组
+let nums = spawn all { calc_a(), calc_b() };
 print(nums[0]);   // 100
 print(nums[1]);   // 200
 
-let strs = await all { fetch_s(), fetch_s2() };
+let strs = spawn all { calc_s(), calc_s2() };
 print(strs[0]);   // hello
 print(strs[1]);   // world
 

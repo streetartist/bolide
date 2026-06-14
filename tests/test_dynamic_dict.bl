@@ -1,0 +1,26 @@
+let d = {"name": "bolide", "version": 1};
+let boxed: dynamic = d;
+print(boxed);
+
+let mixed = {"dict": d, "label": "runtime"};
+print(mixed["dict"]);
+print(mixed["label"]);
+print(str(mixed["label"]));
+
+let dyn_int: dynamic = 42;
+let dyn_float: dynamic = 3.5;
+print(str(dyn_int));
+print(int(dyn_int) + 1);
+print(float(dyn_float) + 0.5);
+
+fn show(value: dynamic) {
+    print(value);
+}
+
+fn make_payload() -> dynamic {
+    return d;
+}
+
+show(d);
+print(make_payload());
+print("dynamic dict tests completed");

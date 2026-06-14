@@ -2,34 +2,172 @@
 // Usage: import "std/fs/fs.bl" as fs;
 
 extern "bolide" {
-    fn bolide_fs_read_text(path: *char) -> *void;
+    fn bolide_fs_read_text(path: *char) -> str;
+    fn bolide_fs_read_bytes(path: *char) -> bytes;
+    fn bolide_fs_read_lines(path: *char) -> list;
     fn bolide_fs_write_text(path: *char, content: *char) -> i64;
+    fn bolide_fs_write_bytes(path: *char, data: *void) -> i64;
     fn bolide_fs_append_text(path: *char, content: *char) -> i64;
+    fn bolide_fs_append_bytes(path: *char, data: *void) -> i64;
+    fn bolide_fs_touch(path: *char) -> i64;
     fn bolide_fs_exists(path: *char) -> i64;
+    fn bolide_fs_is_file(path: *char) -> i64;
+    fn bolide_fs_is_dir(path: *char) -> i64;
+    fn bolide_fs_is_symlink(path: *char) -> i64;
     fn bolide_fs_remove_file(path: *char) -> i64;
+    fn bolide_fs_copy(src: *char, dst: *char) -> i64;
+    fn bolide_fs_rename(src: *char, dst: *char) -> i64;
+    fn bolide_fs_create_dir(path: *char) -> i64;
     fn bolide_fs_create_dir_all(path: *char) -> i64;
+    fn bolide_fs_remove_dir(path: *char) -> i64;
+    fn bolide_fs_remove_dir_all(path: *char) -> i64;
+    fn bolide_fs_read_dir(path: *char) -> list;
+    fn bolide_fs_file_name(path: *char) -> str;
+    fn bolide_fs_parent(path: *char) -> str;
+    fn bolide_fs_extension(path: *char) -> str;
+    fn bolide_fs_stem(path: *char) -> str;
+    fn bolide_fs_join(base: *char, child: *char) -> str;
+    fn bolide_fs_canonicalize(path: *char) -> str;
+    fn bolide_fs_current_dir() -> str;
+    fn bolide_fs_set_current_dir(path: *char) -> i64;
+    fn bolide_fs_len(path: *char) -> i64;
+    fn bolide_fs_modified(path: *char) -> i64;
+    fn bolide_fs_created(path: *char) -> i64;
+    fn bolide_fs_readonly(path: *char) -> i64;
+    fn bolide_fs_set_readonly(path: *char, readonly: i64) -> i64;
 }
 
 fn read_text(path: str) -> str {
     return bolide_fs_read_text(path);
 }
 
+fn read_bytes(path: str) -> bytes {
+    return bolide_fs_read_bytes(path);
+}
+
+fn read_lines(path: str) -> list<str> {
+    return bolide_fs_read_lines(path);
+}
+
 fn write_text(path: str, content: str) -> bool {
     return bolide_fs_write_text(path, content) != 0;
+}
+
+fn write_bytes(path: str, data: bytes) -> bool {
+    return bolide_fs_write_bytes(path, data) != 0;
 }
 
 fn append_text(path: str, content: str) -> bool {
     return bolide_fs_append_text(path, content) != 0;
 }
 
+fn append_bytes(path: str, data: bytes) -> bool {
+    return bolide_fs_append_bytes(path, data) != 0;
+}
+
+fn touch(path: str) -> bool {
+    return bolide_fs_touch(path) != 0;
+}
+
 fn exists(path: str) -> bool {
     return bolide_fs_exists(path) != 0;
+}
+
+fn is_file(path: str) -> bool {
+    return bolide_fs_is_file(path) != 0;
+}
+
+fn is_dir(path: str) -> bool {
+    return bolide_fs_is_dir(path) != 0;
+}
+
+fn is_symlink(path: str) -> bool {
+    return bolide_fs_is_symlink(path) != 0;
 }
 
 fn remove_file(path: str) -> bool {
     return bolide_fs_remove_file(path) != 0;
 }
 
+fn copy(src: str, dst: str) -> int {
+    return bolide_fs_copy(src, dst);
+}
+
+fn rename(src: str, dst: str) -> bool {
+    return bolide_fs_rename(src, dst) != 0;
+}
+
+fn create_dir(path: str) -> bool {
+    return bolide_fs_create_dir(path) != 0;
+}
+
 fn create_dir_all(path: str) -> bool {
     return bolide_fs_create_dir_all(path) != 0;
+}
+
+fn remove_dir(path: str) -> bool {
+    return bolide_fs_remove_dir(path) != 0;
+}
+
+fn remove_dir_all(path: str) -> bool {
+    return bolide_fs_remove_dir_all(path) != 0;
+}
+
+fn read_dir(path: str) -> list<str> {
+    return bolide_fs_read_dir(path);
+}
+
+fn file_name(path: str) -> str {
+    return bolide_fs_file_name(path);
+}
+
+fn parent(path: str) -> str {
+    return bolide_fs_parent(path);
+}
+
+fn extension(path: str) -> str {
+    return bolide_fs_extension(path);
+}
+
+fn stem(path: str) -> str {
+    return bolide_fs_stem(path);
+}
+
+fn join(base: str, child: str) -> str {
+    return bolide_fs_join(base, child);
+}
+
+fn canonicalize(path: str) -> str {
+    return bolide_fs_canonicalize(path);
+}
+
+fn current_dir() -> str {
+    return bolide_fs_current_dir();
+}
+
+fn set_current_dir(path: str) -> bool {
+    return bolide_fs_set_current_dir(path) != 0;
+}
+
+fn len(path: str) -> int {
+    return bolide_fs_len(path);
+}
+
+fn modified(path: str) -> int {
+    return bolide_fs_modified(path);
+}
+
+fn created(path: str) -> int {
+    return bolide_fs_created(path);
+}
+
+fn readonly(path: str) -> bool {
+    return bolide_fs_readonly(path) != 0;
+}
+
+fn set_readonly(path: str, readonly: bool) -> bool {
+    if readonly {
+        return bolide_fs_set_readonly(path, 1) != 0;
+    }
+    return bolide_fs_set_readonly(path, 0) != 0;
 }

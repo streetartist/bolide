@@ -2,7 +2,9 @@
 #ifndef BOLIDE_GUI_H
 #define BOLIDE_GUI_H
 
-#ifdef _WIN32
+#ifdef BOLIDE_GUI_STATIC
+    #define GUI_API
+#elif defined(_WIN32)
     #ifdef BOLIDE_GUI_EXPORTS
         #define GUI_API __declspec(dllexport)
     #else

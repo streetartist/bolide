@@ -1,0 +1,33 @@
+<section class="shell">
+  <div class="section-head">
+    <div>
+      <h1>登录</h1>
+      <p>管理员可以进入后台，普通用户可以发表评论。</p>
+    </div>
+  </div>
+
+  <div class="login-card">
+    {% if message %}
+      <div class="notice error">{{ message }}</div>
+    {% endif %}
+
+    <form class="login-form" method="post" action="/login">
+      <div class="field">
+        <label for="username">用户名</label>
+        <input id="username" name="username" autocomplete="username">
+      </div>
+      <div class="field">
+        <label for="password">密码</label>
+        <input id="password" name="password" type="password" autocomplete="current-password">
+      </div>
+      <div class="actions">
+        <button class="btn" type="submit">登录</button>
+        <a class="btn secondary" href="/">返回首页</a>
+      </div>
+    </form>
+
+    <div class="notice">
+      示例账号：管理员 admin / admin123，普通用户 user / user123。
+    </div>
+  </div>
+</section>

@@ -1,0 +1,7 @@
+fn take(owned x: bigint) {
+    print(x);
+}
+
+let value: bigint = 2000B;
+take(value);
+print("done");

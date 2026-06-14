@@ -470,7 +470,7 @@ impl Monomorphizer {
             Expr::Await(inner) => {
                 self.rewrite_expr(inner, var_types, subst);
             }
-            Expr::AwaitAll(exprs) => {
+            Expr::SpawnAll(exprs) => {
                 for e in exprs {
                     self.rewrite_expr(e, var_types, subst);
                 }
@@ -654,7 +654,7 @@ impl Monomorphizer {
             }
             Expr::Slice(base, _, _, _) => self.infer_expr_type(base, var_types),
             Expr::Await(_) => Type::Int,
-            Expr::AwaitAll(_) => Type::Tuple(vec![]),
+            Expr::SpawnAll(_) => Type::Tuple(vec![]),
             Expr::Spawn(_, _) => Type::Future,
             Expr::Recv(_) => Type::Int,
             _ => Type::Int,
@@ -807,6 +807,7 @@ fn serialize_type(ty: &Type) -> String {
         Type::Float => "F".to_string(),
         Type::Bool => "B".to_string(),
         Type::Str => "S".to_string(),
+        Type::Bytes => "Bytes".to_string(),
         Type::BigInt => "BI".to_string(),
         Type::Decimal => "D".to_string(),
         Type::Dynamic => "Dyn".to_string(),

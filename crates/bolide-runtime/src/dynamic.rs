@@ -3,7 +3,7 @@
 //! BolideDynamic 是 Python 风格的动态类型，使用引用计数管理内存
 
 use crate::rc::{RcHeader, TypeTag};
-use crate::{BolideBigInt, BolideDecimal, BolideList, BolideString};
+use crate::{BolideBigInt, BolideBytes, BolideDecimal, BolideDict, BolideList, BolideString};
 use once_cell::sync::Lazy;
 
 /// newtype 包装 *mut T 使其满足 Send+Sync（不可变单例指针跨线程安全）
@@ -49,6 +49,8 @@ pub enum DynamicType {
     Decimal = 5,
     String = 6,
     List = 7,
+    Bytes = 8,
+    Dict = 9,
 }
 
 /// 动态类型数据联合
@@ -62,6 +64,8 @@ pub union DynamicData {
     pub decimal_ptr: *mut BolideDecimal,
     pub string_ptr: *mut BolideString,
     pub list_ptr: *mut BolideList,
+    pub bytes_ptr: *mut BolideBytes,
+    pub dict_ptr: *mut BolideDict,
 }
 
 /// Bolide 动态类型（带引用计数）
@@ -138,6 +142,22 @@ impl BolideDynamic {
         }))
     }
 
+    pub fn from_bytes(ptr: *mut BolideBytes) -> *mut Self {
+        Box::into_raw(Box::new(Self {
+            header: RcHeader::new(TypeTag::Object),
+            tag: DynamicType::Bytes,
+            data: DynamicData { bytes_ptr: ptr },
+        }))
+    }
+
+    pub fn from_dict(ptr: *mut BolideDict) -> *mut Self {
+        Box::into_raw(Box::new(Self {
+            header: RcHeader::new(TypeTag::Object),
+            tag: DynamicType::Dict,
+            data: DynamicData { dict_ptr: ptr },
+        }))
+    }
+
     pub fn get_type(&self) -> DynamicType {
         self.tag
     }
@@ -152,6 +172,8 @@ impl BolideDynamic {
             DynamicType::Decimal => "decimal",
             DynamicType::String => "str",
             DynamicType::List => "list",
+            DynamicType::Bytes => "bytes",
+            DynamicType::Dict => "dict",
         }
     }
 
@@ -185,6 +207,18 @@ impl BolideDynamic {
                 }
                 crate::bolide_list_len(self.data.list_ptr) > 0
             },
+            DynamicType::Bytes => unsafe {
+                if self.data.bytes_ptr.is_null() {
+                    return false;
+                }
+                crate::bolide_bytes_len(self.data.bytes_ptr) > 0
+            },
+            DynamicType::Dict => unsafe {
+                if self.data.dict_ptr.is_null() {
+                    return false;
+                }
+                crate::bolide_dict_len(self.data.dict_ptr) > 0
+            },
         }
     }
 
@@ -216,6 +250,8 @@ impl BolideDynamic {
                 }
             },
             DynamicType::List => 0,
+            DynamicType::Bytes => 0,
+            DynamicType::Dict => 0,
         }
     }
 
@@ -247,6 +283,8 @@ impl BolideDynamic {
                 }
             },
             DynamicType::List => 0.0,
+            DynamicType::Bytes => 0.0,
+            DynamicType::Dict => 0.0,
         }
     }
 
@@ -284,6 +322,23 @@ impl BolideDynamic {
                 }
             },
             DynamicType::List => "[...]".to_string(),
+            DynamicType::Dict => "{...}".to_string(),
+            DynamicType::Bytes => unsafe {
+                if self.data.bytes_ptr.is_null() {
+                    "null".to_string()
+                } else {
+                    let bytes = (*self.data.bytes_ptr).as_slice();
+                    let mut repr = String::from("[");
+                    for (i, byte) in bytes.iter().enumerate() {
+                        if i > 0 {
+                            repr.push_str(", ");
+                        }
+                        repr.push_str(&byte.to_string());
+                    }
+                    repr.push(']');
+                    repr
+                }
+            },
         }
     }
 
@@ -337,6 +392,16 @@ impl BolideDynamic {
                     crate::bolide_list_release(self.data.list_ptr);
                 }
             }
+            DynamicType::Bytes => {
+                if !self.data.bytes_ptr.is_null() {
+                    crate::bolide_bytes_release(self.data.bytes_ptr);
+                }
+            }
+            DynamicType::Dict => {
+                if !self.data.dict_ptr.is_null() {
+                    crate::bolide_dict_release(self.data.dict_ptr);
+                }
+            }
             _ => {}
         }
     }
@@ -362,6 +427,16 @@ impl BolideDynamic {
             DynamicType::List => {
                 if !self.data.list_ptr.is_null() {
                     crate::bolide_list_retain(self.data.list_ptr);
+                }
+            }
+            DynamicType::Bytes => {
+                if !self.data.bytes_ptr.is_null() {
+                    crate::bolide_bytes_retain(self.data.bytes_ptr);
+                }
+            }
+            DynamicType::Dict => {
+                if !self.data.dict_ptr.is_null() {
+                    crate::bolide_dict_retain(self.data.dict_ptr);
                 }
             }
             _ => {}
@@ -409,6 +484,16 @@ pub extern "C" fn bolide_dynamic_from_string(ptr: *mut BolideString) -> *mut Bol
 #[no_mangle]
 pub extern "C" fn bolide_dynamic_from_list(ptr: *mut BolideList) -> *mut BolideDynamic {
     BolideDynamic::from_list(ptr)
+}
+
+#[no_mangle]
+pub extern "C" fn bolide_dynamic_from_bytes(ptr: *mut BolideBytes) -> *mut BolideDynamic {
+    BolideDynamic::from_bytes(ptr)
+}
+
+#[no_mangle]
+pub extern "C" fn bolide_dynamic_from_dict(ptr: *mut BolideDict) -> *mut BolideDynamic {
+    BolideDynamic::from_dict(ptr)
 }
 
 /// 增加引用计数
@@ -481,6 +566,22 @@ pub extern "C" fn bolide_dynamic_clone(a: *const BolideDynamic) -> *mut BolideDy
                 BolideDynamic::from_list(cloned)
             }
         },
+        DynamicType::Bytes => unsafe {
+            if a.data.bytes_ptr.is_null() {
+                BolideDynamic::from_bytes(std::ptr::null_mut())
+            } else {
+                let cloned = crate::bolide_bytes_clone(a.data.bytes_ptr);
+                BolideDynamic::from_bytes(cloned)
+            }
+        },
+        DynamicType::Dict => unsafe {
+            if a.data.dict_ptr.is_null() {
+                BolideDynamic::from_dict(std::ptr::null_mut())
+            } else {
+                let cloned = crate::bolide_dict_clone(a.data.dict_ptr);
+                BolideDynamic::from_dict(cloned)
+            }
+        },
     }
 }
 
@@ -536,6 +637,15 @@ pub extern "C" fn bolide_dynamic_to_float(a: *const BolideDynamic) -> f64 {
     }
     let a = unsafe { &*a };
     a.to_float()
+}
+
+#[no_mangle]
+pub extern "C" fn bolide_dynamic_to_string(a: *const BolideDynamic) -> *mut BolideString {
+    if a.is_null() {
+        return BolideString::new("none");
+    }
+    let a = unsafe { &*a };
+    BolideString::new(&a.to_string_repr())
 }
 
 // ==================== 动态算术运算 ====================
@@ -749,6 +859,20 @@ pub extern "C" fn bolide_dynamic_eq(a: *const BolideDynamic, b: *const BolideDyn
             crate::bolide_string_eq(a.data.string_ptr, b.data.string_ptr)
         },
         DynamicType::List => 0, // 列表比较暂不实现
+        DynamicType::Bytes => unsafe {
+            if a.data.bytes_ptr.is_null() || b.data.bytes_ptr.is_null() {
+                if a.data.bytes_ptr.is_null() && b.data.bytes_ptr.is_null() {
+                    1
+                } else {
+                    0
+                }
+            } else if (*a.data.bytes_ptr).as_slice() == (*b.data.bytes_ptr).as_slice() {
+                1
+            } else {
+                0
+            }
+        },
+        DynamicType::Dict => 0, // 字典比较暂不实现
     }
 }
 

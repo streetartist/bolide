@@ -1,0 +1,90 @@
+import "std/web/web.bl";
+
+fn index(req: web.Request) -> web.Response {
+    let res: web.Response = web.text("method=" + req.method() + " path=" + req.path());
+    res.set_header("X-Test", "ok");
+    return res;
+}
+
+fn item(req: web.Request) -> web.Response {
+    return web.json("{\"id\":\"" + req.path_param("id") + "\",\"q\":\"" + req.query_param("q") + "\"}");
+}
+
+fn echo(req: web.Request) -> web.Response {
+    return web.make_response(201, "text/plain; charset=utf-8", req.body_text());
+}
+
+fn trace_echo(req: web.Request) -> web.Response {
+    return web.text("trace " + req.method());
+}
+
+fn submit(req: web.Request) -> web.Response {
+    return web.text(req.form_param("name") + ":" + req.form_param("msg"));
+}
+
+let app: web.App = web.app();
+print(app.get("/", index));
+print(app.get("/items/{id}", item));
+print(app.post("/echo", echo));
+print(app.trace("/trace", trace_echo));
+print(app.post("/submit", submit));
+print(app.static_files("/assets", "tests/fixtures/web_static"));
+
+let r1: web.Response = app.handle_request("GET", "/", "");
+print(r1.status());
+print(r1.header("X-Test"));
+print(r1.body_text());
+r1.free();
+
+let r2: web.Response = app.handle_request("GET", "/items/42?q=bolide+web", "");
+print(r2.status());
+print(r2.body_text());
+r2.free();
+
+let r3: web.Response = app.handle_request("POST", "/echo", "payload");
+print(r3.status());
+print(r3.body_text());
+r3.free();
+
+let r4: web.Response = app.handle_request("GET", "/missing", "");
+print(r4.status());
+print(r4.body_text());
+r4.free();
+
+let r5: web.Response = app.handle_request("HEAD", "/", "");
+print(r5.status());
+print(r5.body_text());
+r5.free();
+
+let r6: web.Response = app.handle_request("OPTIONS", "/", "");
+print(r6.status());
+print(r6.header("Allow"));
+r6.free();
+
+let r7: web.Response = app.handle_request("DELETE", "/", "");
+print(r7.status());
+print(r7.header("Allow"));
+r7.free();
+
+let r8: web.Response = app.handle_request("TRACE", "/trace", "");
+print(r8.status());
+print(r8.body_text());
+r8.free();
+
+let r9: web.Response = app.handle_request_with_headers("POST", "/submit", "name=Bolide+Web&msg=a%2Fb", "Content-Type: application/x-www-form-urlencoded");
+print(r9.status());
+print(r9.body_text());
+r9.free();
+
+let r10: web.Response = app.handle_request("GET", "/assets/hello.txt", "");
+print(r10.status());
+print(r10.header("Content-Type"));
+print(r10.body_text());
+r10.free();
+
+let r11: web.Response = app.handle_request("GET", "/assets/../test_web.bl", "");
+print(r11.status());
+r11.free();
+
+app.free();
+print("web tests completed");

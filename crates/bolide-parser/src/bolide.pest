@@ -36,7 +36,7 @@ statement = {
     match_stmt |
     pool_stmt |
     await_scope_stmt |
-    async_select_stmt |
+    spawn_select_stmt |
     select_stmt |
     send_stmt |
     return_stmt |
@@ -136,11 +136,11 @@ pool_stmt = { "pool" ~ "(" ~ expr ~ ")" ~ block }
 // await scope 语句: await scope { ... }
 await_scope_stmt = { "await" ~ "scope" ~ block }
 
-// 协程 select 语句
-async_select_stmt = { "async" ~ "select" ~ "{" ~ async_select_branch+ ~ "}" }
-async_select_branch = { async_select_bind | async_select_expr }
-async_select_bind = { ident ~ "=" ~ expr ~ "=>" ~ block }
-async_select_expr = { expr ~ "=>" ~ block }
+// 并行 select 语句: spawn select { x = task() => { ... } }
+spawn_select_stmt = { kw_spawn ~ "select" ~ "{" ~ spawn_select_branch+ ~ "}" }
+spawn_select_branch = { spawn_select_bind | spawn_select_expr }
+spawn_select_bind = { ident ~ "=" ~ expr ~ "=>" ~ block }
+spawn_select_expr = { expr ~ "=>" ~ block }
 
 // channel select 语句
 select_stmt = { "select" ~ "{" ~ select_branch+ ~ "}" }
@@ -207,7 +207,7 @@ member = { "." ~ ident }
 primary = {
     tuple_literal |
     "(" ~ expr ~ ")" |
-    await_all_expr |
+    spawn_all_expr |
     await_expr |
     spawn_expr |
     recv_expr |
@@ -232,8 +232,9 @@ closure_expr = { "fn" ~ "(" ~ param_list? ~ ")" ~ ("->" ~ type_expr)? ~ block }
 // await 表达式: await expr（绑定到后缀层级，await a + b 解析为 (await a) + b）
 await_expr = { kw_await ~ postfix_expr }
 
-// await all 表达式: await all { expr, expr, ... }
-await_all_expr = { kw_await ~ "all" ~ "{" ~ (expr ~ ("," ~ expr)* ~ ","?)? ~ "}" }
+// spawn all 表达式: spawn all { task(), task2(), ... }
+// all 是上下文关键字；普通标识符、成员名、方法名仍可使用 all。
+spawn_all_expr = { kw_spawn ~ "all" ~ !id_char ~ "{" ~ (expr ~ ("," ~ expr)* ~ ","?)? ~ "}" }
 
 // self 字面量
 self_lit = @{ "self" ~ !id_char }
@@ -298,7 +299,7 @@ keyword = {
     "while" | "for" | "in" | "break" | "continue" | "return" | "import" | "as" |
     "true" | "false" | "none" | "and" | "or" | "not" |
     "spawn" | "pool" | "self" | "super" | "select" | "timeout" | "default" |
-    "async" | "await" | "scope" | "all" | "extern" | "struct" | "type" | "export" |
+    "async" | "await" | "scope" | "extern" | "struct" | "type" | "export" |
     "from" | "owned" | "ref" | "weak" | "unowned" | "enum" | "union" | "match") ~ !(ASCII_ALPHANUMERIC | "_")
 }
 

@@ -1,0 +1,478 @@
+// Bolide web standard library.
+// Usage: import "std/web/web.bl";
+
+extern "bolide" {
+    fn bolide_web_app_new() -> *void;
+    fn bolide_web_app_free(app: *void);
+    fn bolide_web_app_set_workers(app: *void, workers: i64);
+    fn bolide_web_app_set_max_body(app: *void, max_body_bytes: i64);
+
+    fn bolide_web_route_handler(app: *void, method: *char, path: *char, handler: fn(*void) -> *void) -> i64;
+    fn bolide_web_route_async_handler(app: *void, method: *char, path: *char, handler: fn(*void) -> *void) -> i64;
+    fn bolide_web_static(app: *void, url_prefix: *char, dir: *char) -> i64;
+    fn bolide_web_get_handler(app: *void, path: *char, handler: fn(*void) -> *void) -> i64;
+    fn bolide_web_get_async_handler(app: *void, path: *char, handler: fn(*void) -> *void) -> i64;
+    fn bolide_web_post_handler(app: *void, path: *char, handler: fn(*void) -> *void) -> i64;
+    fn bolide_web_post_async_handler(app: *void, path: *char, handler: fn(*void) -> *void) -> i64;
+    fn bolide_web_put_handler(app: *void, path: *char, handler: fn(*void) -> *void) -> i64;
+    fn bolide_web_put_async_handler(app: *void, path: *char, handler: fn(*void) -> *void) -> i64;
+    fn bolide_web_patch_handler(app: *void, path: *char, handler: fn(*void) -> *void) -> i64;
+    fn bolide_web_patch_async_handler(app: *void, path: *char, handler: fn(*void) -> *void) -> i64;
+    fn bolide_web_delete_handler(app: *void, path: *char, handler: fn(*void) -> *void) -> i64;
+    fn bolide_web_delete_async_handler(app: *void, path: *char, handler: fn(*void) -> *void) -> i64;
+    fn bolide_web_head_handler(app: *void, path: *char, handler: fn(*void) -> *void) -> i64;
+    fn bolide_web_head_async_handler(app: *void, path: *char, handler: fn(*void) -> *void) -> i64;
+    fn bolide_web_options_handler(app: *void, path: *char, handler: fn(*void) -> *void) -> i64;
+    fn bolide_web_options_async_handler(app: *void, path: *char, handler: fn(*void) -> *void) -> i64;
+    fn bolide_web_trace_handler(app: *void, path: *char, handler: fn(*void) -> *void) -> i64;
+    fn bolide_web_trace_async_handler(app: *void, path: *char, handler: fn(*void) -> *void) -> i64;
+    fn bolide_web_connect_handler(app: *void, path: *char, handler: fn(*void) -> *void) -> i64;
+    fn bolide_web_connect_async_handler(app: *void, path: *char, handler: fn(*void) -> *void) -> i64;
+    fn bolide_web_run(app: *void, host: *char, port: i64) -> i64;
+    fn bolide_web_serve(app: *void, host: *char, port: i64, max_requests: i64) -> i64;
+    fn bolide_web_app_handle(app: *void, method: *char, target: *char, body: *char) -> *void;
+    fn bolide_web_app_handle_with_headers(app: *void, method: *char, target: *char, body: *char, headers: *char) -> *void;
+    fn bolide_web_cookie_pair(set_cookie: *char) -> str;
+
+    fn bolide_web_request_method(req: *void) -> str;
+    fn bolide_web_request_target(req: *void) -> str;
+    fn bolide_web_request_path(req: *void) -> str;
+    fn bolide_web_request_query(req: *void) -> str;
+    fn bolide_web_request_version(req: *void) -> str;
+    fn bolide_web_request_header(req: *void, name: *char) -> str;
+    fn bolide_web_request_header_str(req: *void, name: str) -> str;
+    fn bolide_web_request_cookie(req: *void, name: *char) -> str;
+    fn bolide_web_request_cookie_str(req: *void, name: str) -> str;
+    fn bolide_web_request_query_param(req: *void, name: *char) -> str;
+    fn bolide_web_request_query_param_str(req: *void, name: str) -> str;
+    fn bolide_web_request_form_param(req: *void, name: *char) -> str;
+    fn bolide_web_request_form_param_str(req: *void, name: str) -> str;
+    fn bolide_web_request_path_param(req: *void, name: *char) -> str;
+    fn bolide_web_request_path_param_str(req: *void, name: str) -> str;
+    fn bolide_web_request_body_text(req: *void) -> str;
+    fn bolide_web_request_body_bytes(req: *void) -> bytes;
+    fn bolide_web_request_body_len(req: *void) -> i64;
+
+    fn bolide_web_response_new(status: i64, content_type: *char, body: *char) -> *void;
+    fn bolide_web_response_new_str(status: i64, content_type: str, body: str) -> *void;
+    fn bolide_web_text(body: *char) -> *void;
+    fn bolide_web_text_str(body: str) -> *void;
+    fn bolide_web_html(body: *char) -> *void;
+    fn bolide_web_html_str(body: str) -> *void;
+    fn bolide_web_json(body: *char) -> *void;
+    fn bolide_web_json_str(body: str) -> *void;
+    fn bolide_web_bytes(body: *void, content_type: *char) -> *void;
+    fn bolide_web_empty(status: i64) -> *void;
+    fn bolide_web_redirect(location: *char, status: i64) -> *void;
+    fn bolide_web_redirect_str(location: str, status: i64) -> *void;
+    fn bolide_web_response_set_status(res: *void, status: i64);
+    fn bolide_web_response_set_header(res: *void, name: *char, value: *char);
+    fn bolide_web_response_set_header_str(res: *void, name: str, value: str);
+    fn bolide_web_response_set_cookie(res: *void, name: *char, value: *char, path: *char, max_age: i64, http_only: i64, same_site: *char);
+    fn bolide_web_response_delete_cookie(res: *void, name: *char, path: *char);
+    fn bolide_web_response_status(res: *void) -> i64;
+    fn bolide_web_response_header(res: *void, name: *char) -> str;
+    fn bolide_web_response_header_str(res: *void, name: str) -> str;
+    fn bolide_web_response_cookie_pair(res: *void, name: *char) -> str;
+    fn bolide_web_response_body_text(res: *void) -> str;
+    fn bolide_web_response_body_bytes(res: *void) -> bytes;
+    fn bolide_web_response_free(res: *void);
+
+    fn bolide_web_session(req: *void, res: *void) -> *void;
+    fn bolide_web_session_id(session: *void) -> str;
+    fn bolide_web_session_get(session: *void, key: *char) -> dynamic;
+    fn bolide_web_session_set(session: *void, key: *char, value: *dynamic);
+    fn bolide_web_session_contains(session: *void, key: *char) -> i64;
+    fn bolide_web_session_remove(session: *void, key: *char) -> i64;
+    fn bolide_web_session_clear(session: *void);
+    fn bolide_web_session_destroy(session: *void, res: *void) -> i64;
+    fn bolide_web_session_regenerate(session: *void, res: *void) -> str;
+    fn bolide_web_session_free(session: *void);
+}
+
+class Request {
+    handle: ptr;
+
+    fn method() -> str {
+        return bolide_web_request_method(self.handle);
+    }
+
+    fn target() -> str {
+        return bolide_web_request_target(self.handle);
+    }
+
+    fn path() -> str {
+        return bolide_web_request_path(self.handle);
+    }
+
+    fn query() -> str {
+        return bolide_web_request_query(self.handle);
+    }
+
+    fn version() -> str {
+        return bolide_web_request_version(self.handle);
+    }
+
+    fn header(name: str) -> str {
+        return bolide_web_request_header_str(self.handle, name);
+    }
+
+    fn cookie(name: str) -> str {
+        return bolide_web_request_cookie_str(self.handle, name);
+    }
+
+    fn query_param(name: str) -> str {
+        return bolide_web_request_query_param_str(self.handle, name);
+    }
+
+    fn form_param(name: str) -> str {
+        return bolide_web_request_form_param_str(self.handle, name);
+    }
+
+    fn path_param(name: str) -> str {
+        return bolide_web_request_path_param_str(self.handle, name);
+    }
+
+    fn body_text() -> str {
+        return bolide_web_request_body_text(self.handle);
+    }
+
+    fn body_bytes() -> bytes {
+        return bolide_web_request_body_bytes(self.handle);
+    }
+
+    fn body_len() -> int {
+        return bolide_web_request_body_len(self.handle);
+    }
+}
+
+class Response {
+    handle: ptr;
+
+    fn status() -> int {
+        return bolide_web_response_status(self.handle);
+    }
+
+    fn set_status(status: int) {
+        bolide_web_response_set_status(self.handle, status);
+    }
+
+    fn set_header(name: str, value: str) {
+        bolide_web_response_set_header_str(self.handle, name, value);
+    }
+
+    fn set_cookie(name: str, value: str, path: str, max_age: int, http_only: bool, same_site: str) {
+        if http_only {
+            bolide_web_response_set_cookie(self.handle, name, value, path, max_age, 1, same_site);
+        } else {
+            bolide_web_response_set_cookie(self.handle, name, value, path, max_age, 0, same_site);
+        }
+    }
+
+    fn delete_cookie(name: str, path: str) {
+        bolide_web_response_delete_cookie(self.handle, name, path);
+    }
+
+    fn header(name: str) -> str {
+        return bolide_web_response_header_str(self.handle, name);
+    }
+
+    fn cookie_pair(name: str) -> str {
+        return bolide_web_response_cookie_pair(self.handle, name);
+    }
+
+    fn body_text() -> str {
+        return bolide_web_response_body_text(self.handle);
+    }
+
+    fn body_bytes() -> bytes {
+        return bolide_web_response_body_bytes(self.handle);
+    }
+
+    fn free() {
+        bolide_web_response_free(self.handle);
+        self.handle = 0;
+    }
+}
+
+class App {
+    handle: ptr;
+
+    fn route(method: str, path: str, handler: func(Request) -> Response) -> bool {
+        return bolide_web_route_handler(self.handle, method, path, handler) != 0;
+    }
+
+    fn route_async(method: str, path: str, handler: func(Request) -> Response) -> bool {
+        return bolide_web_route_async_handler(self.handle, method, path, handler) != 0;
+    }
+
+    fn static_files(url_prefix: str, dir: str) -> bool {
+        return bolide_web_static(self.handle, url_prefix, dir) != 0;
+    }
+
+    fn get(path: str, handler: func(Request) -> Response) -> bool {
+        return bolide_web_get_handler(self.handle, path, handler) != 0;
+    }
+
+    fn get_async(path: str, handler: func(Request) -> Response) -> bool {
+        return bolide_web_get_async_handler(self.handle, path, handler) != 0;
+    }
+
+    fn post(path: str, handler: func(Request) -> Response) -> bool {
+        return bolide_web_post_handler(self.handle, path, handler) != 0;
+    }
+
+    fn post_async(path: str, handler: func(Request) -> Response) -> bool {
+        return bolide_web_post_async_handler(self.handle, path, handler) != 0;
+    }
+
+    fn put(path: str, handler: func(Request) -> Response) -> bool {
+        return bolide_web_put_handler(self.handle, path, handler) != 0;
+    }
+
+    fn put_async(path: str, handler: func(Request) -> Response) -> bool {
+        return bolide_web_put_async_handler(self.handle, path, handler) != 0;
+    }
+
+    fn patch(path: str, handler: func(Request) -> Response) -> bool {
+        return bolide_web_patch_handler(self.handle, path, handler) != 0;
+    }
+
+    fn patch_async(path: str, handler: func(Request) -> Response) -> bool {
+        return bolide_web_patch_async_handler(self.handle, path, handler) != 0;
+    }
+
+    fn delete(path: str, handler: func(Request) -> Response) -> bool {
+        return bolide_web_delete_handler(self.handle, path, handler) != 0;
+    }
+
+    fn delete_async(path: str, handler: func(Request) -> Response) -> bool {
+        return bolide_web_delete_async_handler(self.handle, path, handler) != 0;
+    }
+
+    fn head(path: str, handler: func(Request) -> Response) -> bool {
+        return bolide_web_head_handler(self.handle, path, handler) != 0;
+    }
+
+    fn head_async(path: str, handler: func(Request) -> Response) -> bool {
+        return bolide_web_head_async_handler(self.handle, path, handler) != 0;
+    }
+
+    fn options(path: str, handler: func(Request) -> Response) -> bool {
+        return bolide_web_options_handler(self.handle, path, handler) != 0;
+    }
+
+    fn options_async(path: str, handler: func(Request) -> Response) -> bool {
+        return bolide_web_options_async_handler(self.handle, path, handler) != 0;
+    }
+
+    fn trace(path: str, handler: func(Request) -> Response) -> bool {
+        return bolide_web_trace_handler(self.handle, path, handler) != 0;
+    }
+
+    fn trace_async(path: str, handler: func(Request) -> Response) -> bool {
+        return bolide_web_trace_async_handler(self.handle, path, handler) != 0;
+    }
+
+    fn connect(path: str, handler: func(Request) -> Response) -> bool {
+        return bolide_web_connect_handler(self.handle, path, handler) != 0;
+    }
+
+    fn connect_async(path: str, handler: func(Request) -> Response) -> bool {
+        return bolide_web_connect_async_handler(self.handle, path, handler) != 0;
+    }
+
+    fn set_workers(workers: int) {
+        bolide_web_app_set_workers(self.handle, workers);
+    }
+
+    fn set_max_body(max_body_bytes: int) {
+        bolide_web_app_set_max_body(self.handle, max_body_bytes);
+    }
+
+    fn run(host: str, port: int) -> int {
+        return bolide_web_run(self.handle, host, port);
+    }
+
+    fn serve(host: str, port: int, max_requests: int) -> int {
+        return bolide_web_serve(self.handle, host, port, max_requests);
+    }
+
+    fn handle_request(method: str, target: str, body: str) -> Response {
+        return Response(bolide_web_app_handle(self.handle, method, target, body));
+    }
+
+    fn handle_request_with_headers(method: str, target: str, body: str, headers: str) -> Response {
+        return Response(bolide_web_app_handle_with_headers(self.handle, method, target, body, headers));
+    }
+
+    fn free() {
+        bolide_web_app_free(self.handle);
+        self.handle = 0;
+    }
+}
+
+class Session {
+    handle: ptr;
+
+    fn id() -> str {
+        return bolide_web_session_id(self.handle);
+    }
+
+    fn get(key: str) -> dynamic {
+        return bolide_web_session_get(self.handle, key);
+    }
+
+    fn set(key: str, value: dynamic) {
+        bolide_web_session_set(self.handle, key, value);
+    }
+
+    fn contains(key: str) -> bool {
+        return bolide_web_session_contains(self.handle, key) != 0;
+    }
+
+    fn remove(key: str) -> bool {
+        return bolide_web_session_remove(self.handle, key) != 0;
+    }
+
+    fn clear() {
+        bolide_web_session_clear(self.handle);
+    }
+
+    fn destroy(res: Response) -> bool {
+        return bolide_web_session_destroy(self.handle, res.handle) != 0;
+    }
+
+    fn regenerate(res: Response) -> str {
+        return bolide_web_session_regenerate(self.handle, res.handle);
+    }
+
+    fn free() {
+        bolide_web_session_free(self.handle);
+        self.handle = 0;
+    }
+}
+
+fn app() -> App {
+    return App(bolide_web_app_new());
+}
+
+fn route(app: App, method: str, path: str, handler: func(Request) -> Response) -> bool {
+    return bolide_web_route_handler(app.handle, method, path, handler) != 0;
+}
+
+fn route_async(app: App, method: str, path: str, handler: func(Request) -> Response) -> bool {
+    return bolide_web_route_async_handler(app.handle, method, path, handler) != 0;
+}
+
+fn static_files(app: App, url_prefix: str, dir: str) -> bool {
+    return bolide_web_static(app.handle, url_prefix, dir) != 0;
+}
+
+fn get(app: App, path: str, handler: func(Request) -> Response) -> bool {
+    return bolide_web_get_handler(app.handle, path, handler) != 0;
+}
+
+fn get_async(app: App, path: str, handler: func(Request) -> Response) -> bool {
+    return bolide_web_get_async_handler(app.handle, path, handler) != 0;
+}
+
+fn post(app: App, path: str, handler: func(Request) -> Response) -> bool {
+    return bolide_web_post_handler(app.handle, path, handler) != 0;
+}
+
+fn post_async(app: App, path: str, handler: func(Request) -> Response) -> bool {
+    return bolide_web_post_async_handler(app.handle, path, handler) != 0;
+}
+
+fn put(app: App, path: str, handler: func(Request) -> Response) -> bool {
+    return bolide_web_put_handler(app.handle, path, handler) != 0;
+}
+
+fn put_async(app: App, path: str, handler: func(Request) -> Response) -> bool {
+    return bolide_web_put_async_handler(app.handle, path, handler) != 0;
+}
+
+fn patch(app: App, path: str, handler: func(Request) -> Response) -> bool {
+    return bolide_web_patch_handler(app.handle, path, handler) != 0;
+}
+
+fn patch_async(app: App, path: str, handler: func(Request) -> Response) -> bool {
+    return bolide_web_patch_async_handler(app.handle, path, handler) != 0;
+}
+
+fn delete(app: App, path: str, handler: func(Request) -> Response) -> bool {
+    return bolide_web_delete_handler(app.handle, path, handler) != 0;
+}
+
+fn delete_async(app: App, path: str, handler: func(Request) -> Response) -> bool {
+    return bolide_web_delete_async_handler(app.handle, path, handler) != 0;
+}
+
+fn head(app: App, path: str, handler: func(Request) -> Response) -> bool {
+    return bolide_web_head_handler(app.handle, path, handler) != 0;
+}
+
+fn head_async(app: App, path: str, handler: func(Request) -> Response) -> bool {
+    return bolide_web_head_async_handler(app.handle, path, handler) != 0;
+}
+
+fn options(app: App, path: str, handler: func(Request) -> Response) -> bool {
+    return bolide_web_options_handler(app.handle, path, handler) != 0;
+}
+
+fn options_async(app: App, path: str, handler: func(Request) -> Response) -> bool {
+    return bolide_web_options_async_handler(app.handle, path, handler) != 0;
+}
+
+fn trace(app: App, path: str, handler: func(Request) -> Response) -> bool {
+    return bolide_web_trace_handler(app.handle, path, handler) != 0;
+}
+
+fn trace_async(app: App, path: str, handler: func(Request) -> Response) -> bool {
+    return bolide_web_trace_async_handler(app.handle, path, handler) != 0;
+}
+
+fn connect(app: App, path: str, handler: func(Request) -> Response) -> bool {
+    return bolide_web_connect_handler(app.handle, path, handler) != 0;
+}
+
+fn connect_async(app: App, path: str, handler: func(Request) -> Response) -> bool {
+    return bolide_web_connect_async_handler(app.handle, path, handler) != 0;
+}
+
+fn cookie_pair(set_cookie: str) -> str {
+    return bolide_web_cookie_pair(set_cookie);
+}
+
+fn session(req: Request, res: Response) -> Session {
+    return Session(bolide_web_session(req.handle, res.handle));
+}
+
+fn text(body: str) -> Response {
+    return Response(bolide_web_text_str(body));
+}
+
+fn html(body: str) -> Response {
+    return Response(bolide_web_html_str(body));
+}
+
+fn json(body: str) -> Response {
+    return Response(bolide_web_json_str(body));
+}
+
+fn bytes_response(body: bytes, content_type: str) -> Response {
+    return Response(bolide_web_bytes(body, content_type));
+}
+
+fn empty(status: int) -> Response {
+    return Response(bolide_web_empty(status));
+}
+
+fn redirect(location: str, status: int) -> Response {
+    return Response(bolide_web_redirect_str(location, status));
+}
+
+fn make_response(status: int, content_type: str, body: str) -> Response {
+    return Response(bolide_web_response_new_str(status, content_type, body));
+}

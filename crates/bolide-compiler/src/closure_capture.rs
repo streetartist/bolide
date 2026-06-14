@@ -242,7 +242,7 @@ fn collect_expr(
         }
         Expr::Recv(channel) => add_free(channel, bound, free, seen),
         Expr::Await(e) => collect_expr(e, bound, free, seen),
-        Expr::AwaitAll(exprs) => {
+        Expr::SpawnAll(exprs) => {
             for e in exprs {
                 collect_expr(e, bound, free, seen);
             }

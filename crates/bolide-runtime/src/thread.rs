@@ -8,6 +8,7 @@ use std::os::raw::c_void;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
+use std::time::Duration;
 
 /// 包装函数指针使其可跨线程发送
 #[derive(Clone, Copy)]
@@ -416,6 +417,39 @@ pub extern "C" fn bolide_pool_is_active() -> i64 {
         1
     } else {
         0
+    }
+}
+
+/// 等待第一个线程池任务完成，返回其索引（0-based）。
+#[no_mangle]
+pub extern "C" fn bolide_pool_select_wait_first(
+    handles: *const *mut BolidePoolHandle,
+    count: i64,
+) -> i64 {
+    if handles.is_null() || count <= 0 {
+        return -1;
+    }
+
+    let handles = unsafe { std::slice::from_raw_parts(handles, count as usize) };
+    let mut spins = 0usize;
+    loop {
+        for (i, &handle_ptr) in handles.iter().enumerate() {
+            if handle_ptr.is_null() {
+                continue;
+            }
+            let handle = unsafe { &*handle_ptr };
+            let (lock, _) = &*handle.completed;
+            if *lock.lock().unwrap() {
+                return i as i64;
+            }
+        }
+
+        if spins < 64 {
+            spins += 1;
+            thread::yield_now();
+        } else {
+            thread::sleep(Duration::from_millis(1));
+        }
     }
 }
 

@@ -15,4 +15,3 @@ cranelift-frontend.workspace = true
 cranelift-native.workspace = true
 target-lexicon.workspace = true
 thiserror.workspace = true
-libloading = "0.8"

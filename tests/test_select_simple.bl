@@ -1,9 +1,9 @@
 // 简单测试 - 只有一个分支
-async fn task() -> int {
+fn task() -> int {
     return 10;
 }
 
-async select {
+spawn select {
     result = task() => {
         print(result);
     }

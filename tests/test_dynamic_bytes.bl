@@ -1,0 +1,30 @@
+let b: bytes = bytes();
+b.push(65);
+b.push(0);
+b.push(255);
+
+let d: dynamic = b;
+print(d);
+
+let e: dynamic = bytes();
+print(e);
+
+e = b;
+print(e);
+
+let mixed = {"payload": b, "name": "bolide"};
+print(mixed["payload"]);
+print(mixed["name"]);
+
+fn show(x: dynamic) {
+    print(x);
+}
+
+fn make_payload() -> dynamic {
+    return b;
+}
+
+show(b);
+print(make_payload());
+
+print("dynamic bytes tests completed");

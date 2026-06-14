@@ -20,7 +20,7 @@ pub enum Statement {
     Pool(PoolStmt),
     Select(SelectStmt),
     AwaitScope(AwaitScopeStmt),
-    AsyncSelect(AsyncSelectStmt),
+    SpawnSelect(SpawnSelectStmt),
     Send(SendStmt),
     /// break; - 跳出最近一层循环
     Break,
@@ -211,15 +211,15 @@ pub struct AwaitScopeStmt {
     pub body: Vec<Statement>,
 }
 
-/// 协程 select 语句
+/// 并行 select 语句
 #[derive(Debug, Clone)]
-pub struct AsyncSelectStmt {
-    pub branches: Vec<AsyncSelectBranch>,
+pub struct SpawnSelectStmt {
+    pub branches: Vec<SpawnSelectBranch>,
 }
 
-/// 协程 select 分支
+/// 并行 select 分支
 #[derive(Debug, Clone)]
-pub enum AsyncSelectBranch {
+pub enum SpawnSelectBranch {
     /// 带绑定: var = expr => { body }
     Bind {
         var: String,
@@ -312,8 +312,8 @@ pub enum Expr {
     Recv(String),
     /// await expr - 等待异步结果
     Await(Box<Expr>),
-    /// await all { expr, ... } - 并发等待多个
-    AwaitAll(Vec<Expr>),
+    /// spawn all { expr, ... } - 并行启动多个任务并等待全部
+    SpawnAll(Vec<Expr>),
     /// 元组字面量: (expr, expr, ...)
     Tuple(Vec<Expr>),
     /// 闭包表达式: fn(params) -> ret { body }
@@ -369,6 +369,7 @@ pub enum Type {
     Float,
     Bool,
     Str,
+    Bytes,
     BigInt,
     Decimal,
     Dynamic,

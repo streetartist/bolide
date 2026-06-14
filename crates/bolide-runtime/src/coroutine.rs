@@ -1,8 +1,14 @@
 //! Bolide 协程运行时
 //!
-//! 提供 Hot Future 风格的协程支持
+//! 提供 cold Future 风格的协程支持。
+//!
+//! `async fn` 调用只创建 Future，不默认并行执行；`await` 会在当前线程驱动
+//! 尚未启动的 Future。需要后台执行时由 runtime 显式 schedule。
 
+use once_cell::sync::Lazy;
+use std::collections::VecDeque;
 use std::os::raw::c_void;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 
@@ -28,6 +34,174 @@ unsafe impl Sync for CoroutineResult {}
 
 /// 完成回调类型
 type CompletionCallback = Box<dyn Fn() + Send + Sync>;
+type CoroutineTask = Box<dyn FnOnce() + Send + 'static>;
+
+enum FutureTask {
+    Int(Box<dyn FnOnce() -> i64 + Send + 'static>),
+    Float(Box<dyn FnOnce() -> f64 + Send + 'static>),
+    Ptr(Box<dyn FnOnce() -> *mut c_void + Send + 'static>),
+}
+
+#[derive(Clone)]
+struct FutureShared {
+    state: Arc<Mutex<CoroutineState>>,
+    result: Arc<Mutex<Option<CoroutineResult>>>,
+    condvar: Arc<Condvar>,
+    on_complete: Arc<Mutex<Option<CompletionCallback>>>,
+}
+
+struct CoroutineExecutor {
+    state: Mutex<CoroutineExecutorState>,
+    ready: Condvar,
+    worker_count: AtomicUsize,
+    max_workers: usize,
+}
+
+struct CoroutineExecutorState {
+    queue: VecDeque<CoroutineTask>,
+}
+
+static COROUTINE_EXECUTOR: Lazy<CoroutineExecutor> = Lazy::new(CoroutineExecutor::new);
+
+impl CoroutineExecutor {
+    fn new() -> Self {
+        let default_workers = thread::available_parallelism()
+            .map(|n| n.get().saturating_mul(8))
+            .unwrap_or(32)
+            .clamp(8, 256);
+        let max_workers = std::env::var("BOLIDE_ASYNC_WORKERS")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .filter(|value| *value > 0)
+            .unwrap_or(default_workers)
+            .clamp(1, 4096);
+
+        Self {
+            state: Mutex::new(CoroutineExecutorState {
+                queue: VecDeque::new(),
+            }),
+            ready: Condvar::new(),
+            worker_count: AtomicUsize::new(0),
+            max_workers,
+        }
+    }
+
+    fn spawn(&'static self, task: CoroutineTask) {
+        let should_spawn = {
+            let mut state = self.state.lock().unwrap();
+            state.queue.push_back(task);
+            let queued = state.queue.len();
+            let workers = self.worker_count.load(Ordering::Acquire);
+            let should_spawn = workers == 0 || (queued > workers && workers < self.max_workers);
+            self.ready.notify_one();
+            should_spawn
+        };
+
+        if should_spawn {
+            if !self.spawn_worker() {
+                self.run_available_inline();
+            }
+        }
+    }
+
+    fn spawn_worker(&'static self) -> bool {
+        loop {
+            let workers = self.worker_count.load(Ordering::Acquire);
+            if workers >= self.max_workers {
+                return true;
+            }
+            if self
+                .worker_count
+                .compare_exchange(workers, workers + 1, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                let executor: &'static CoroutineExecutor = self;
+                let spawn_result = thread::Builder::new()
+                    .name("bolide-async".to_string())
+                    .spawn(move || executor.worker_loop());
+                if spawn_result.is_err() {
+                    self.worker_count.fetch_sub(1, Ordering::AcqRel);
+                    return false;
+                }
+                return true;
+            }
+        }
+    }
+
+    fn worker_loop(&'static self) {
+        loop {
+            let task = {
+                let mut state = self.state.lock().unwrap();
+                loop {
+                    if let Some(task) = state.queue.pop_front() {
+                        break task;
+                    }
+                    state = self.ready.wait(state).unwrap();
+                }
+            };
+
+            task();
+        }
+    }
+
+    fn run_available_inline(&'static self) {
+        loop {
+            let task = {
+                let mut state = self.state.lock().unwrap();
+                state.queue.pop_front()
+            };
+            match task {
+                Some(task) => task(),
+                None => return,
+            }
+        }
+    }
+}
+
+fn spawn_coroutine_task(task: impl FnOnce() + Send + 'static) {
+    COROUTINE_EXECUTOR.spawn(Box::new(task));
+}
+
+fn complete_shared(shared: &FutureShared, result: CoroutineResult) {
+    let callback;
+    {
+        let mut on_complete_guard = shared.on_complete.lock().unwrap();
+        let mut state = shared.state.lock().unwrap();
+        if *state == CoroutineState::Running {
+            *shared.result.lock().unwrap() = Some(result);
+            *state = CoroutineState::Completed;
+            shared.condvar.notify_all();
+            callback = on_complete_guard.take();
+        } else {
+            callback = None;
+        }
+    }
+
+    if let Some(cb) = callback {
+        cb();
+    }
+}
+
+fn run_future_task(shared: FutureShared, task: FutureTask) {
+    if *shared.state.lock().unwrap() != CoroutineState::Running {
+        return;
+    }
+
+    match task {
+        FutureTask::Int(task) => {
+            let val = task();
+            complete_shared(&shared, CoroutineResult { int_val: val });
+        }
+        FutureTask::Float(task) => {
+            let val = task();
+            complete_shared(&shared, CoroutineResult { float_val: val });
+        }
+        FutureTask::Ptr(task) => {
+            let val = task();
+            complete_shared(&shared, CoroutineResult { ptr_val: val });
+        }
+    }
+}
 
 /// 协程 Future
 pub struct BolideFuture {
@@ -35,6 +209,7 @@ pub struct BolideFuture {
     result: Arc<Mutex<Option<CoroutineResult>>>,
     condvar: Arc<Condvar>,
     on_complete: Arc<Mutex<Option<CompletionCallback>>>,
+    task: Mutex<Option<FutureTask>>,
 }
 
 unsafe impl Send for BolideFuture {}
@@ -48,29 +223,42 @@ impl BolideFuture {
             result: Arc::new(Mutex::new(None)),
             condvar: Arc::new(Condvar::new()),
             on_complete: Arc::new(Mutex::new(None)),
+            task: Mutex::new(None),
+        }
+    }
+
+    fn with_task(task: FutureTask) -> Self {
+        Self {
+            state: Arc::new(Mutex::new(CoroutineState::Running)),
+            result: Arc::new(Mutex::new(None)),
+            condvar: Arc::new(Condvar::new()),
+            on_complete: Arc::new(Mutex::new(None)),
+            task: Mutex::new(Some(task)),
+        }
+    }
+
+    fn shared(&self) -> FutureShared {
+        FutureShared {
+            state: self.state.clone(),
+            result: self.result.clone(),
+            condvar: self.condvar.clone(),
+            on_complete: self.on_complete.clone(),
+        }
+    }
+
+    fn take_task(&self) -> Option<FutureTask> {
+        self.task.lock().unwrap().take()
+    }
+
+    fn run_pending(&self) {
+        if let Some(task) = self.take_task() {
+            run_future_task(self.shared(), task);
         }
     }
 
     /// 设置结果并标记完成
     pub fn complete(&self, result: CoroutineResult) {
-        let callback;
-        {
-            // 锁顺序：on_complete → state（与 on_complete 方法一致）
-            let mut on_complete_guard = self.on_complete.lock().unwrap();
-            let mut state = self.state.lock().unwrap();
-            if *state == CoroutineState::Running {
-                *self.result.lock().unwrap() = Some(result);
-                *state = CoroutineState::Completed;
-                self.condvar.notify_all();
-                callback = on_complete_guard.take();
-            } else {
-                callback = None;
-            }
-        }
-        // 在锁外调用回调，避免死锁
-        if let Some(cb) = callback {
-            cb();
-        }
+        complete_shared(&self.shared(), result);
     }
 
     /// 注册完成回调（如果已完成则立即调用）
@@ -94,6 +282,7 @@ impl BolideFuture {
 
     /// 等待结果
     pub fn await_result(&self) -> Option<CoroutineResult> {
+        self.run_pending();
         let mut state = self.state.lock().unwrap();
         while *state == CoroutineState::Running {
             state = self.condvar.wait(state).unwrap();
@@ -129,48 +318,17 @@ impl Default for BolideFuture {
 
 // ==================== FFI 导出 ====================
 
-/// 包装函数指针使其可跨线程发送
-#[derive(Clone, Copy)]
-struct SendFnPtr(*const c_void);
-unsafe impl Send for SendFnPtr {}
-
 /// 启动协程（返回 int）
 #[no_mangle]
 pub extern "C" fn bolide_coroutine_spawn_int(
     func_ptr: extern "C" fn() -> i64,
 ) -> *mut BolideFuture {
-    let future = Box::new(BolideFuture::new());
-    let future_ptr = Box::into_raw(future);
-
-    let send_fn = SendFnPtr(func_ptr as *const c_void);
-    let state = unsafe { (*future_ptr).state.clone() };
-    let result = unsafe { (*future_ptr).result.clone() };
-    let condvar = unsafe { (*future_ptr).condvar.clone() };
-    let on_complete = unsafe { (*future_ptr).on_complete.clone() };
-
-    thread::spawn(move || {
-        let f: extern "C" fn() -> i64 = unsafe { std::mem::transmute(send_fn) };
-        let val = f();
-
-        let callback;
-        {
-            let mut on_complete_guard = on_complete.lock().unwrap();
-            let mut s = state.lock().unwrap();
-            if *s == CoroutineState::Running {
-                *result.lock().unwrap() = Some(CoroutineResult { int_val: val });
-                *s = CoroutineState::Completed;
-                condvar.notify_all();
-                callback = on_complete_guard.take();
-            } else {
-                callback = None;
-            }
-        }
-        if let Some(cb) = callback {
-            cb();
-        }
-    });
-
-    future_ptr
+    let func_addr = func_ptr as usize;
+    let task = FutureTask::Int(Box::new(move || {
+        let f: extern "C" fn() -> i64 = unsafe { std::mem::transmute(func_addr as *const c_void) };
+        f()
+    }));
+    Box::into_raw(Box::new(BolideFuture::with_task(task)))
 }
 
 /// 启动协程（返回 float）
@@ -178,38 +336,12 @@ pub extern "C" fn bolide_coroutine_spawn_int(
 pub extern "C" fn bolide_coroutine_spawn_float(
     func_ptr: extern "C" fn() -> f64,
 ) -> *mut BolideFuture {
-    let future = Box::new(BolideFuture::new());
-    let future_ptr = Box::into_raw(future);
-
-    let send_fn = SendFnPtr(func_ptr as *const c_void);
-    let state = unsafe { (*future_ptr).state.clone() };
-    let result = unsafe { (*future_ptr).result.clone() };
-    let condvar = unsafe { (*future_ptr).condvar.clone() };
-    let on_complete = unsafe { (*future_ptr).on_complete.clone() };
-
-    thread::spawn(move || {
-        let f: extern "C" fn() -> f64 = unsafe { std::mem::transmute(send_fn) };
-        let val = f();
-
-        let callback;
-        {
-            let mut on_complete_guard = on_complete.lock().unwrap();
-            let mut s = state.lock().unwrap();
-            if *s == CoroutineState::Running {
-                *result.lock().unwrap() = Some(CoroutineResult { float_val: val });
-                *s = CoroutineState::Completed;
-                condvar.notify_all();
-                callback = on_complete_guard.take();
-            } else {
-                callback = None;
-            }
-        }
-        if let Some(cb) = callback {
-            cb();
-        }
-    });
-
-    future_ptr
+    let func_addr = func_ptr as usize;
+    let task = FutureTask::Float(Box::new(move || {
+        let f: extern "C" fn() -> f64 = unsafe { std::mem::transmute(func_addr as *const c_void) };
+        f()
+    }));
+    Box::into_raw(Box::new(BolideFuture::with_task(task)))
 }
 
 /// 启动协程（返回指针）
@@ -217,38 +349,31 @@ pub extern "C" fn bolide_coroutine_spawn_float(
 pub extern "C" fn bolide_coroutine_spawn_ptr(
     func_ptr: extern "C" fn() -> *mut c_void,
 ) -> *mut BolideFuture {
-    let future = Box::new(BolideFuture::new());
-    let future_ptr = Box::into_raw(future);
+    let func_addr = func_ptr as usize;
+    let task = FutureTask::Ptr(Box::new(move || {
+        let f: extern "C" fn() -> *mut c_void =
+            unsafe { std::mem::transmute(func_addr as *const c_void) };
+        f()
+    }));
+    Box::into_raw(Box::new(BolideFuture::with_task(task)))
+}
 
-    let send_fn = SendFnPtr(func_ptr as *const c_void);
-    let state = unsafe { (*future_ptr).state.clone() };
-    let result = unsafe { (*future_ptr).result.clone() };
-    let condvar = unsafe { (*future_ptr).condvar.clone() };
-    let on_complete = unsafe { (*future_ptr).on_complete.clone() };
+/// 显式调度 Future 到协程执行器。
+#[no_mangle]
+pub extern "C" fn bolide_coroutine_schedule(future: *mut BolideFuture) -> i64 {
+    if future.is_null() {
+        return 0;
+    }
 
-    thread::spawn(move || {
-        let f: extern "C" fn() -> *mut c_void = unsafe { std::mem::transmute(send_fn) };
-        let val = f();
-
-        let callback;
-        {
-            let mut on_complete_guard = on_complete.lock().unwrap();
-            let mut s = state.lock().unwrap();
-            if *s == CoroutineState::Running {
-                *result.lock().unwrap() = Some(CoroutineResult { ptr_val: val });
-                *s = CoroutineState::Completed;
-                condvar.notify_all();
-                callback = on_complete_guard.take();
-            } else {
-                callback = None;
-            }
-        }
-        if let Some(cb) = callback {
-            cb();
-        }
+    let future = unsafe { &*future };
+    let Some(task) = future.take_task() else {
+        return 0;
+    };
+    let shared = future.shared();
+    spawn_coroutine_task(move || {
+        run_future_task(shared, task);
     });
-
-    future_ptr
+    1
 }
 
 /// 等待协程结果（int）
@@ -317,40 +442,14 @@ pub extern "C" fn bolide_coroutine_spawn_int_with_env(
     func_ptr: extern "C" fn(*mut c_void) -> i64,
     env: *mut c_void,
 ) -> *mut BolideFuture {
-    let future = Box::new(BolideFuture::new());
-    let future_ptr = Box::into_raw(future);
-
-    let send_fn = SendFnPtr(func_ptr as *const c_void);
-    let send_env = SendFnPtr(env);
-    let state = unsafe { (*future_ptr).state.clone() };
-    let result = unsafe { (*future_ptr).result.clone() };
-    let condvar = unsafe { (*future_ptr).condvar.clone() };
-    let on_complete = unsafe { (*future_ptr).on_complete.clone() };
-
-    thread::spawn(move || {
-        let f: extern "C" fn(*mut c_void) -> i64 = unsafe { std::mem::transmute(send_fn) };
-        let e: *mut c_void = unsafe { std::mem::transmute(send_env) };
-        let val = f(e);
-
-        let callback;
-        {
-            let mut on_complete_guard = on_complete.lock().unwrap();
-            let mut s = state.lock().unwrap();
-            if *s == CoroutineState::Running {
-                *result.lock().unwrap() = Some(CoroutineResult { int_val: val });
-                *s = CoroutineState::Completed;
-                condvar.notify_all();
-                callback = on_complete_guard.take();
-            } else {
-                callback = None;
-            }
-        }
-        if let Some(cb) = callback {
-            cb();
-        }
-    });
-
-    future_ptr
+    let func_addr = func_ptr as usize;
+    let env_addr = env as usize;
+    let task = FutureTask::Int(Box::new(move || {
+        let f: extern "C" fn(*mut c_void) -> i64 =
+            unsafe { std::mem::transmute(func_addr as *const c_void) };
+        f(env_addr as *mut c_void)
+    }));
+    Box::into_raw(Box::new(BolideFuture::with_task(task)))
 }
 
 /// 启动协程（带环境，返回 float）
@@ -359,40 +458,14 @@ pub extern "C" fn bolide_coroutine_spawn_float_with_env(
     func_ptr: extern "C" fn(*mut c_void) -> f64,
     env: *mut c_void,
 ) -> *mut BolideFuture {
-    let future = Box::new(BolideFuture::new());
-    let future_ptr = Box::into_raw(future);
-
-    let send_fn = SendFnPtr(func_ptr as *const c_void);
-    let send_env = SendFnPtr(env);
-    let state = unsafe { (*future_ptr).state.clone() };
-    let result = unsafe { (*future_ptr).result.clone() };
-    let condvar = unsafe { (*future_ptr).condvar.clone() };
-    let on_complete = unsafe { (*future_ptr).on_complete.clone() };
-
-    thread::spawn(move || {
-        let f: extern "C" fn(*mut c_void) -> f64 = unsafe { std::mem::transmute(send_fn) };
-        let e: *mut c_void = unsafe { std::mem::transmute(send_env) };
-        let val = f(e);
-
-        let callback;
-        {
-            let mut on_complete_guard = on_complete.lock().unwrap();
-            let mut s = state.lock().unwrap();
-            if *s == CoroutineState::Running {
-                *result.lock().unwrap() = Some(CoroutineResult { float_val: val });
-                *s = CoroutineState::Completed;
-                condvar.notify_all();
-                callback = on_complete_guard.take();
-            } else {
-                callback = None;
-            }
-        }
-        if let Some(cb) = callback {
-            cb();
-        }
-    });
-
-    future_ptr
+    let func_addr = func_ptr as usize;
+    let env_addr = env as usize;
+    let task = FutureTask::Float(Box::new(move || {
+        let f: extern "C" fn(*mut c_void) -> f64 =
+            unsafe { std::mem::transmute(func_addr as *const c_void) };
+        f(env_addr as *mut c_void)
+    }));
+    Box::into_raw(Box::new(BolideFuture::with_task(task)))
 }
 
 /// 启动协程（带环境，返回 ptr）
@@ -401,40 +474,14 @@ pub extern "C" fn bolide_coroutine_spawn_ptr_with_env(
     func_ptr: extern "C" fn(*mut c_void) -> *mut c_void,
     env: *mut c_void,
 ) -> *mut BolideFuture {
-    let future = Box::new(BolideFuture::new());
-    let future_ptr = Box::into_raw(future);
-
-    let send_fn = SendFnPtr(func_ptr as *const c_void);
-    let send_env = SendFnPtr(env);
-    let state = unsafe { (*future_ptr).state.clone() };
-    let result = unsafe { (*future_ptr).result.clone() };
-    let condvar = unsafe { (*future_ptr).condvar.clone() };
-    let on_complete = unsafe { (*future_ptr).on_complete.clone() };
-
-    thread::spawn(move || {
-        let f: extern "C" fn(*mut c_void) -> *mut c_void = unsafe { std::mem::transmute(send_fn) };
-        let e: *mut c_void = unsafe { std::mem::transmute(send_env) };
-        let val = f(e);
-
-        let callback;
-        {
-            let mut on_complete_guard = on_complete.lock().unwrap();
-            let mut s = state.lock().unwrap();
-            if *s == CoroutineState::Running {
-                *result.lock().unwrap() = Some(CoroutineResult { ptr_val: val });
-                *s = CoroutineState::Completed;
-                condvar.notify_all();
-                callback = on_complete_guard.take();
-            } else {
-                callback = None;
-            }
-        }
-        if let Some(cb) = callback {
-            cb();
-        }
-    });
-
-    future_ptr
+    let func_addr = func_ptr as usize;
+    let env_addr = env as usize;
+    let task = FutureTask::Ptr(Box::new(move || {
+        let f: extern "C" fn(*mut c_void) -> *mut c_void =
+            unsafe { std::mem::transmute(func_addr as *const c_void) };
+        f(env_addr as *mut c_void)
+    }));
+    Box::into_raw(Box::new(BolideFuture::with_task(task)))
 }
 
 // ==================== Scope 管理 ====================
@@ -562,6 +609,10 @@ pub extern "C" fn bolide_select_wait_first(futures: *const *mut BolideFuture, co
 
     if !has_pending {
         return -1;
+    }
+
+    for &future_ptr in futures_slice {
+        let _ = bolide_coroutine_schedule(future_ptr);
     }
 
     // 等待第一个完成（零轮询，纯事件驱动）

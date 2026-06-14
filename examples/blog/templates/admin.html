@@ -1,0 +1,171 @@
+<section class="shell">
+  <div class="section-head">
+    <div>
+      <h1>管理后台</h1>
+      <p>文章、用户和评论都在这里管理。</p>
+    </div>
+    <div class="actions">
+      <a class="btn secondary" href="/">查看网站</a>
+      <a class="btn" href="/admin/new">新建文章</a>
+    </div>
+  </div>
+
+  <div class="admin-stack">
+    <section class="panel">
+      <div class="section-head">
+        <div>
+          <h2>文章管理</h2>
+          <p>{{ post_count }} 篇文章</p>
+        </div>
+      </div>
+
+      <div class="table-wrap">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>文章</th>
+              <th>状态</th>
+              <th>日期</th>
+              <th>作者</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for post in posts %}
+              <tr>
+                <td>
+                  <strong>{{ post.title }}</strong><br>
+                  <span>{{ post.excerpt }}</span>
+                </td>
+                <td>
+                  {% if post.published %}
+                    <span class="status">已发布</span>
+                  {% else %}
+                    <span class="status draft">草稿</span>
+                  {% endif %}
+                </td>
+                <td>{{ post.date }}</td>
+                <td>{{ post.author }}</td>
+                <td>
+                  <div class="actions">
+                    <a class="btn secondary" href="/posts/{{ post.id }}">打开</a>
+                    <a class="btn secondary" href="/admin/edit/{{ post.id }}">编辑</a>
+                    <form method="post" action="/admin/delete/{{ post.id }}">
+                      <button class="btn danger" type="submit">删除</button>
+                    </form>
+                  </div>
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="section-head">
+        <div>
+          <h2>用户管理</h2>
+          <p>{{ user_count }} 个用户</p>
+        </div>
+      </div>
+
+      <form class="form-row" method="post" action="/admin/users/create">
+        <input name="username" placeholder="用户名">
+        <input name="display_name" placeholder="显示名称">
+        <input name="password" placeholder="初始密码">
+        <select name="role">
+          <option value="用户">用户</option>
+          <option value="管理员">管理员</option>
+        </select>
+        <button class="btn blue" type="submit">新增用户</button>
+      </form>
+
+      <div class="table-wrap">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>用户名</th>
+              <th>显示名称</th>
+              <th>角色</th>
+              <th>状态</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for account in users %}
+              <tr>
+                <td>{{ account.username }}</td>
+                <td>{{ account.display_name }}</td>
+                <td>{{ account.role }}</td>
+                <td>{{ account.status }}</td>
+                <td>
+                  <div class="actions">
+                    <form method="post" action="/admin/users/role/{{ account.id }}">
+                      <button class="btn secondary" type="submit">切换角色</button>
+                    </form>
+                    <form method="post" action="/admin/users/status/{{ account.id }}">
+                      <button class="btn secondary" type="submit">启用/停用</button>
+                    </form>
+                    <form method="post" action="/admin/users/delete/{{ account.id }}">
+                      <button class="btn danger" type="submit">删除</button>
+                    </form>
+                  </div>
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="section-head">
+        <div>
+          <h2>评论管理</h2>
+          <p>{{ comment_count }} 条评论</p>
+        </div>
+      </div>
+
+      <div class="table-wrap">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>文章</th>
+              <th>评论人</th>
+              <th>内容</th>
+              <th>状态</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for comment in comments %}
+              <tr>
+                <td><a class="read-link" href="/posts/{{ comment.post_id }}">文章 #{{ comment.post_id }}</a></td>
+                <td>{{ comment.author }}<br><span>{{ comment.date }}</span></td>
+                <td>{{ comment.content }}</td>
+                <td>
+                  {% if comment.status %}
+                    <span class="status">{{ comment.status }}</span>
+                  {% else %}
+                    <span class="status pending">待审核</span>
+                  {% endif %}
+                </td>
+                <td>
+                  <div class="actions">
+                    <form method="post" action="/admin/comments/approve/{{ comment.id }}">
+                      <button class="btn secondary" type="submit">通过</button>
+                    </form>
+                    <form method="post" action="/admin/comments/delete/{{ comment.id }}">
+                      <button class="btn danger" type="submit">删除</button>
+                    </form>
+                  </div>
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+</section>

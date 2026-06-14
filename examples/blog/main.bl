@@ -1,0 +1,609 @@
+import "../../std/web/web.bl";
+import "../../std/template/template.bl";
+import "../../std/db/db.bl";
+
+let store: db.Database = db.open("data");
+
+fn post_row(title: str, excerpt: str, content: str, author: str, date: str, tags: str, cover: str, published: bool) -> dict<str, dynamic> {
+    return {
+        "title": title,
+        "excerpt": excerpt,
+        "content": content,
+        "author": author,
+        "date": date,
+        "tags": tags,
+        "cover": cover,
+        "published": published,
+    };
+}
+
+fn user_row(username: str, password: str, display_name: str, role: str, status: str) -> dict<str, dynamic> {
+    return {
+        "username": username,
+        "password": password,
+        "display_name": display_name,
+        "role": role,
+        "status": status,
+    };
+}
+
+fn comment_row(post_id: int, user_id: int, author: str, content: str, date: str, status: str) -> dict<str, dynamic> {
+    return {
+        "post_id": post_id,
+        "user_id": user_id,
+        "author": author,
+        "content": content,
+        "date": date,
+        "status": status,
+    };
+}
+
+fn blank_post() -> dict<str, dynamic> {
+    return post_row(
+        "",
+        "",
+        "",
+        "Bolide 团队",
+        "2026-06-15",
+        "札记",
+        "https://images.unsplash.com/photo-1497366754035-f200968a6e72?auto=format&fit=crop&w=1200&q=80",
+        true,
+    );
+}
+
+fn seed_post_1() -> dict<str, dynamic> {
+    return post_row(
+        "给 Bolide 写一个够用的标准库",
+        "一个小语言的标准库不应该显得笨重，但也要能支撑真实网站、工具和自动化任务。",
+        "Bolide 的标准库目标很明确：普通用户不需要接触裸指针，也不需要理解运行时内部的所有权细节。\n\nWeb、模板和本地数据库这几块能力放在一起后，语言就能写出完整应用。路由、会话、HTML 渲染、持久化行数据都保持在 Bolide 的值语义里，AOT 编译后也能独立运行。",
+        "Bolide 团队",
+        "2026-06-15",
+        "标准库",
+        "https://images.unsplash.com/photo-1518005020951-eccb494ad742?auto=format&fit=crop&w=1200&q=80",
+        true,
+    );
+}
+
+fn seed_post_2() -> dict<str, dynamic> {
+    return post_row(
+        "模板引擎要保持克制",
+        "默认转义、显式原样输出、循环、条件和点路径，已经能覆盖大多数内容站页面。",
+        "模板引擎最容易失控的地方，是把自己做成另一门复杂语言。这个示例故意只保留几个稳定能力：变量默认 HTML 转义，确实需要时才使用原样输出，数据通过 dict 和 list 传入。\n\n这样模板足够直观，也方便 AOT 与 JIT 共用同一套行为。",
+        "Bolide 团队",
+        "2026-06-14",
+        "模板",
+        "https://images.unsplash.com/photo-1497215728101-856f4ea42174?auto=format&fit=crop&w=1200&q=80",
+        true,
+    );
+}
+
+fn seed_post_3() -> dict<str, dynamic> {
+    return post_row(
+        "文件数据库先解决早期应用",
+        "CRUD、动态值和稳定 API 先跑起来，未来仍然可以替换成真正的 SQL 后端。",
+        "早期标准库的数据库不必马上和 SQLite 拼性能。它更重要的任务，是让示例和小应用可以可靠地保存数据。\n\n文章、用户、评论和站点设置都能用 typed dynamic 表示。等语言和 ABI 更稳定后，底层再替换为 SQL 后端也不会破坏用户代码。",
+        "Bolide 团队",
+        "2026-06-13",
+        "数据库",
+        "https://images.unsplash.com/photo-1516321318423-f06f85e504b3?auto=format&fit=crop&w=1200&q=80",
+        true,
+    );
+}
+
+fn seed_post_4() -> dict<str, dynamic> {
+    return post_row(
+        "草稿：后台工作流",
+        "草稿只出现在管理后台，不会进入公开首页。",
+        "这篇草稿用于检查后台列表、编辑表单和发布状态。管理员可以继续编辑它，也可以把它发布到首页。\n\n普通用户不会在公开页面看到草稿内容。",
+        "Bolide 团队",
+        "2026-06-12",
+        "后台",
+        "https://images.unsplash.com/photo-1500530855697-b586d89ba3ee?auto=format&fit=crop&w=1200&q=80",
+        false,
+    );
+}
+
+fn save_seed_post(id: int, row: dict<str, dynamic>) {
+    let existing: dict<str, dynamic> = store.get("posts", id);
+    if existing.contains("title") {
+        store.update("posts", id, row);
+    } else {
+        store.insert("posts", row);
+    }
+}
+
+fn find_user_id(username: str) -> int {
+    let rows: list<dict<str, dynamic>> = store.where_eq("users", "username", username);
+    for user in rows {
+        return int(user["id"]);
+    }
+    return 0;
+}
+
+fn ensure_user(username: str, password: str, display_name: str, role: str) {
+    let id: int = find_user_id(username);
+    let row: dict<str, dynamic> = user_row(username, password, display_name, role, "启用");
+    if id == 0 {
+        store.insert("users", row);
+    } else {
+        store.update("users", id, row);
+    }
+}
+
+fn ensure_schema() {
+    store.create_table("posts", "title,excerpt,content,author,date,tags,cover,published");
+    store.create_table("users", "username,password,display_name,role,status");
+    store.create_table("comments", "post_id,user_id,author,content,date,status");
+
+    save_seed_post(1, seed_post_1());
+    save_seed_post(2, seed_post_2());
+    save_seed_post(3, seed_post_3());
+    save_seed_post(4, seed_post_4());
+
+    ensure_user("admin", "admin123", "站点管理员", "管理员");
+    ensure_user("user", "user123", "普通读者", "用户");
+
+    if store.count("comments") == 0 {
+        let admin_id: int = find_user_id("admin");
+        let user_id: int = find_user_id("user");
+        store.insert("comments", comment_row(1, user_id, "普通读者", "这个示例已经能覆盖登录、评论和后台审核流程。", "2026-06-15", "已通过"));
+        store.insert("comments", comment_row(2, admin_id, "站点管理员", "管理员评论会直接通过，普通用户评论进入后台审核。", "2026-06-15", "已通过"));
+        store.insert("comments", comment_row(3, user_id, "普通读者", "这条评论用于检查待审核列表。", "2026-06-15", "待审核"));
+    }
+}
+
+fn guest_user() -> dict<str, dynamic> {
+    return {
+        "id": 0,
+        "username": "",
+        "display_name": "游客",
+        "role": "游客",
+        "status": "未登录",
+        "logged_in": false,
+        "is_admin": false,
+    };
+}
+
+fn user_context(id: int, username: str, display_name: str, role: str, status: str) -> dict<str, dynamic> {
+    return {
+        "id": id,
+        "username": username,
+        "display_name": display_name,
+        "role": role,
+        "status": status,
+        "logged_in": true,
+        "is_admin": role == "管理员",
+    };
+}
+
+fn current_user(req: web.Request) -> dict<str, dynamic> {
+    if req.cookie("bolide_session") == "" {
+        return guest_user();
+    }
+
+    let probe: web.Response = web.empty(204);
+    let session: web.Session = web.session(req, probe);
+    let result: dict<str, dynamic> = guest_user();
+
+    if session.contains("user_id") {
+        let id: int = int(session.get("user_id"));
+        let row: dict<str, dynamic> = store.get("users", id);
+        if row.contains("username") {
+            if str(row["status"]) == "启用" {
+                result = user_context(
+                    id,
+                    str(row["username"]),
+                    str(row["display_name"]),
+                    str(row["role"]),
+                    str(row["status"]),
+                );
+            }
+        }
+    }
+
+    session.free();
+    probe.free();
+    return result;
+}
+
+fn is_admin_user(user: dict<str, dynamic>) -> bool {
+    return str(user["role"]) == "管理员";
+}
+
+fn layout_page(page_title: str, body: str, user: dict<str, dynamic>) -> str {
+    let ctx: dict<str, dynamic> = {
+        "page_title": page_title,
+        "body": body,
+        "user": user,
+    };
+    return template.render_file("templates/layout.html", ctx);
+}
+
+fn render_page(page_title: str, template_path: str, ctx: dict<str, dynamic>, user: dict<str, dynamic>) -> web.Response {
+    let body: str = template.render_file(template_path, ctx);
+    return web.html(layout_page(page_title, body, user));
+}
+
+fn published_comments(post_id: int) -> list<dict<str, dynamic>> {
+    let rows: list<dict<str, dynamic>> = store.where_eq("comments", "post_id", post_id);
+    let result: list<dict<str, dynamic>> = [];
+    for comment in rows {
+        if str(comment["status"]) == "已通过" {
+            result.push(comment);
+        }
+    }
+    return result;
+}
+
+fn published_posts() -> list<dict<str, dynamic>> {
+    return store.where_eq("posts", "published", true);
+}
+
+fn load_post(id: int) -> dict<str, dynamic> {
+    return store.get("posts", id);
+}
+
+fn all_posts() -> list<dict<str, dynamic>> {
+    return store.all("posts");
+}
+
+fn all_users() -> list<dict<str, dynamic>> {
+    return store.all("users");
+}
+
+fn all_comments() -> list<dict<str, dynamic>> {
+    return store.all("comments");
+}
+
+fn index(req: web.Request) -> web.Response {
+    let user: dict<str, dynamic> = current_user(req);
+    let posts: list<dict<str, dynamic>> = published_posts();
+    let ctx: dict<str, dynamic> = {
+        "posts": posts,
+        "count": posts.len(),
+        "user": user,
+    };
+    return render_page("Bolide 中文博客", "templates/index.html", ctx, user);
+}
+
+fn about(req: web.Request) -> web.Response {
+    let user: dict<str, dynamic> = current_user(req);
+    let ctx: dict<str, dynamic> = {
+        "user": user,
+    };
+    return render_page("关于这个示例", "templates/about.html", ctx, user);
+}
+
+fn post_detail(req: web.Request) -> web.Response {
+    let user: dict<str, dynamic> = current_user(req);
+    let id: int = int(req.path_param("id"));
+    let post: dict<str, dynamic> = load_post(id);
+    let comments: list<dict<str, dynamic>> = published_comments(id);
+    if not post.contains("title") {
+        return web.empty(404);
+    }
+
+    if not post["published"] {
+        if not is_admin_user(user) {
+            return web.empty(404);
+        }
+    }
+
+    let ctx: dict<str, dynamic> = {
+        "post": post,
+        "comments": comments,
+        "comment_count": comments.len(),
+        "user": user,
+    };
+    return render_page(str(post["title"]), "templates/post.html", ctx, user);
+}
+
+fn login_form(req: web.Request, message: str) -> web.Response {
+    let user: dict<str, dynamic> = current_user(req);
+    let ctx: dict<str, dynamic> = {
+        "message": message,
+        "user": user,
+    };
+    return render_page("登录", "templates/login.html", ctx, user);
+}
+
+fn login(req: web.Request) -> web.Response {
+    return login_form(req, "");
+}
+
+fn login_submit(req: web.Request) -> web.Response {
+    let username: str = req.form_param("username");
+    let password: str = req.form_param("password");
+    let id: int = find_user_id(username);
+    if id == 0 {
+        return login_form(req, "用户名或密码不正确。");
+    }
+
+    let row: dict<str, dynamic> = store.get("users", id);
+    if str(row["status"]) != "启用" {
+        return login_form(req, "这个账号已停用。");
+    }
+
+    if str(row["password"]) != password {
+        return login_form(req, "用户名或密码不正确。");
+    }
+
+    let target: str = "/";
+    if str(row["role"]) == "管理员" {
+        target = "/admin";
+    }
+
+    let res: web.Response = web.redirect(target, 303);
+    let session: web.Session = web.session(req, res);
+    session.set("user_id", id);
+    session.set("role", str(row["role"]));
+    session.free();
+    return res;
+}
+
+fn logout(req: web.Request) -> web.Response {
+    let res: web.Response = web.redirect("/", 303);
+    if req.cookie("bolide_session") != "" {
+        let session: web.Session = web.session(req, res);
+        session.destroy(res);
+        session.free();
+    }
+    return res;
+}
+
+fn admin(req: web.Request) -> web.Response {
+    let user: dict<str, dynamic> = current_user(req);
+    if not is_admin_user(user) {
+        return web.redirect("/login", 303);
+    }
+
+    let posts: list<dict<str, dynamic>> = all_posts();
+    let users: list<dict<str, dynamic>> = all_users();
+    let comments: list<dict<str, dynamic>> = all_comments();
+    let ctx: dict<str, dynamic> = {
+        "posts": posts,
+        "post_count": posts.len(),
+        "users": users,
+        "user_count": users.len(),
+        "comments": comments,
+        "comment_count": comments.len(),
+        "user": user,
+    };
+    return render_page("管理后台", "templates/admin.html", ctx, user);
+}
+
+fn render_form(title: str, note: str, action: str, post: dict<str, dynamic>, user: dict<str, dynamic>) -> web.Response {
+    let ctx: dict<str, dynamic> = {
+        "form_title": title,
+        "form_note": note,
+        "action": action,
+        "post": post,
+        "user": user,
+    };
+    return render_page(title, "templates/form.html", ctx, user);
+}
+
+fn new_post(req: web.Request) -> web.Response {
+    let user: dict<str, dynamic> = current_user(req);
+    if not is_admin_user(user) {
+        return web.redirect("/login", 303);
+    }
+    return render_form("新建文章", "填写标题、摘要、正文和发布状态。", "/admin/create", blank_post(), user);
+}
+
+fn row_from_request(req: web.Request) -> dict<str, dynamic> {
+    let published: bool = req.form_param("published") == "on";
+    return post_row(
+        req.form_param("title"),
+        req.form_param("excerpt"),
+        req.form_param("content"),
+        req.form_param("author"),
+        req.form_param("date"),
+        req.form_param("tags"),
+        req.form_param("cover"),
+        published,
+    );
+}
+
+fn create_post(req: web.Request) -> web.Response {
+    let user: dict<str, dynamic> = current_user(req);
+    if not is_admin_user(user) {
+        return web.redirect("/login", 303);
+    }
+    store.insert("posts", row_from_request(req));
+    return web.redirect("/admin", 303);
+}
+
+fn edit_post(req: web.Request) -> web.Response {
+    let user: dict<str, dynamic> = current_user(req);
+    if not is_admin_user(user) {
+        return web.redirect("/login", 303);
+    }
+
+    let id: int = int(req.path_param("id"));
+    let post: dict<str, dynamic> = store.get("posts", id);
+    if not post.contains("title") {
+        return web.empty(404);
+    }
+    return render_form("编辑文章", "更新文章内容、封面和发布状态。", "/admin/update/" + str(id), post, user);
+}
+
+fn update_post(req: web.Request) -> web.Response {
+    let user: dict<str, dynamic> = current_user(req);
+    if not is_admin_user(user) {
+        return web.redirect("/login", 303);
+    }
+
+    let id: int = int(req.path_param("id"));
+    store.update("posts", id, row_from_request(req));
+    return web.redirect("/admin", 303);
+}
+
+fn delete_post(req: web.Request) -> web.Response {
+    let user: dict<str, dynamic> = current_user(req);
+    if not is_admin_user(user) {
+        return web.redirect("/login", 303);
+    }
+
+    let id: int = int(req.path_param("id"));
+    let comments: list<dict<str, dynamic>> = store.where_eq("comments", "post_id", id);
+    for comment in comments {
+        store.delete("comments", int(comment["id"]));
+    }
+    store.delete("posts", id);
+    return web.redirect("/admin", 303);
+}
+
+fn create_user(req: web.Request) -> web.Response {
+    let user: dict<str, dynamic> = current_user(req);
+    if not is_admin_user(user) {
+        return web.redirect("/login", 303);
+    }
+
+    let username: str = req.form_param("username");
+    let password: str = req.form_param("password");
+    let display_name: str = req.form_param("display_name");
+    let role: str = req.form_param("role");
+    if role != "管理员" {
+        role = "用户";
+    }
+
+    if username != "" {
+        if password != "" {
+            if find_user_id(username) == 0 {
+                store.insert("users", user_row(username, password, display_name, role, "启用"));
+            }
+        }
+    }
+
+    return web.redirect("/admin", 303);
+}
+
+fn toggle_user_role(req: web.Request) -> web.Response {
+    let current: dict<str, dynamic> = current_user(req);
+    if not is_admin_user(current) {
+        return web.redirect("/login", 303);
+    }
+
+    let id: int = int(req.path_param("id"));
+    let row: dict<str, dynamic> = store.get("users", id);
+    if row.contains("username") {
+        let next_role: str = "管理员";
+        if str(row["role"]) == "管理员" {
+            next_role = "用户";
+        }
+        store.update("users", id, user_row(str(row["username"]), str(row["password"]), str(row["display_name"]), next_role, str(row["status"])));
+    }
+    return web.redirect("/admin", 303);
+}
+
+fn toggle_user_status(req: web.Request) -> web.Response {
+    let current: dict<str, dynamic> = current_user(req);
+    if not is_admin_user(current) {
+        return web.redirect("/login", 303);
+    }
+
+    let id: int = int(req.path_param("id"));
+    if id == 1 {
+        return web.redirect("/admin", 303);
+    }
+    if id == int(current["id"]) {
+        return web.redirect("/admin", 303);
+    }
+
+    let row: dict<str, dynamic> = store.get("users", id);
+    if row.contains("username") {
+        let next_status: str = "停用";
+        if str(row["status"]) == "停用" {
+            next_status = "启用";
+        }
+        store.update("users", id, user_row(str(row["username"]), str(row["password"]), str(row["display_name"]), str(row["role"]), next_status));
+    }
+    return web.redirect("/admin", 303);
+}
+
+fn delete_user(req: web.Request) -> web.Response {
+    let current: dict<str, dynamic> = current_user(req);
+    if not is_admin_user(current) {
+        return web.redirect("/login", 303);
+    }
+
+    let id: int = int(req.path_param("id"));
+    if id != 1 {
+        if id != int(current["id"]) {
+            store.delete("users", id);
+        }
+    }
+    return web.redirect("/admin", 303);
+}
+
+fn create_comment(req: web.Request) -> web.Response {
+    let user: dict<str, dynamic> = current_user(req);
+    let post_id: int = int(req.path_param("id"));
+    if int(user["id"]) == 0 {
+        return web.redirect("/login", 303);
+    }
+
+    let content: str = req.form_param("content");
+    if content != "" {
+        let status: str = "待审核";
+        if is_admin_user(user) {
+            status = "已通过";
+        }
+        store.insert("comments", comment_row(post_id, int(user["id"]), str(user["display_name"]), content, "2026-06-15", status));
+    }
+    return web.redirect("/posts/" + str(post_id), 303);
+}
+
+fn approve_comment(req: web.Request) -> web.Response {
+    let user: dict<str, dynamic> = current_user(req);
+    if not is_admin_user(user) {
+        return web.redirect("/login", 303);
+    }
+
+    let id: int = int(req.path_param("id"));
+    let row: dict<str, dynamic> = store.get("comments", id);
+    if row.contains("content") {
+        store.update("comments", id, comment_row(int(row["post_id"]), int(row["user_id"]), str(row["author"]), str(row["content"]), str(row["date"]), "已通过"));
+    }
+    return web.redirect("/admin", 303);
+}
+
+fn delete_comment(req: web.Request) -> web.Response {
+    let user: dict<str, dynamic> = current_user(req);
+    if not is_admin_user(user) {
+        return web.redirect("/login", 303);
+    }
+
+    let id: int = int(req.path_param("id"));
+    store.delete("comments", id);
+    return web.redirect("/admin", 303);
+}
+
+ensure_schema();
+
+let app: web.App = web.app();
+app.set_max_body(1024 * 1024);
+app.get_async("/", index);
+app.get_async("/about", about);
+app.get_async("/login", login);
+app.post_async("/login", login_submit);
+app.post_async("/logout", logout);
+app.get_async("/posts/{id}", post_detail);
+app.post_async("/posts/{id}/comments", create_comment);
+app.get_async("/admin", admin);
+app.get_async("/admin/new", new_post);
+app.post_async("/admin/create", create_post);
+app.get_async("/admin/edit/{id}", edit_post);
+app.post_async("/admin/update/{id}", update_post);
+app.post_async("/admin/delete/{id}", delete_post);
+app.post_async("/admin/users/create", create_user);
+app.post_async("/admin/users/role/{id}", toggle_user_role);
+app.post_async("/admin/users/status/{id}", toggle_user_status);
+app.post_async("/admin/users/delete/{id}", delete_user);
+app.post_async("/admin/comments/approve/{id}", approve_comment);
+app.post_async("/admin/comments/delete/{id}", delete_comment);
+
+print("Bolide 中文博客运行在 http://127.0.0.1:8080");
+print("管理员账号：admin / admin123，普通用户：user / user123");
+app.run("127.0.0.1", 8080);

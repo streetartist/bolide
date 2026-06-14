@@ -41,6 +41,7 @@
 - **模块系统** - 命名空间隔离的模块导入
 - **丰富类型** - BigInt、Decimal、Dynamic 等
 - **并发支持** - 线程、通道、线程池
+- **Web 标准库** - 高性能 HTTP 服务、路由、会话、静态文件和 AOT 单文件部署
 - **内存管理** - ARC 引用计数 + 生命周期注解 + weak/unowned 引用
 
 ## 快速开始
@@ -277,6 +278,8 @@ print(s);
 ### 一等函数 (First-Class Functions)
 
 函数是一等值：可以赋给变量、作为参数传递、从函数返回、存入列表。无需类型标注，编译器会自动推断函数签名。
+
+约定上，`fn` 只用于函数声明和函数字面量；`func(T...) -> R` 是唯一的用户级函数值类型。不要把 C 函数指针、trampoline 或 `*void` 暴露成普通业务类型，它们属于 FFI/编译器内部实现细节。
 
 ```bolide
 fn add1(x: int) -> int { return x + 1; }
@@ -539,50 +542,49 @@ print(scores.values());     // 获取所有值
 
 ### Async/Await
 
-
 ```bolide
 async fn fetch_data(id: int) -> int {
     return id * 10;
 }
 
-// 启动协程
+// 创建冷 Future；不会自动并行执行
 let f1: future = fetch_data(1);
 let f2: future = fetch_data(2);
 
-// 等待结果
+// await 只等待单个 Future
 let r1: int = await f1;
 let r2: int = await f2;
 ```
 
 ### 高级并发特性
 
-#### Await All (并发等待)
+#### Spawn All (并行等待)
 
 ```bolide
-async fn fetch_a() -> int { return 100; }
-async fn fetch_b() -> int { return 200; }
+fn fetch_a() -> int { return 100; }
+fn fetch_b() -> int { return 200; }
 
 // 并发执行所有任务并等待结果（返回元组）
-let results: (int, int) = await all {
+let results: (int, int) = spawn all {
     fetch_a(),
     fetch_b()
 };
 print(results[0]);  // 100
 print(results[1]);  // 200
 
-// 类型标注可以省略，编译器会根据各协程的返回类型自动推断为元组
-let inferred = await all {
+// 类型标注可以省略，编译器会根据各任务返回类型自动推断为元组
+let inferred = spawn all {
     fetch_a(),
     fetch_b()
 };
 print(inferred[0]);  // 100
 ```
 
-#### Async Select (竞态等待)
+#### Spawn Select (竞态等待)
 
 ```bolide
-// 等待第一个完成的任务
-async select {
+// 并行启动所有任务，等待第一个完成的任务
+spawn select {
     res1 = task_fast() => {
         print("fast finished");
     }
@@ -757,9 +759,12 @@ Bolide 支持**双向** C 互操作：既能调用 C 库，也能被 C 程序调
 #### Bolide 调 C
 
 ```bolide
-// 声明 C 函数
-extern "msvcrt.dll" {
+// 动态加载 C 标准库函数。源码写逻辑库名，不写 .dll/.so/.dylib。
+extern "dyn:c" {
     fn abs(x: c_int) -> c_int;
+}
+
+extern "dyn:m" {
     fn sqrt(x: c_double) -> c_double;
 }
 
@@ -772,6 +777,29 @@ fn my_callback(a: int, b: int) -> int {
 }
 let r: int = test_callback(my_callback, 10, 20);
 ```
+
+#### 外部库标识
+
+`extern "..."` 中的库名使用跨平台标识，避免把 Windows/Linux/macOS 文件名写进 Bolide 源码：
+
+| 标识 | 用途 | AOT | JIT | 说明 |
+|------|------|-----|-----|------|
+| `bolide` | Bolide runtime 内置函数 | 直接链接 | 直接链接 | 仅标准库内部使用 |
+| `std:gui` | 标准库原生 C 实现 | 自动编译/链接 | 暂不支持 | 当前为 Win32 GUI，AOT 会把 `std/gui/gui.c` 编进最终 exe |
+| `lib:name` | 静态库或导入库链接 | 支持 | 不支持 | Windows 映射为 `name.lib`，Unix 映射为 `-lname` |
+| `dyn:name` | 运行时动态加载 | 支持 | 支持 | Windows 映射为 `name.dll`，Linux 为 `libname.so`，macOS 为 `libname.dylib` |
+
+常用别名：
+- `dyn:c` / `dyn:m`: C 标准库 / 数学库动态加载；Windows 解析到 `msvcrt.dll`，Linux 解析到 `libc.so.6` / `libm.so.6`，macOS 解析到 `libSystem.B.dylib`。
+- `lib:c` / `lib:m`: AOT 链接 C 标准库 / 数学库；Windows 使用 `msvcrt.lib`，Unix 使用 `-lc` / `-lm`。
+
+注意点：
+- 用户代码不要写 `extern "xxx.dll"`、`extern "libxxx.so"` 或 `extern "xxx.dylib"`。这些平台路径不可移植；需要动态加载时写 `dyn:name`。
+- `lib:name` 是 AOT-only。JIT 没有链接阶段，不能链接 `.lib` / `.a` / `-lxxx`；开发期需要 JIT 运行时请使用 `dyn:name`。
+- AOT 中 `dyn:name` 不会传给系统 linker，而是在生成代码里通过 runtime 动态加载。最终程序仍要求目标机器能找到对应动态库。
+- 必要时 AOT 可以使用平台 linker 能识别的显式库参数（如 `foo.lib`、`libfoo.a`、`-lfoo`）作为逃生口；可移植代码优先使用 `lib:name`。
+- 标准库 wrapper 应隐藏原始 C ABI。普通 Bolide API 应使用 `int`、`float`、`str`、`bytes` 等语言类型；只有写 raw `extern` 绑定时才需要 `c_int`、`c_double`、`*char`、`*void` 等 C ABI 类型。
+- `int` 是 Bolide 64 位整数，不等同于 C `int`。raw `extern` 中需要精确匹配 C 签名时继续使用 `c_*` 类型。
 
 #### C 调 Bolide
 
@@ -1063,20 +1091,181 @@ bolide/
 
 ## 标准库实现方式
 
-Bolide 标准库通常由 `.bl` 包装层加底层实现组成，目前主要有两种写法：
+Bolide 标准库通常由 `.bl` 包装层加底层实现组成，目前主要有三种写法：
 
 1. **Rust runtime 内置库**
    - 适合语言核心标准库、跨平台能力，以及需要和 Bolide 运行时对象配合的功能。
    - 底层实现位于 `crates/bolide-runtime/src/`，通过 `extern "bolide"` 暴露给 `.bl` 标准库。
    - 例如 `std/fs/fs.bl` 的文件读写接口由 runtime 中的 `bolide_fs_*` 函数实现。
 
-2. **外部 C 动态库 FFI**
+2. **独立原生标准库**
+   - 适合不应该塞进 Bolide runtime、但希望 AOT 时自动编进最终可执行文件的功能。
+   - `.bl` 包装层使用 `extern "std:name"`，CLI 识别后编译/链接对应 C 源或静态库。
+   - 例如 `std/gui/gui.bl` 使用 `extern "std:gui"`；AOT 时自动编译 `std/gui/gui.c` 并链接 Win32 系统库，用户不需要携带 `gui.dll`。
+   - `std:gui` 当前是 Win32 C 实现，AOT 需要本机可用的 `clang`、`clang-cl` 或 MSVC `cl.exe`，以及对应 Windows SDK 库；JIT 暂不加载 `std:gui`。
+
+3. **外部 C 库 FFI**
    - 适合绑定系统 API、第三方 C 库，或不希望编入 runtime 的平台能力。
-   - `.bl` 文件直接声明 `extern "xxx.dll"` / `extern "libxxx.so"`，AOT 时链接对应外部库，JIT 时动态加载。
-   - 例如 `std/gui/gui.bl` 通过 `std/gui/gui.dll` 提供原生 GUI 能力。
+   - 静态/导入库使用 `extern "lib:name"`，AOT 时按平台映射为 `name.lib` 或 `-lname`。
+   - 动态库使用 `extern "dyn:name"`，AOT/JIT 都按平台解析并运行时加载，例如 `dyn:c`、`dyn:m`。
 
 选择原则：和 `str`、列表、对象、线程、文件系统等运行时模型紧密相关的功能优先放入
-Rust runtime；绑定已有系统库或第三方库时优先使用外部 C FFI。
+Rust runtime；平台 UI、模板引擎、数据库驱动等可以优先做成独立标准库；绑定已有系统库或第三方库时优先使用外部 C FFI。
+
+## Web 标准库
+
+Bolide 提供 `std/web/web.bl`，目标是用简洁 API 写出接近 FastAPI 使用体验、但能 AOT
+编译为原生可执行文件的 Web 服务。底层实现位于 runtime，AOT 时会静态链接进最终程序；
+用户发布 Web 应用时不需要额外携带 Web DLL。
+
+```bolide
+import "std/web/web.bl";
+
+fn index(req: web.Request) -> web.Response {
+    return web.html("<h1>Hello Bolide</h1><p>path=" + req.path() + "</p>");
+}
+
+fn hello(req: web.Request) -> web.Response {
+    return web.text("hello " + req.path_param("name"));
+}
+
+let app: web.App = web.app();
+app.get("/", index);
+app.get_async("/hello/{name}", hello);
+app.static_files("/static", "public");
+
+app.run("127.0.0.1", 8080);
+```
+
+当前 Web 标准库支持：
+- HTTP 方法：`GET`、`POST`、`PUT`、`PATCH`、`DELETE`、`HEAD`、`OPTIONS`、`TRACE`、`CONNECT`。
+- 路由：精确路径、`/posts/{id}` 动态路径参数、静态文件目录。
+- 请求读取：method、target、path、query、version、header、cookie、query 参数、form 参数、path 参数、body 文本和 bytes。
+- 响应构造：text、html、json、bytes、empty、redirect，自定义 status/header/cookie。
+- 会话：session id、get/set/contains/remove/clear/destroy/regenerate，cookie 由标准库封装。
+- 并发服务：默认自动选择 worker 和 acceptor；`set_workers(n)` 仅作为压测或部署调优 override；`*_async` 路由当前走同一高性能 worker/reactor 路径，保留 API 语义以便后续扩展。
+- 连接处理：HTTP/1.1 keep-alive、Content-Length、HEAD 无 body、405/OPTIONS 自动能力；AOT 服务在 Windows/Unix 上使用更大的 listen backlog 和多 acceptor，减少高并发短连接突发下的 connect refused。
+
+JIT 适合开发期快速调试：
+
+```bash
+bolide run examples/blog/main.bl
+```
+
+AOT 适合发布和压测：
+
+```bash
+bolide compile examples/blog/main.bl -o examples/blog/main.exe
+examples/blog/main.exe
+```
+
+### Web 性能
+
+仓库内提供本地压测工具：
+
+```powershell
+# 构建并对比 hello 服务
+.\bench\http_bench.ps1 -Target CompareHello -Requests 100000 -Concurrency 1024
+
+# 压测内存版博客示例
+.\bench\http_bench.ps1 -Target BolideFastBlog -Requests 50000 -Concurrency 1024 `
+  -Paths "/,/about,/login,/posts/1,/posts/2,/posts/3"
+```
+
+当前在 Windows 本机 loopback、AOT release、keep-alive 开启的参考结果：
+
+| 场景 | 并发 | 请求数 | 结果 |
+|------|------|--------|------|
+| `bench/http_bolide_hello_sync.bl` | 1024 | 100000 | 约 150k RPS，0 errors |
+| `bench/http_bolide_hello_async.bl` | 1024 | 100000 | 约 157k RPS，0 errors |
+| `examples/blog/main.bl` 原始博客多页面 | 512 | 50000 | 约 57k RPS，0 errors |
+| `examples/blog/main.bl` 原始博客多页面 | 1024 | 50000 | 约 51k-55k RPS，0 errors |
+| `bench/http_bolide_blog_fast.bl` 多页面 | 512 | 30000 | 约 122k RPS，0 errors |
+| `bench/http_bolide_blog_fast.bl` 多页面 | 1024 | 50000 | 约 106k RPS，0 errors |
+
+Go 对照程序位于 `bench/http_go_hello.go` 和 `bench/http_go_blog.go`，可用同一压测工具复现：
+
+```powershell
+# Go hello vs Bolide hello
+.\bench\http_bench.ps1 -Target CompareHello -Requests 100000 -Concurrency 1024
+
+# Go 小博客 vs Bolide 原始博客示例
+.\bench\http_bench.ps1 -Target CompareBlog -Requests 50000 -Concurrency 512
+
+# Go 小博客 vs Bolide 内存版快速博客
+.\bench\http_bench.ps1 -Target CompareFastBlog -Requests 50000 -Concurrency 512 `
+  -Paths "/,/about,/login,/posts/1,/posts/2,/posts/3"
+```
+
+本机参考对比：
+
+| 场景 | 条件 | Go | Bolide | 说明 |
+|------|------|----|--------|------|
+| Hello HTTP | 1024 并发 | 约 137k RPS | sync 约 150k RPS；async 约 157k RPS | 这组主要测 HTTP reactor 和路由开销 |
+| 小博客页面 | 512 并发 | 约 47k RPS | 原始博客热缓存后约 57k RPS | 非同构参考：Go 小博客是内存数据 + `html/template`；Bolide 原始博客包含文件模板、文件数据库和更完整的后台/登录/评论流程。历史上未缓存慢路径约 7k RPS，不代表当前热路径 |
+| 内存版博客页面 | 512 并发 | 约 47k RPS | 约 122k RPS | Bolide fast 版使用内存数据和直接 HTML 生成，不是模板引擎严格同构对比 |
+
+这些数字用于判断同机回归，不是跨平台承诺。上表中的原始博客对比不是同构 benchmark：
+Go 对照是较小的内存版博客，Bolide 原始博客示例保留了文件模板、文件数据库和更多业务页面。
+当前模板引擎会缓存已解析模板，并以 1 秒窗口复查文件修改；文件数据库会缓存已打开表的热数据，写入仍落盘。
+因此原始博客的压测数字是热缓存路径，冷启动和首次访问仍会包含文件读取、解析和表加载成本。
+面向高吞吐页面时，应复用 `Database`、让模板走文件缓存，并让长 HTML 字符串拼接走编译器的多段拼接优化。
+
+## 模板与数据库标准库
+
+Bolide 现在提供轻量模板引擎和文件数据库，目标是让小型 Web 应用可以只依赖标准库完成。
+当前实现由 `.bl` wrapper 隐藏底层 ABI，用户侧只接触 `str`、`dict<str, dynamic>`、
+`list<dict<str, dynamic>>` 和 `Database` 等 Bolide 类型，不需要直接处理 `ptr`。
+
+```bolide
+import "std/db/db.bl";
+import "std/template/template.bl";
+
+let database: db.Database = db.open("data/blog");
+database.create_table("posts", "title,slug,body,published");
+
+let row: dict<str, dynamic> = {
+    "title": "Hello Bolide",
+    "slug": "hello-bolide",
+    "body": "A first post.",
+    "published": true,
+};
+database.insert("posts", row);
+
+let posts: list<dict<str, dynamic>> = database.all("posts");
+let html: str = template.render(
+    "<h1>{{ title }}</h1>{% for post in posts %}<article>{{ post.title }}</article>{% endfor %}",
+    {
+        "title": "Blog",
+        "posts": posts,
+    }
+);
+print(html);
+database.close();
+```
+
+模板语法保持小而明确：
+- `{{ expr }}` 默认 HTML 转义，适合页面文本输出。
+- `{!! expr !!}` 输出原始 HTML，只应对可信内容使用。
+- `{% if cond %}...{% else %}...{% endif %}` 支持条件渲染。
+- `{% for post in posts %}...{% endfor %}` 支持遍历列表。
+- `post.title` 这类点路径可以读取字典和对象字段。
+
+数据库 API 使用目录作为存储位置，表按文件保存，支持 `create_table`、`insert`、`update`、
+`delete`、`get`、`all`、`where_eq`、`count` 和 `last_error`。`all` 是合法方法名；
+`spawn all { ... }` 中的 `all` 只是上下文关键字，不应阻止 `database.all("posts")`
+这样的成员调用。这类冲突属于语言解析/编译器 bug，应修编译器，不应把标准库 API 改名绕开。
+
+完整博客示例见 `examples/blog/`，包含文章列表、详情页、
+关于页、后台列表、新建、编辑、删除、种子数据和响应式页面样式。开发时可用：
+
+```bash
+cd examples/blog
+bolide run main.bl
+```
+
+示例会启动本地 Web 服务，模板位于 `examples/blog/templates/`，数据库默认写入
+`examples/blog/data/`；发布前建议再用 AOT 编译验证。
 
 ## VS Code 插件
 

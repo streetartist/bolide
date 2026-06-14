@@ -5,6 +5,7 @@
 mod aot;
 mod builtins;
 mod closure_capture;
+mod ffi_spec;
 mod jit;
 mod monomorph;
 
