@@ -4,6 +4,12 @@
   "description": "Syntax highlighting and run support for Bolide programming language",
   "version": "0.12.1",
   "publisher": "bolide",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/streetartist/bolide.git",
+    "directory": "vscode-bolide"
+  },
   "engines": {
     "vscode": "^1.80.0"
   },
