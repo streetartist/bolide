@@ -22,9 +22,7 @@ impl Lockfile {
             .values()
             .map(|dep| LockedPackage {
                 name: dep.name.clone(),
-                source: source_string(&dep.spec,
-                    &dep.source_path,
-                ),
+                source: source_string(&dep.spec, &dep.source_path),
             })
             .collect();
         packages.sort_by(|a, b| a.name.cmp(&b.name));
@@ -108,7 +106,9 @@ mod tests {
                     "http".to_string(),
                     ResolvedDep {
                         name: "http".to_string(),
-                        spec: DependencySpec::Path { path: "../http".to_string() },
+                        spec: DependencySpec::Path {
+                            path: "../http".to_string(),
+                        },
                         source_path: PathBuf::from("/tmp/http"),
                         entry_file: PathBuf::from("/tmp/http/src/lib.bl"),
                     },

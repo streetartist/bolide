@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::path::{Path};
+use std::path::Path;
 
 use crate::cache;
 use crate::manifest::DependencySpec;
@@ -25,7 +25,12 @@ fn index_url(registry: &str, name: &str) -> String {
     } else {
         format!("{}/{}", &lower[..1], lower)
     };
-    format!("{}/{}/{}.json", registry.trim_end_matches('/'), prefix, name)
+    format!(
+        "{}/{}/{}.json",
+        registry.trim_end_matches('/'),
+        prefix,
+        name
+    )
 }
 
 pub fn fetch_index(registry: &str, name: &str) -> Result<IndexEntry, String> {
@@ -71,13 +76,17 @@ pub fn resolve_registry_dep(
 
     if !dest.exists() {
         cache::ensure_dir(&dest)?;
-        download_and_extract(&matched.download_url,
-            &dest,
-            &matched.checksum,
-        )?;
+        download_and_extract(&matched.download_url, &dest, &matched.checksum)?;
     }
 
-    entry_from_source(name, DependencySpec::Registry { version: version.to_string(), registry: Some(registry.to_string()) }, &dest)
+    entry_from_source(
+        name,
+        DependencySpec::Registry {
+            version: version.to_string(),
+            registry: Some(registry.to_string()),
+        },
+        &dest,
+    )
 }
 
 fn registry_host(registry: &str) -> String {
@@ -160,15 +169,18 @@ fn extract_zip(bytes: &[u8], dest: &Path) -> Result<(), String> {
                 .map_err(|e| format!("Failed to access zip entry: {}", e))?;
             let out_path = dest.join(file.name());
             if file.is_dir() {
-                std::fs::create_dir_all(&out_path)
-                    .map_err(|e| format!("Failed to create zip dir '{}': {}", out_path.display(), e))?;
+                std::fs::create_dir_all(&out_path).map_err(|e| {
+                    format!("Failed to create zip dir '{}': {}", out_path.display(), e)
+                })?;
             } else {
                 if let Some(parent) = out_path.parent() {
-                    std::fs::create_dir_all(parent)
-                        .map_err(|e| format!("Failed to create zip parent '{}': {}", parent.display(), e))?;
+                    std::fs::create_dir_all(parent).map_err(|e| {
+                        format!("Failed to create zip parent '{}': {}", parent.display(), e)
+                    })?;
                 }
-                let mut out = std::fs::File::create(&out_path)
-                    .map_err(|e| format!("Failed to create zip file '{}': {}", out_path.display(), e))?;
+                let mut out = std::fs::File::create(&out_path).map_err(|e| {
+                    format!("Failed to create zip file '{}': {}", out_path.display(), e)
+                })?;
                 std::io::copy(&mut file, &mut out)
                     .map_err(|e| format!("Failed to write zip entry: {}", e))?;
             }
@@ -182,9 +194,18 @@ fn extract_zip(bytes: &[u8], dest: &Path) -> Result<(), String> {
     }
 }
 
-fn entry_from_source(name: &str, spec: DependencySpec, source_path: &Path) -> Result<crate::resolve::ResolvedDep, String> {
-    let manifest = crate::manifest::parse_manifest(&source_path.join("bolide.toml"))
-        .map_err(|e| format!("Dependency '{}' is missing or has invalid bolide.toml: {}", name, e))?;
+fn entry_from_source(
+    name: &str,
+    spec: DependencySpec,
+    source_path: &Path,
+) -> Result<crate::resolve::ResolvedDep, String> {
+    let manifest =
+        crate::manifest::parse_manifest(&source_path.join("bolide.toml")).map_err(|e| {
+            format!(
+                "Dependency '{}' is missing or has invalid bolide.toml: {}",
+                name, e
+            )
+        })?;
     let entry = source_path.join(&manifest.package.lib);
     if !entry.exists() {
         return Err(format!(

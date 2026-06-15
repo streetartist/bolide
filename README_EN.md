@@ -362,8 +362,11 @@ Bolide supports **bidirectional** C interop: it can call C libraries, and it can
 #### Bolide calls C
 
 ```bolide
-extern "msvcrt.dll" {
+extern "dyn:c" {
     fn abs(x: c_int) -> c_int;
+}
+
+extern "dyn:m" {
     fn sqrt(x: c_double) -> c_double;
 }
 
@@ -374,6 +377,30 @@ let b: float = sqrt(16.0);  // 4.0
 fn my_callback(a: int, b: int) -> int { return a + b; }
 let r: int = test_callback(my_callback, 10, 20);
 ```
+
+#### External library specs
+
+Use logical library names in `extern "..."` instead of hard-coding
+platform filenames:
+
+| Spec | Purpose | AOT | JIT | Notes |
+|------|---------|-----|-----|-------|
+| `bolide` | Bolide runtime built-ins | Direct link | Direct link | Intended for standard-library wrappers |
+| `lib:name` | Native static/import-library link | Supported | Not supported | Windows maps to `name.lib`; Unix maps to `-lname` |
+| `dyn:name` | Runtime dynamic loading | Supported | Supported | Windows maps to `name.dll`; Linux to `libname.so`; macOS to `libname.dylib` |
+| `auto:name` | JIT dynamic loading, AOT native link | Supported | Supported | JIT behaves like `dyn:name`; AOT behaves like `lib:name` |
+
+Common aliases:
+- `dyn:c` / `dyn:m`: dynamically load the C/math runtime for the host platform.
+- `lib:c` / `lib:m`: AOT-link the C/math runtime.
+- `auto:c` / `auto:m`: use dynamic loading in JIT and native linking in AOT.
+
+Do not write `extern "foo.dll"`, `extern "libfoo.so"`, or
+`extern "foo.dylib"` in portable Bolide source. Use `auto:name` when you want
+one binding that runs under JIT with a shared library and compiles under AOT
+against a static/import library. AOT becomes single-file only if the linked
+library is a true static library; an import library still requires its DLL at
+runtime.
 
 #### C calls Bolide
 

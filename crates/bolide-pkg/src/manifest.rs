@@ -33,7 +33,9 @@ pub enum DependencySpec {
         #[serde(default = "default_git_ref", rename = "ref")]
         ref_: String,
     },
-    Path { path: String },
+    Path {
+        path: String,
+    },
     Registry {
         version: String,
         #[serde(default)]

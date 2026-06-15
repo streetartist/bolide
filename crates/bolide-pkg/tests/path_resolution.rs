@@ -75,21 +75,30 @@ fn resolves_transitive_path_dependencies() {
         &base.join("bolide.toml"),
         "[package]\nname = \"base\"\nversion = \"0.1.0\"\n",
     );
-    write(&base.join("src").join("lib.bl"), "fn b() -> int { return 1; }\n");
+    write(
+        &base.join("src").join("lib.bl"),
+        "fn b() -> int { return 1; }\n",
+    );
 
     let mid = root.join("mid");
     write(
         &mid.join("bolide.toml"),
         "[package]\nname = \"mid\"\nversion = \"0.1.0\"\n\n[dependencies]\nbase = { path = \"../base\" }\n",
     );
-    write(&mid.join("src").join("lib.bl"), "import base;\nfn m() -> int { return 2; }\n");
+    write(
+        &mid.join("src").join("lib.bl"),
+        "import base;\nfn m() -> int { return 2; }\n",
+    );
 
     let app = root.join("app");
     write(
         &app.join("bolide.toml"),
         "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\nmid = { path = \"../mid\" }\n",
     );
-    write(&app.join("src").join("main.bl"), "import mid;\nfn main() -> int { return 0; }\n");
+    write(
+        &app.join("src").join("main.bl"),
+        "import mid;\nfn main() -> int { return 0; }\n",
+    );
 
     let graph = resolve_dependencies(&app).expect("resolution should succeed");
     assert_eq!(graph.packages.len(), 2, "should resolve mid and base");

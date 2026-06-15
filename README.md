@@ -862,15 +862,18 @@ let r: int = test_callback(my_callback, 10, 20);
 | `bolide` | Bolide runtime 内置函数 | 直接链接 | 直接链接 | 仅标准库内部使用 |
 | `lib:name` | 静态库或导入库链接 | 支持 | 不支持 | Windows 映射为 `name.lib`，Unix 映射为 `-lname` |
 | `dyn:name` | 运行时动态加载 | 支持 | 支持 | Windows 映射为 `name.dll`，Linux 为 `libname.so`，macOS 为 `libname.dylib` |
+| `auto:name` | JIT 动态加载，AOT 原生链接 | 支持 | 支持 | JIT 等同 `dyn:name`；AOT 等同 `lib:name` |
 
 常用别名：
 - `dyn:c` / `dyn:m`: C 标准库 / 数学库动态加载；Windows 解析到 `msvcrt.dll`，Linux 解析到 `libc.so.6` / `libm.so.6`，macOS 解析到 `libSystem.B.dylib`。
 - `lib:c` / `lib:m`: AOT 链接 C 标准库 / 数学库；Windows 使用 `msvcrt.lib`，Unix 使用 `-lc` / `-lm`。
+- `auto:c` / `auto:m`: JIT 时按 `dyn:c` / `dyn:m` 加载，AOT 时按 `lib:c` / `lib:m` 链接。
 
 注意点：
 - 用户代码不要写 `extern "xxx.dll"`、`extern "libxxx.so"` 或 `extern "xxx.dylib"`。这些平台路径不可移植；需要动态加载时写 `dyn:name`。
 - `lib:name` 是 AOT-only。JIT 没有链接阶段，不能链接 `.lib` / `.a` / `-lxxx`；开发期需要 JIT 运行时请使用 `dyn:name`。
 - AOT 中 `dyn:name` 不会传给系统 linker，而是在生成代码里通过 runtime 动态加载。最终程序仍要求目标机器能找到对应动态库。
+- `auto:name` 适合“开发期 JIT 用动态库，发布期 AOT 用静态库/导入库”的单源码写法；AOT 是否真正单文件取决于 `name.lib` / `libname.a` 是否是真静态库，若只是导入库仍需要对应动态库。
 - 必要时 AOT 可以使用平台 linker 能识别的显式库参数（如 `foo.lib`、`libfoo.a`、`-lfoo`）作为逃生口；可移植代码优先使用 `lib:name`。
 - 标准库 wrapper 应隐藏原始 C ABI。普通 Bolide API 应使用 `int`、`float`、`str`、`bytes` 等语言类型；只有写 raw `extern` 绑定时才需要 `c_int`、`c_double`、`*char`、`*void` 等 C ABI 类型。
 - `int` 是 Bolide 64 位整数，不等同于 C `int`。raw `extern` 中需要精确匹配 C 签名时继续使用 `c_*` 类型。

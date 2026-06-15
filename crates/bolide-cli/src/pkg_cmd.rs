@@ -64,8 +64,8 @@ pub fn install() -> miette::Result<()> {
 /// `bolide publish`：第一阶段仅做本地校验。
 pub fn publish() -> miette::Result<()> {
     let project_root = find_project_root_cwd()?;
-    let manifest = parse_manifest(&project_root.join("bolide.toml"))
-        .map_err(|e| miette::miette!("{}", e))?;
+    let manifest =
+        parse_manifest(&project_root.join("bolide.toml")).map_err(|e| miette::miette!("{}", e))?;
 
     let entry = project_root.join(&manifest.package.lib);
     if !entry.exists() {
@@ -78,7 +78,10 @@ pub fn publish() -> miette::Result<()> {
     // 解析依赖以确保所有 import 可达
     resolve_dependencies(&project_root).map_err(|e| miette::miette!("{}", e))?;
 
-    println!("Package '{}' v{} is valid:", manifest.package.name, manifest.package.version);
+    println!(
+        "Package '{}' v{} is valid:",
+        manifest.package.name, manifest.package.version
+    );
     println!("  entry: {}", manifest.package.lib);
     println!("  dependencies: {}", manifest.dependencies.len());
     println!();
@@ -145,10 +148,7 @@ fn build_dependency_entry(
             .map(|s| s.to_string())
             .unwrap_or_else(|| infer_name_from_git(spec));
         let ref_ = tag.unwrap_or("main");
-        let line = format!(
-            "{} = {{ git = \"{}\", ref = \"{}\" }}",
-            name, spec, ref_
-        );
+        let line = format!("{} = {{ git = \"{}\", ref = \"{}\" }}", name, spec, ref_);
         return Ok((name, line));
     }
 
@@ -256,7 +256,10 @@ mod tests {
 
     #[test]
     fn test_infer_name_from_git() {
-        assert_eq!(infer_name_from_git("https://github.com/bolide-lang/http.git"), "http");
+        assert_eq!(
+            infer_name_from_git("https://github.com/bolide-lang/http.git"),
+            "http"
+        );
     }
 
     #[test]
@@ -268,8 +271,7 @@ mod tests {
 
     #[test]
     fn test_build_registry_entry() {
-        let (name, line) =
-            build_dependency_entry("http@1.2.0", None, false, None, None).unwrap();
+        let (name, line) = build_dependency_entry("http@1.2.0", None, false, None, None).unwrap();
         assert_eq!(name, "http");
         assert!(line.contains("version = \"1.2.0\""));
     }

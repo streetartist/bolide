@@ -1,8 +1,17 @@
 pub(crate) const LINK_LIB_PREFIX: &str = "lib:";
 pub(crate) const DYNAMIC_LIB_PREFIX: &str = "dyn:";
+pub(crate) const AUTO_LIB_PREFIX: &str = "auto:";
 
 pub(crate) fn is_dynamic_lib_spec(lib: &str) -> bool {
     lib.starts_with(DYNAMIC_LIB_PREFIX)
+}
+
+pub(crate) fn is_auto_lib_spec(lib: &str) -> bool {
+    lib.starts_with(AUTO_LIB_PREFIX)
+}
+
+pub(crate) fn is_jit_dynamic_lib_spec(lib: &str) -> bool {
+    is_dynamic_lib_spec(lib) || is_auto_lib_spec(lib)
 }
 
 pub(crate) fn validate_extern_lib_spec(lib: &str) -> Result<(), String> {
@@ -18,9 +27,13 @@ pub(crate) fn validate_extern_lib_spec(lib: &str) -> Result<(), String> {
         return validate_logical_lib_name(lib, name);
     }
 
+    if let Some(name) = lib.strip_prefix(AUTO_LIB_PREFIX) {
+        return validate_logical_lib_name(lib, name);
+    }
+
     if is_shared_library_path(lib) {
         return Err(format!(
-            "extern \"{}\" is a platform shared library path. Use `dyn:name` for dynamic loading or `lib:name` for native linking.",
+            "extern \"{}\" is a platform shared library path. Use `dyn:name` for dynamic loading, `lib:name` for native linking, or `auto:name` to use dynamic loading in JIT and native linking in AOT.",
             lib
         ));
     }
@@ -29,9 +42,12 @@ pub(crate) fn validate_extern_lib_spec(lib: &str) -> Result<(), String> {
 }
 
 pub(crate) fn resolve_dynamic_lib_spec(lib: &str) -> Result<String, String> {
-    let name = lib.strip_prefix(DYNAMIC_LIB_PREFIX).ok_or_else(|| {
+    let name = lib
+        .strip_prefix(DYNAMIC_LIB_PREFIX)
+        .or_else(|| lib.strip_prefix(AUTO_LIB_PREFIX))
+        .ok_or_else(|| {
         format!(
-            "extern \"{}\" is not dynamic. Use `dyn:name` for runtime dynamic loading.",
+            "extern \"{}\" is not dynamic. Use `dyn:name` for runtime dynamic loading or `auto:name` for JIT dynamic loading.",
             lib
         )
     })?;
@@ -50,7 +66,7 @@ fn validate_logical_lib_name(spec: &str, name: &str) -> Result<(), String> {
     }
     if name.contains('/') || name.contains('\\') {
         return Err(format!(
-            "extern \"{}\" contains a path separator. Use a logical library name such as `lib:m` or `dyn:sqlite3`.",
+            "extern \"{}\" contains a path separator. Use a logical library name such as `lib:m`, `dyn:sqlite3`, or `auto:sqlite3`.",
             spec
         ));
     }

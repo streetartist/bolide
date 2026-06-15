@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::cache;
-use crate::manifest::{DependencySpec, Manifest, parse_manifest};
+use crate::manifest::{parse_manifest, DependencySpec, Manifest};
 use crate::registry::resolve_registry_dep;
 
 #[derive(Debug, Clone)]
@@ -29,12 +29,7 @@ pub fn resolve_dependencies(project_root: &Path) -> Result<DependencyGraph, Stri
     };
 
     let mut chain: Vec<String> = Vec::new();
-    resolve_node(
-        project_root,
-        &graph.root,
-        &mut graph.packages,
-        &mut chain,
-    )?;
+    resolve_node(project_root, &graph.root, &mut graph.packages, &mut chain)?;
 
     Ok(graph)
 }
@@ -66,12 +61,7 @@ fn resolve_node(
 
         let dep_source_path = resolved.source_path.clone();
         packages.insert(name.clone(), resolved);
-        resolve_node(
-            &dep_source_path,
-            &dep_manifest,
-            packages,
-            chain,
-        )?;
+        resolve_node(&dep_source_path, &dep_manifest, packages, chain)?;
     }
 
     chain.pop();
@@ -138,12 +128,26 @@ fn resolve_path(package_root: &Path, name: &str, path: &str) -> Result<ResolvedD
             e
         )
     })?;
-    entry_from_source(name, DependencySpec::Path { path: abs.to_string_lossy().to_string() }, &abs)
+    entry_from_source(
+        name,
+        DependencySpec::Path {
+            path: abs.to_string_lossy().to_string(),
+        },
+        &abs,
+    )
 }
 
-fn entry_from_source(name: &str, spec: DependencySpec, source_path: &Path) -> Result<ResolvedDep, String> {
-    let manifest = parse_manifest(&source_path.join("bolide.toml"))
-        .map_err(|e| format!("Dependency '{}' is missing or has invalid bolide.toml: {}", name, e))?;
+fn entry_from_source(
+    name: &str,
+    spec: DependencySpec,
+    source_path: &Path,
+) -> Result<ResolvedDep, String> {
+    let manifest = parse_manifest(&source_path.join("bolide.toml")).map_err(|e| {
+        format!(
+            "Dependency '{}' is missing or has invalid bolide.toml: {}",
+            name, e
+        )
+    })?;
     let entry = source_path.join(&manifest.package.lib);
     if !entry.exists() {
         return Err(format!(
@@ -216,7 +220,10 @@ fn git_clone(url: &str, dest: &Path, ref_: &str) -> Result<(), String> {
         run_git(&["checkout", ref_], Some(dest))?;
     } else {
         // tag 或分支：浅克隆指定 ref
-        run_git(&["clone", "--depth", "1", "--branch", ref_, url, &dest_str], None)?;
+        run_git(
+            &["clone", "--depth", "1", "--branch", ref_, url, &dest_str],
+            None,
+        )?;
     }
     Ok(())
 }
@@ -277,7 +284,11 @@ mod tests {
     fn test_parse_git_url() {
         assert_eq!(
             parse_git_url("https://github.com/bolide-lang/http.git").unwrap(),
-            ("github.com".to_string(), "bolide-lang".to_string(), "http".to_string())
+            (
+                "github.com".to_string(),
+                "bolide-lang".to_string(),
+                "http".to_string()
+            )
         );
     }
 
@@ -285,7 +296,11 @@ mod tests {
     fn test_parse_git_url_ssh() {
         assert_eq!(
             parse_git_url("git@github.com:bolide-lang/http.git").unwrap(),
-            ("github.com".to_string(), "bolide-lang".to_string(), "http".to_string())
+            (
+                "github.com".to_string(),
+                "bolide-lang".to_string(),
+                "http".to_string()
+            )
         );
     }
 }

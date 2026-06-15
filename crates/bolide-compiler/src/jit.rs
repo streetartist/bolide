@@ -3,7 +3,7 @@
 //! 使用 Cranelift 实现的即时编译器
 
 use crate::ffi_spec::{
-    is_dynamic_lib_spec, resolve_dynamic_lib_spec, validate_extern_lib_spec, LINK_LIB_PREFIX,
+    is_jit_dynamic_lib_spec, resolve_dynamic_lib_spec, validate_extern_lib_spec, LINK_LIB_PREFIX,
 };
 use crate::inject_builtin_classes;
 use bolide_parser::{
@@ -22,7 +22,7 @@ fn validate_jit_extern_lib_path(lib_path: &str) -> Result<(), String> {
         return Ok(());
     }
     validate_extern_lib_spec(lib_path)?;
-    if is_dynamic_lib_spec(lib_path) {
+    if is_jit_dynamic_lib_spec(lib_path) {
         return Ok(());
     }
     if lib_path.starts_with(LINK_LIB_PREFIX) || lib_path.starts_with("std:") {
@@ -32,7 +32,7 @@ fn validate_jit_extern_lib_path(lib_path: &str) -> Result<(), String> {
         ));
     }
     Err(format!(
-        "extern \"{}\" is not a JIT-loadable library. Use `dyn:name` for dynamic loading or `lib:name` with `bolide compile`.",
+        "extern \"{}\" is not a JIT-loadable library. Use `dyn:name` for dynamic loading, `auto:name` for JIT dynamic/AOT native linking, or `lib:name` with `bolide compile`.",
         lib_path
     ))
 }
@@ -14580,7 +14580,7 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             return self.compile_linked_extern_call(extern_func, args);
         }
 
-        if is_dynamic_lib_spec(lib_path) {
+        if is_jit_dynamic_lib_spec(lib_path) {
             return self.compile_dynamic_extern_call(lib_path, extern_func, args);
         }
 

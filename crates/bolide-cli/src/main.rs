@@ -10,6 +10,7 @@ use bolide_parser::parse_source;
 mod pkg_cmd;
 
 const NATIVE_LIB_PREFIX: &str = "lib:";
+const AUTO_LIB_PREFIX: &str = "auto:";
 
 fn is_shared_library_path(lib: &str) -> bool {
     let lower = lib.to_ascii_lowercase();
@@ -20,6 +21,14 @@ fn native_lib_name(lib: &str) -> miette::Result<Option<&str>> {
     if let Some(name) = lib.strip_prefix(NATIVE_LIB_PREFIX) {
         if name.is_empty() {
             return Err(miette::miette!("extern \"lib:\" is missing a library name"));
+        }
+        return Ok(Some(name));
+    }
+    if let Some(name) = lib.strip_prefix(AUTO_LIB_PREFIX) {
+        if name.is_empty() {
+            return Err(miette::miette!(
+                "extern \"auto:\" is missing a library name"
+            ));
         }
         return Ok(Some(name));
     }
@@ -233,7 +242,13 @@ fn main() -> miette::Result<()> {
             registry,
             name,
         }) => {
-            pkg_cmd::add_dependency(&spec, tag.as_deref(), path, registry.as_deref(), name.as_deref())?;
+            pkg_cmd::add_dependency(
+                &spec,
+                tag.as_deref(),
+                path,
+                registry.as_deref(),
+                name.as_deref(),
+            )?;
         }
         Some(Commands::Install) => {
             pkg_cmd::install()?;
@@ -283,7 +298,11 @@ fn load_dependency_manifest(
     // 把解析出的依赖图映射成编译器使用的最小依赖映射。
     let mut manifest = bolide_compiler::DependencyManifest::new();
     for (name, dep) in &graph.packages {
-        manifest.insert(name.clone(), dep.source_path.clone(), dep.entry_file.clone());
+        manifest.insert(
+            name.clone(),
+            dep.source_path.clone(),
+            dep.entry_file.clone(),
+        );
     }
     Ok(Some(manifest))
 }
