@@ -11,5 +11,6 @@ path = "src/main.rs"
 bolide-parser = { path = "../bolide-parser" }
 bolide-compiler = { path = "../bolide-compiler" }
 bolide-runtime = { path = "../bolide-runtime" }
+bolide-pkg = { path = "../bolide-pkg" }
 clap.workspace = true
 miette.workspace = true

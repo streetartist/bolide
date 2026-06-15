@@ -5,6 +5,7 @@ members = [
     "crates/bolide-parser",
     "crates/bolide-compiler",
     "crates/bolide-runtime",
+    "crates/bolide-pkg",
 ]
 
 [workspace.package]
@@ -39,6 +40,11 @@ thiserror = "2"
 
 # CLI
 clap = { version = "4", features = ["derive"] }
+
+# 包管理器
+toml = "0.8"
+serde = { version = "1", features = ["derive"] }
+reqwest = { version = "0.12", features = ["blocking", "json"] }
 
 # 工具
 once_cell = "1.19"

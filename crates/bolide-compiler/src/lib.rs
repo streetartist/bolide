@@ -5,6 +5,7 @@
 mod aot;
 mod builtins;
 mod closure_capture;
+mod deps;
 mod ffi_spec;
 mod jit;
 mod monomorph;
@@ -12,6 +13,7 @@ mod monomorph;
 pub use aot::AotCompileResult;
 pub use aot::AotCompiler;
 pub use aot::RUNTIME_SYMBOLS;
+pub use deps::DependencyManifest;
 pub use jit::JitCompiler;
 
 pub(crate) use builtins::inject_builtin_classes;

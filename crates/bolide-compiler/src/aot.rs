@@ -146,6 +146,8 @@ pub struct AotCompiler {
     lib_mode: bool,
     /// 源文件所在目录（import 相对路径的解析基准）
     base_dir: Option<String>,
+    /// 包管理器解析出的依赖映射
+    dependency_manifest: Option<crate::deps::DependencyManifest>,
     /// 闭包计数器（生成唯一 lifted 函数名）
     closure_counter: usize,
     /// 待编译的 lifted 闭包函数
@@ -645,6 +647,7 @@ impl AotCompiler {
             export_funcs: Vec::new(),
             lib_mode: false,
             base_dir: None,
+            dependency_manifest: None,
             program_snapshot: Program { statements: vec![] },
             closure_counter: 0,
             pending_closures: Vec::new(),
@@ -654,6 +657,11 @@ impl AotCompiler {
     /// 设置源文件所在目录（import 相对路径的解析基准）
     pub fn set_base_dir(&mut self, dir: &str) {
         self.base_dir = Some(dir.to_string());
+    }
+
+    /// 设置包管理器解析出的依赖映射
+    pub fn set_dependency_manifest(&mut self, manifest: crate::deps::DependencyManifest) {
+        self.dependency_manifest = Some(manifest);
     }
 
     /// 库模式：不生成合成入口 `main`，使产物可作为静态库被 C 程序链接。
@@ -1502,6 +1510,23 @@ impl AotCompiler {
 
         for stmt in &program.statements {
             if let Statement::Import(import) = stmt {
+                // 包管理器：import http; 形式，将 path 解析为 file_path。
+                // AOT 用 alias 作为模块命名空间，因此把包名设为别名。
+                let mut import = import.clone();
+                if import.file_path.is_none() && !import.path.is_empty() {
+                    let pkg_name = &import.path[0];
+                    if let Some(ref manifest) = self.dependency_manifest {
+                        if let Some(entry) = manifest.entry_file(pkg_name) {
+                            if entry.exists() {
+                                import.file_path = Some(entry.to_string_lossy().to_string());
+                                if import.alias.is_none() {
+                                    import.alias = Some(pkg_name.clone());
+                                }
+                            }
+                        }
+                    }
+                }
+
                 if let Some(ref file_path) = import.file_path {
                     if imported_files.contains(file_path) {
                         continue;
@@ -1859,8 +1884,9 @@ impl AotCompiler {
     /// 解析 import 路径（确定性顺序，不依赖进程工作目录）：
     /// 1. 绝对路径按原样使用
     /// 2. 相对路径基于导入方源文件所在目录
-    /// 3. BOLIDE_HOME 环境变量（开发期指向仓库根）
-    /// 4. 可执行文件所在目录（发行版布局：std/ 与 bolide 可执行文件同级）
+    /// 3. 依赖 manifest（包管理器解析出的包）
+    /// 4. BOLIDE_HOME 环境变量（开发期指向仓库根）
+    /// 5. 可执行文件所在目录（发行版布局：std/ 与 bolide 可执行文件同级）
     fn resolve_import_path(&self, file_path: &str) -> String {
         let p = Path::new(file_path);
         if p.is_absolute() {
@@ -1870,6 +1896,33 @@ impl AotCompiler {
             let joined = Path::new(base).join(p);
             if joined.exists() {
                 return joined.to_string_lossy().to_string();
+            }
+        }
+        // 包管理器依赖 manifest
+        if let Some(ref manifest) = self.dependency_manifest {
+            if let Some(entry) = manifest.entry_file(file_path) {
+                if entry.exists() {
+                    return entry.to_string_lossy().to_string();
+                }
+            }
+            if let Some(first_sep) = file_path.find('/') {
+                let pkg_name = &file_path[..first_sep];
+                let rest = &file_path[first_sep + 1..];
+                // 优先相对入口文件所在目录（通常是 src/），再退回包根目录
+                if let Some(entry) = manifest.entries.get(pkg_name) {
+                    if let Some(src_dir) = entry.parent() {
+                        let joined = src_dir.join(rest);
+                        if joined.exists() {
+                            return joined.to_string_lossy().to_string();
+                        }
+                    }
+                }
+                if let Some(pkg_root) = manifest.packages.get(pkg_name) {
+                    let joined = pkg_root.join(rest);
+                    if joined.exists() {
+                        return joined.to_string_lossy().to_string();
+                    }
+                }
             }
         }
         if let Ok(home) = std::env::var("BOLIDE_HOME") {

@@ -7,6 +7,8 @@ use std::process::Command;
 use bolide_compiler::{AotCompiler, JitCompiler};
 use bolide_parser::parse_source;
 
+mod pkg_cmd;
+
 const NATIVE_LIB_PREFIX: &str = "lib:";
 
 fn is_shared_library_path(lib: &str) -> bool {
@@ -166,6 +168,32 @@ enum Commands {
         #[arg(long)]
         header: bool,
     },
+    /// Create a new Bolide project skeleton
+    New {
+        /// Project name (also the new directory name)
+        name: String,
+    },
+    /// Add a dependency to bolide.toml and install it
+    Add {
+        /// Dependency spec: git URL, local path, or name@version
+        spec: String,
+        /// Git tag or branch to use (for git dependencies)
+        #[arg(long)]
+        tag: Option<String>,
+        /// Treat the spec as a local path dependency
+        #[arg(long)]
+        path: bool,
+        /// Registry URL (for name@version dependencies)
+        #[arg(long)]
+        registry: Option<String>,
+        /// Override the dependency name (defaults to the package's own name)
+        #[arg(long)]
+        name: Option<String>,
+    },
+    /// Resolve dependencies declared in bolide.toml and write bolide.lock
+    Install,
+    /// Validate the current package for publishing (registry upload not yet implemented)
+    Publish,
 }
 
 fn main() -> miette::Result<()> {
@@ -195,12 +223,69 @@ fn main() -> miette::Result<()> {
                 compile_file(&file, &out, header)?;
             }
         }
+        Some(Commands::New { name }) => {
+            pkg_cmd::new_project(&name)?;
+        }
+        Some(Commands::Add {
+            spec,
+            tag,
+            path,
+            registry,
+            name,
+        }) => {
+            pkg_cmd::add_dependency(&spec, tag.as_deref(), path, registry.as_deref(), name.as_deref())?;
+        }
+        Some(Commands::Install) => {
+            pkg_cmd::install()?;
+        }
+        Some(Commands::Publish) => {
+            pkg_cmd::publish()?;
+        }
         None => {
             run_repl()?;
         }
     }
 
     Ok(())
+}
+
+/// 沿父目录向上查找包含 bolide.toml 的项目根目录。
+fn find_project_root(start: &Path) -> Option<PathBuf> {
+    let mut dir = if start.is_dir() {
+        Some(start.to_path_buf())
+    } else {
+        start.parent().map(|p| p.to_path_buf())
+    };
+    while let Some(current) = dir {
+        if current.join("bolide.toml").exists() {
+            return Some(current);
+        }
+        dir = current.parent().map(|p| p.to_path_buf());
+    }
+    None
+}
+
+/// 若源文件位于一个 Bolide 项目内，解析依赖并构造编译器使用的依赖映射。
+/// 没有 bolide.toml 时返回 None（保持单文件项目的原有行为）。
+fn load_dependency_manifest(
+    file: &Path,
+) -> miette::Result<Option<bolide_compiler::DependencyManifest>> {
+    // 规范化为绝对路径，避免相对路径在父目录遍历时产生空路径。
+    let abs = file
+        .canonicalize()
+        .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default().join(file));
+    let Some(project_root) = find_project_root(&abs) else {
+        return Ok(None);
+    };
+    let graph = bolide_pkg::resolve_dependencies(&project_root)
+        .map_err(|e| miette::miette!("Dependency resolution error: {}", e))?;
+
+    // 把解析出的依赖图映射成编译器使用的最小依赖映射。
+    let mut manifest = bolide_compiler::DependencyManifest::new();
+    for (name, dep) in &graph.packages {
+        manifest.insert(name.clone(), dep.source_path.clone(), dep.entry_file.clone());
+    }
+    Ok(Some(manifest))
 }
 
 fn run_file(file: &PathBuf) -> miette::Result<()> {
@@ -214,6 +299,10 @@ fn run_file(file: &PathBuf) -> miette::Result<()> {
     // import 相对路径基于源文件所在目录解析
     if let Some(parent) = file.parent() {
         compiler.set_base_dir(&parent.to_string_lossy());
+    }
+    // 若存在项目 manifest，加载依赖映射注入编译器
+    if let Some(manifest) = load_dependency_manifest(file)? {
+        compiler.set_dependency_manifest(manifest);
     }
     let main_ptr = compiler
         .compile(&ast)
@@ -258,6 +347,9 @@ fn compile_file(file: &PathBuf, output: &PathBuf, header: bool) -> miette::Resul
     // import 相对路径基于源文件所在目录解析
     if let Some(parent) = file.parent() {
         compiler.set_base_dir(&parent.to_string_lossy());
+    }
+    if let Some(manifest) = load_dependency_manifest(file)? {
+        compiler.set_dependency_manifest(manifest);
     }
 
     let result = compiler
@@ -308,6 +400,9 @@ fn compile_lib(file: &PathBuf, output: &PathBuf, header: bool) -> miette::Result
     compiler.set_lib_mode(true);
     if let Some(parent) = file.parent() {
         compiler.set_base_dir(&parent.to_string_lossy());
+    }
+    if let Some(manifest) = load_dependency_manifest(file)? {
+        compiler.set_dependency_manifest(manifest);
     }
 
     let result = compiler

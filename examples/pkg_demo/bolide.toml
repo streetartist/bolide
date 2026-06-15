@@ -1,0 +1,7 @@
+[package]
+name = "pkg_demo"
+version = "0.1.0"
+description = "Demonstrates using a local path dependency"
+
+[dependencies]
+greeter = { path = "../greeter" }

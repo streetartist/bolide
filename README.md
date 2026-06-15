@@ -685,8 +685,87 @@ print(mu.add(1, 2));  // 3
 
 1. 绝对路径按原样使用；
 2. 相对路径基于**导入方源文件所在目录**解析；
-3. `BOLIDE_HOME` 环境变量指向的目录（开发期可指向仓库根，以便 `import "std/..."`）；
-4. `bolide` 可执行文件所在目录（发行版布局：`std/` 与可执行文件同级）。
+3. **包管理器依赖**（`bolide.toml` 中声明的依赖，见下方[包管理器](#包管理器)）；
+4. `BOLIDE_HOME` 环境变量指向的目录（开发期可指向仓库根，以便 `import "std/..."`）；
+5. `bolide` 可执行文件所在目录（发行版布局：`std/` 与可执行文件同级）。
+
+## 包管理器
+
+Bolide 内置轻量级包管理器，支持在 `bolide.toml` 中声明依赖，从 **git 仓库**、
+**本地路径**或 **registry 索引**获取，并以简洁的 `import <包名>;` 语法使用。
+
+### 创建项目
+
+```bash
+bolide new myapp
+```
+
+生成骨架：
+
+```
+myapp/
+  bolide.toml
+  src/
+    main.bl
+```
+
+### bolide.toml
+
+```toml
+[package]
+name = "myapp"          # 必填，作为依赖被引用时的命名空间
+version = "0.1.0"       # 必填
+description = "..."     # 可选
+authors = ["..."]       # 可选
+license = "MIT"         # 可选
+lib = "src/lib.bl"      # 可选，包入口文件（默认 src/lib.bl）
+
+[dependencies]
+# git 依赖
+http = { git = "https://github.com/bolide-lang/http.git", ref = "v1.2.0" }
+# 本地路径依赖（monorepo 开发，改动即时生效）
+utils = { path = "../utils" }
+# registry 依赖
+db = { version = "0.3.0", registry = "https://registry.bolide.dev" }
+```
+
+### 命令
+
+```bash
+bolide add ../utils --path                 # 添加本地路径依赖
+bolide add https://github.com/x/y.git --tag v1.0   # 添加 git 依赖
+bolide add http@1.2.0                       # 添加 registry 依赖
+bolide install                              # 解析依赖并生成 bolide.lock
+bolide publish                              # 校验包（registry 上传暂未实现）
+```
+
+`bolide add` 会把依赖写入 `bolide.toml` 并自动运行 `install`。
+
+### 使用依赖
+
+依赖以包名作为命名空间，无需写相对路径：
+
+```bolide
+// src/main.bl
+import utils;                 // 解析到 utils 包的入口文件
+
+fn main() -> int {
+    print(utils.greet());     // 调用依赖包导出的函数
+    return 0;
+}
+```
+
+也支持别名与子文件导入：
+
+```bolide
+import utils as u;            // 别名
+import "utils/extra.bl";      // 导入包内的其他源文件（相对包源码目录）
+```
+
+`bolide run` / `bolide compile` 会自动向上查找 `bolide.toml`，解析依赖后注入编译器，
+因此 JIT 与 AOT 两种模式都能使用包依赖。缓存位于
+`%LOCALAPPDATA%\bolide`（Windows）或 `~/.cache/bolide`（Linux/macOS），
+可用 `BOLIDE_CACHE_DIR` 环境变量覆盖。
 
 ### 标识符与内置函数隔离
 

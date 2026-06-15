@@ -1,10 +1,13 @@
 # Rust 编译产物
 /target/
 target-codex-*/
+/.tools/
 **/*.rs.bk
 Cargo.lock
 
 # 本地编译/链接产物
+/dist/
+/release/
 *.exe
 *.o
 *.obj

@@ -147,6 +147,8 @@ pub struct JitCompiler {
     global_data_ids: HashMap<String, cranelift_module::DataId>,
     /// 源文件所在目录（import 相对路径的解析基准）
     base_dir: Option<String>,
+    /// 包管理器解析出的依赖映射
+    dependency_manifest: Option<crate::deps::DependencyManifest>,
     /// 全局变量类型映射
     global_var_types: HashMap<String, BolideType>,
     /// 闭包计数器（生成唯一 lifted 函数名）
@@ -1841,6 +1843,7 @@ impl JitCompiler {
             global_data_ids: HashMap::new(),
             global_var_types: HashMap::new(),
             base_dir: None,
+            dependency_manifest: None,
             closure_counter: 0,
             pending_closures: Vec::new(),
         }
@@ -1849,6 +1852,11 @@ impl JitCompiler {
     /// 设置源文件所在目录（import 相对路径的解析基准）
     pub fn set_base_dir(&mut self, dir: &str) {
         self.base_dir = Some(dir.to_string());
+    }
+
+    /// 设置包管理器解析出的依赖映射
+    pub fn set_dependency_manifest(&mut self, manifest: crate::deps::DependencyManifest) {
+        self.dependency_manifest = Some(manifest);
     }
 
     /// 编译程序并返回入口函数指针
@@ -2010,9 +2018,28 @@ impl JitCompiler {
         let mut alias_pairs: Vec<(String, String)> = Vec::new();
         for stmt in &program.statements {
             if let Statement::Import(import) = stmt {
+                // 包管理器：import http; 形式，将 path 解析为 file_path。
+                // 入口文件通常名为 lib.bl，若用文件名作为模块名会导致不同包冲突，
+                // 因此包导入统一使用包名作为模块命名空间。
+                let mut import = import.clone();
+                let mut pkg_module_name: Option<String> = None;
+                if import.file_path.is_none() && !import.path.is_empty() {
+                    let pkg_name = &import.path[0];
+                    if let Some(ref manifest) = self.dependency_manifest {
+                        if let Some(entry) = manifest.entry_file(pkg_name) {
+                            if entry.exists() {
+                                import.file_path = Some(entry.to_string_lossy().to_string());
+                                pkg_module_name = Some(pkg_name.clone());
+                            }
+                        }
+                    }
+                }
+
                 if let Some(ref file_path) = import.file_path {
-                    // 从文件名提取模块名
-                    let module_name = Self::extract_module_name(file_path);
+                    // 模块名：包导入用包名，普通文件导入用文件名（保持原有行为）
+                    let module_name = pkg_module_name
+                        .clone()
+                        .unwrap_or_else(|| Self::extract_module_name(file_path));
 
                     // import ... as 别名：记录别名，稍后把主程序里的
                     // alias.f / alias.Type 重写为 module.f / module.Type
@@ -2829,8 +2856,9 @@ impl JitCompiler {
     /// 解析 import 路径（确定性顺序，不依赖进程工作目录）：
     /// 1. 绝对路径按原样使用
     /// 2. 相对路径基于导入方源文件所在目录
-    /// 3. BOLIDE_HOME 环境变量（开发期指向仓库根）
-    /// 4. 可执行文件所在目录（发行版布局：std/ 与 bolide 可执行文件同级）
+    /// 3. 依赖 manifest（包管理器解析出的包）
+    /// 4. BOLIDE_HOME 环境变量（开发期指向仓库根）
+    /// 5. 可执行文件所在目录（发行版布局：std/ 与 bolide 可执行文件同级）
     fn resolve_import_path(&self, file_path: &str) -> String {
         let p = std::path::Path::new(file_path);
         if p.is_absolute() {
@@ -2841,6 +2869,35 @@ impl JitCompiler {
             let joined = std::path::Path::new(base).join(p);
             if joined.exists() {
                 return joined.to_string_lossy().to_string();
+            }
+        }
+        // 包管理器依赖 manifest
+        if let Some(ref manifest) = self.dependency_manifest {
+            // import http; 形式在 process_imports 中被转为 file_path
+            if let Some(entry) = manifest.entry_file(file_path) {
+                if entry.exists() {
+                    return entry.to_string_lossy().to_string();
+                }
+            }
+            // import "http/utils.bl"; 形式
+            if let Some(first_sep) = file_path.find('/') {
+                let pkg_name = &file_path[..first_sep];
+                let rest = &file_path[first_sep + 1..];
+                // 优先相对入口文件所在目录（通常是 src/），再退回包根目录
+                if let Some(entry) = manifest.entries.get(pkg_name) {
+                    if let Some(src_dir) = entry.parent() {
+                        let joined = src_dir.join(rest);
+                        if joined.exists() {
+                            return joined.to_string_lossy().to_string();
+                        }
+                    }
+                }
+                if let Some(pkg_root) = manifest.packages.get(pkg_name) {
+                    let joined = pkg_root.join(rest);
+                    if joined.exists() {
+                        return joined.to_string_lossy().to_string();
+                    }
+                }
             }
         }
         // BOLIDE_HOME（显式指定的标准库根）

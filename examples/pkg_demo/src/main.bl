@@ -1,0 +1,8 @@
+// 使用 greeter 包的示例程序。
+// 运行：  bolide run examples/pkg_demo/src/main.bl
+// 编译：  bolide compile examples/pkg_demo/src/main.bl -o pkg_demo
+
+import greeter;
+
+print(greeter.greet());
+print(greeter.greet_name("Bolide"));

@@ -1,0 +1,9 @@
+// greeter 包入口。被其他项目通过 `import greeter;` 使用。
+
+fn greet() -> str {
+    return "Hello from the greeter package!";
+}
+
+fn greet_name(name: str) -> str {
+    return "Hello, " + name + "!";
+}

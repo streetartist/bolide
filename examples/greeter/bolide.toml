@@ -1,0 +1,5 @@
+[package]
+name = "greeter"
+version = "0.1.0"
+description = "A tiny example dependency package"
+lib = "src/lib.bl"
