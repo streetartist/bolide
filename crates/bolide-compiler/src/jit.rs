@@ -1426,6 +1426,10 @@ impl JitCompiler {
             bolide_runtime::bolide_gui_button as *const u8,
         );
         builder.symbol(
+            "bolide_gui_selectable",
+            bolide_runtime::bolide_gui_selectable as *const u8,
+        );
+        builder.symbol(
             "bolide_gui_link",
             bolide_runtime::bolide_gui_link as *const u8,
         );
@@ -7915,7 +7919,13 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                 self.ref_params_reassigned.insert(var_name.to_string());
             }
 
-            let raw_val = self.compile_expr(value)?;
+            let raw_val = if matches!(value, Expr::List(items) if items.is_empty())
+                && matches!(var_ty.as_ref(), Some(BolideType::List(_)))
+            {
+                self.compile_list_with_hint(&[], var_ty.as_ref())?
+            } else {
+                self.compile_expr(value)?
+            };
             let val = if let Some(ref ty) = var_ty {
                 let raw_ty = self.normalize_bolide_type(&self.infer_expr_type(value));
                 self.prepare_value_for_storage(raw_val, &raw_ty, ty)?
@@ -7975,7 +7985,13 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             let addr = self.builder.ins().global_value(self.ptr_type, gv);
 
             // 先编译新值表达式(这样可以正确读取旧值, 例如 expr = expr + "1")
-            let raw_val = self.compile_expr(value)?;
+            let raw_val = if matches!(value, Expr::List(items) if items.is_empty())
+                && matches!(global_ty.as_ref(), Some(BolideType::List(_)))
+            {
+                self.compile_list_with_hint(&[], global_ty.as_ref())?
+            } else {
+                self.compile_expr(value)?
+            };
             let val = if let Some(ref ty) = global_ty {
                 let raw_ty = self.normalize_bolide_type(&self.infer_expr_type(value));
                 self.prepare_value_for_storage(raw_val, &raw_ty, ty)?

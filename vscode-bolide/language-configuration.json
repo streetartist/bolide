@@ -24,6 +24,7 @@
             ">"
         ]
     ],
+    "wordPattern": "(-?\\d*\\.\\d\\w*)|([^`~!@#%^&*()\\-=+[{]}\\\\|;:'\",.<>/?\\s]+)",
     "autoClosingPairs": [
         {
             "open": "{",
@@ -39,13 +40,18 @@
         },
         {
             "open": "<",
-            "close": ">"
+            "close": ">",
+            "notIn": [
+                "string",
+                "comment"
+            ]
         },
         {
             "open": "\"",
             "close": "\"",
             "notIn": [
-                "string"
+                "string",
+                "comment"
             ]
         },
         {
@@ -87,5 +93,29 @@
     "indentationRules": {
         "increaseIndentPattern": "^.*\\{[^}]*$",
         "decreaseIndentPattern": "^\\s*\\}"
-    }
+    },
+    "onEnterRules": [
+        {
+            "beforeText": "^\\s*/\\*\\*(?!/)([^*]|\\*(?!/))*$",
+            "afterText": "^\\s*\\*/$",
+            "action": {
+                "indentAction": "IndentOutdent",
+                "appendText": " * "
+            }
+        },
+        {
+            "beforeText": "^\\s*/\\*\\*(?!/)([^*]|\\*(?!/))*$",
+            "action": {
+                "indentAction": "None",
+                "appendText": " * "
+            }
+        },
+        {
+            "beforeText": "^(\\t|[ ])*\\*(\\s([^*]|\\*(?!/))*)?$",
+            "action": {
+                "indentAction": "None",
+                "appendText": "* "
+            }
+        }
+    ]
 }

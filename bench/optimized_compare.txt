@@ -1,9 +1,0 @@
-===================================
-tests : PASS=104 FAIL=6 / 110
------------------------------------
-[DIFF    ] test_async_select.bl  
-[DIFF    ] test_dict.bl  
-[DIFF    ] test_mixed_tuple.bl  
-[RTIMEOUT] baseline_mem.bl  
-[RTIMEOUT] fib_calculator.bl  
-[RTIMEOUT] test_input.bl  

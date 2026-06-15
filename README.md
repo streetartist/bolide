@@ -12,7 +12,7 @@
     <img src="https://img.shields.io/badge/License-MIT-brightgreen.svg" alt="License: MIT">
   </a>
   <a href="#">
-    <img src="https://img.shields.io/badge/version-0.10.1-blue.svg" alt="Version">
+    <img src="https://img.shields.io/badge/version-0.12.1-blue.svg" alt="Version">
   </a>
   <a href="#">
     <img src="https://img.shields.io/badge/platform-windows%20%7C%20linux-lightgrey.svg" alt="Platform">
@@ -108,10 +108,6 @@ bolide compile mathlib.bl --lib --header
 其余函数保持内部命名空间隔离。生成的 `.h` 只声明 `export fn` 函数。链接时需同时带上
 Bolide 运行时静态库（`bolide_runtime.lib` / `libbolide_runtime.a`）。详见下方
 [FFI](#ffi-c-语言互操作) 一节。
-
-> **注意**: AOT 与 JIT 现已高度对齐（JIT 仍为参考实现）。两者输出在测试套件中逐项比对一致。
-> 剩余少数差异为环境相关（stdin、堆地址、`HashMap` 迭代顺序、线程/协程调度的非确定性），
-> 而非功能缺失。开发阶段推荐 JIT（`bolide run`）快速迭代，发布前用 AOT 编译验证。
 
 ## 语法示例
 
@@ -785,7 +781,6 @@ let r: int = test_callback(my_callback, 10, 20);
 | 标识 | 用途 | AOT | JIT | 说明 |
 |------|------|-----|-----|------|
 | `bolide` | Bolide runtime 内置函数 | 直接链接 | 直接链接 | 仅标准库内部使用 |
-| `std:gui` | 标准库原生 C 实现 | 自动编译/链接 | 暂不支持 | 当前为 Win32 GUI，AOT 会把 `std/gui/gui.c` 编进最终 exe |
 | `lib:name` | 静态库或导入库链接 | 支持 | 不支持 | Windows 映射为 `name.lib`，Unix 映射为 `-lname` |
 | `dyn:name` | 运行时动态加载 | 支持 | 支持 | Windows 映射为 `name.dll`，Linux 为 `libname.so`，macOS 为 `libname.dylib` |
 
@@ -1091,32 +1086,33 @@ bolide/
 
 ## 标准库实现方式
 
-Bolide 标准库通常由 `.bl` 包装层加底层实现组成，目前主要有三种写法：
+Bolide 标准库通常由 `.bl` 包装层加底层实现组成。用户侧通过 `import "std/..."` 使用稳定的 Bolide API，底层实现由工具链处理。
 
 1. **Rust runtime 内置库**
    - 适合语言核心标准库、跨平台能力，以及需要和 Bolide 运行时对象配合的功能。
-   - 底层实现位于 `crates/bolide-runtime/src/`，通过 `extern "bolide"` 暴露给 `.bl` 标准库。
-   - 例如 `std/fs/fs.bl` 的文件读写接口由 runtime 中的 `bolide_fs_*` 函数实现。
+   - 底层实现位于 `crates/bolide-runtime/src/`，通过 `extern "bolide"` 暴露给 `.bl` 包装层。
+   - AOT 时随 `bolide_runtime.lib` / `libbolide_runtime.a` 静态链接进最终程序；JIT 时由当前 `bolide` 进程直接解析 runtime 符号。
+   - 例如 `std/fs/fs.bl`、`std/web/web.bl`、`std/gui/gui.bl` 当前都使用这种模式。
 
-2. **独立原生标准库**
-   - 适合不应该塞进 Bolide runtime、但希望 AOT 时自动编进最终可执行文件的功能。
-   - `.bl` 包装层使用 `extern "std:name"`，CLI 识别后编译/链接对应 C 源或静态库。
-   - 例如 `std/gui/gui.bl` 使用 `extern "std:gui"`；AOT 时自动编译 `std/gui/gui.c` 并链接 Win32 系统库，用户不需要携带 `gui.dll`。
-   - `std:gui` 当前是 Win32 C 实现，AOT 需要本机可用的 `clang`、`clang-cl` 或 MSVC `cl.exe`，以及对应 Windows SDK 库；JIT 暂不加载 `std:gui`。
+2. **独立静态标准库**
+   - 适合保持为独立模块、又希望由 Bolide 工具链自动管理的平台能力或较大组件。
+   - `.bl` 包装层使用 `extern "std:name"`；CLI 根据标准库名和目标平台自动查找对应实现，可以是 C 源、对象文件或静态库。
+   - AOT 时实现会被编译/链接为最终可执行文件的一部分；JIT 开发期由工具链按同一标准库名解析可用实现。
+   - 用户代码只依赖标准库 import 和 Bolide 类型，发布形态由编译器和 CLI 决定。
 
 3. **外部 C 库 FFI**
-   - 适合绑定系统 API、第三方 C 库，或不希望编入 runtime 的平台能力。
+   - 适合绑定系统 API、第三方 C 库，或直接使用已有原生库。
    - 静态/导入库使用 `extern "lib:name"`，AOT 时按平台映射为 `name.lib` 或 `-lname`。
-   - 动态库使用 `extern "dyn:name"`，AOT/JIT 都按平台解析并运行时加载，例如 `dyn:c`、`dyn:m`。
+   - 动态加载使用 `extern "dyn:name"`，AOT/JIT 都按平台解析并运行时加载，例如 `dyn:c`、`dyn:m`。
 
 选择原则：和 `str`、列表、对象、线程、文件系统等运行时模型紧密相关的功能优先放入
-Rust runtime；平台 UI、模板引擎、数据库驱动等可以优先做成独立标准库；绑定已有系统库或第三方库时优先使用外部 C FFI。
+Rust runtime；需要独立演进但仍属于 Bolide 标准库体验的组件使用独立静态标准库；绑定已有系统库或第三方库时使用外部 C FFI。
 
 ## Web 标准库
 
 Bolide 提供 `std/web/web.bl`，目标是用简洁 API 写出接近 FastAPI 使用体验、但能 AOT
 编译为原生可执行文件的 Web 服务。底层实现位于 runtime，AOT 时会静态链接进最终程序；
-用户发布 Web 应用时不需要额外携带 Web DLL。
+发布 Web 应用时可以保持单文件可执行程序形态。
 
 ```bolide
 import "std/web/web.bl";
@@ -1152,7 +1148,7 @@ JIT 适合开发期快速调试：
 bolide run examples/blog/main.bl
 ```
 
-AOT 适合发布和压测：
+AOT 适合发布：
 
 ```bash
 bolide compile examples/blog/main.bl -o examples/blog/main.exe
@@ -1202,14 +1198,8 @@ Go 对照程序位于 `bench/http_go_hello.go` 和 `bench/http_go_blog.go`，可
 | 场景 | 条件 | Go | Bolide | 说明 |
 |------|------|----|--------|------|
 | Hello HTTP | 1024 并发 | 约 137k RPS | sync 约 150k RPS；async 约 157k RPS | 这组主要测 HTTP reactor 和路由开销 |
-| 小博客页面 | 512 并发 | 约 47k RPS | 原始博客热缓存后约 57k RPS | 非同构参考：Go 小博客是内存数据 + `html/template`；Bolide 原始博客包含文件模板、文件数据库和更完整的后台/登录/评论流程。历史上未缓存慢路径约 7k RPS，不代表当前热路径 |
+| 小博客页面 | 512 并发 | 约 47k RPS | 热缓存后约 57k | 架构不完全相同：Go 小博客是内存数据 + `html/template`；Bolide 版包含文件模板、文件数据库和更完整的后台/登录/评论流程，但是带热缓存。 |
 | 内存版博客页面 | 512 并发 | 约 47k RPS | 约 122k RPS | Bolide fast 版使用内存数据和直接 HTML 生成，不是模板引擎严格同构对比 |
-
-这些数字用于判断同机回归，不是跨平台承诺。上表中的原始博客对比不是同构 benchmark：
-Go 对照是较小的内存版博客，Bolide 原始博客示例保留了文件模板、文件数据库和更多业务页面。
-当前模板引擎会缓存已解析模板，并以 1 秒窗口复查文件修改；文件数据库会缓存已打开表的热数据，写入仍落盘。
-因此原始博客的压测数字是热缓存路径，冷启动和首次访问仍会包含文件读取、解析和表加载成本。
-面向高吞吐页面时，应复用 `Database`、让模板走文件缓存，并让长 HTML 字符串拼接走编译器的多段拼接优化。
 
 ## 模板与数据库标准库
 
@@ -1311,296 +1301,95 @@ vsce package
 
 ## GUI 开发
 
-Bolide 提供了原生 GUI 库 `std/gui`，支持窗口创建、控件管理及事件驱动编程。目前主要通过绝对定位进行布局。
+Bolide 提供 `std/gui/gui.bl`，当前后端为 runtime 中的 `egui/eframe`。GUI 程序使用声明式回调渲染：应用状态保存在 Bolide 全局变量或对象中，`gui.run(title, width, height, root)` 创建窗口并在每一帧调用 `root(ui)` 绘制界面。JIT 可用于开发期快速运行，AOT 会把 GUI runtime 静态链接进最终可执行文件。
 
-### GUI 计算器示例
+GUI 标准库的用户层只接触 Bolide 类型：`gui.Ui`、`str`、`int`、`bool` 和 `func(gui.Ui)` 回调。底层窗口、平台事件循环和 egui 对象由 runtime 管理。
 
-以下是一个完整的 GUI 计算器实现 (`examples/calculator.bl`)，展示了窗口、按钮、标签以及事件回调的用法：
+### 布局模型
+
+布局 API 借鉴 Tkinter 的 `pack/grid/place` 思路，同时保留 egui 的自动排版能力：
+
+- `pad(x, y, child)`：给子布局添加内边距。
+- `pack_top/pack_left/pack_right/pack_bottom(spacing, child)`：按方向排列一组控件。
+- `row(child)` / `column(child)`：水平或垂直排列。
+- `grid(id, columns, striped, child)`：表格式布局；放在 `fill(...)` 中时会按可用宽高自动分配单元格。
+- `fill(child)`、`fill_width(child)`、`fill_height(child)`：让子布局占满当前可用空间。
+- `left/right/centered(child)` 和 `align(mode, child)`：控制子布局和文本对齐。
+- `frame(title, child)`、`scroll(id, height, child)`、`indent(id, child)`、`collapsing(title, child)`：常用容器。
+- `width/height/size(..., child)` 与 `place(...)`：用于固定尺寸或绝对位置的局部区域。
+
+普通按钮、文本输入、滑条、进度条等控件会根据所在布局使用可用宽度；在 `row`、`pack_left`、`pack_right` 这类水平布局中按内容紧凑排列，在 `fill + grid` 场景下会撑满网格单元格并按高度放大文字。
+
+### 基本示例
 
 ```bolide
 import "std/gui/gui.bl";
 
-// ============================================================
-// Bolide 简易计算器
-// ============================================================
+let count: int = 0;
+let status: str = "准备";
 
-// 全局状态
-let result: int = 0;
-let current: int = 0;
-let op: str = "";
-let new_input: bool = true;
-let expr_str: str = "0"; // 全局算式字符串
-
-// GUI 控件
-let win: gui.Window = gui.Window(0);
-let display: gui.Label = gui.Label(0);
-
-// 更新显示
-fn update_display() {
-    display.set_text(expr_str);
-}
-
-// 执行计算
-fn do_calc() {
-    if op == "+" {
-        result = result + current;
-    } elif op == "-" {
-        result = result - current;
-    } elif op == "*" {
-        result = result * current;
-    } elif op == "/" {
-        if current != 0 {
-            result = result / current;
-        }
-    } else {
-        result = current;
+fn toolbar(ui: gui.Ui) {
+    if ui.button("增加") {
+        count = count + 1;
+        status = "计数 " + str(count);
     }
-    current = result;
-}
-
-// 数字按钮回调
-fn on_0() {
-    if new_input {
-        current = 0;
-        if op == "" { expr_str = "0"; } else { expr_str = expr_str + "0"; }
-        new_input = false;
-    } else {
-        current = current * 10 + 0;
-        expr_str = expr_str + "0";
+    if ui.button("清零") {
+        count = 0;
+        status = "已清零";
     }
-    update_display();
 }
 
-fn on_1() {
-    if new_input {
-        current = 1;
-        if op == "" { expr_str = "1"; } else { expr_str = expr_str + "1"; }
-        new_input = false;
-    } else {
-        current = current * 10 + 1;
-        expr_str = expr_str + "1";
-    }
-    update_display();
+fn status_line(ui: gui.Ui) {
+    ui.strong(status);
 }
 
-fn on_2() {
-    if new_input {
-        current = 2;
-        if op == "" { expr_str = "2"; } else { expr_str = expr_str + "2"; }
-        new_input = false;
-    } else {
-        current = current * 10 + 2;
-        expr_str = expr_str + "2";
-    }
-    update_display();
+fn body(ui: gui.Ui) {
+    ui.heading("Bolide GUI");
+    ui.pack_left(8, toolbar);
+    ui.space(12);
+    ui.right(status_line);
 }
 
-fn on_3() {
-    if new_input {
-        current = 3;
-        if op == "" { expr_str = "3"; } else { expr_str = expr_str + "3"; }
-        new_input = false;
-    } else {
-        current = current * 10 + 3;
-        expr_str = expr_str + "3";
-    }
-    update_display();
+fn root(ui: gui.Ui) {
+    ui.pad(16, 16, root_padded);
 }
 
-fn on_4() {
-    if new_input {
-        current = 4;
-        if op == "" { expr_str = "4"; } else { expr_str = expr_str + "4"; }
-        new_input = false;
-    } else {
-        current = current * 10 + 4;
-        expr_str = expr_str + "4";
-    }
-    update_display();
+fn root_padded(ui: gui.Ui) {
+    ui.fill(body);
 }
 
-fn on_5() {
-    if new_input {
-        current = 5;
-        if op == "" { expr_str = "5"; } else { expr_str = expr_str + "5"; }
-        new_input = false;
-    } else {
-        current = current * 10 + 5;
-        expr_str = expr_str + "5";
-    }
-    update_display();
-}
-
-fn on_6() {
-    if new_input {
-        current = 6;
-        if op == "" { expr_str = "6"; } else { expr_str = expr_str + "6"; }
-        new_input = false;
-    } else {
-        current = current * 10 + 6;
-        expr_str = expr_str + "6";
-    }
-    update_display();
-}
-
-fn on_7() {
-    if new_input {
-        current = 7;
-        if op == "" { expr_str = "7"; } else { expr_str = expr_str + "7"; }
-        new_input = false;
-    } else {
-        current = current * 10 + 7;
-        expr_str = expr_str + "7";
-    }
-    update_display();
-}
-
-fn on_8() {
-    if new_input {
-        current = 8;
-        if op == "" { expr_str = "8"; } else { expr_str = expr_str + "8"; }
-        new_input = false;
-    } else {
-        current = current * 10 + 8;
-        expr_str = expr_str + "8";
-    }
-    update_display();
-}
-
-fn on_9() {
-    if new_input {
-        current = 9;
-        if op == "" { expr_str = "9"; } else { expr_str = expr_str + "9"; }
-        new_input = false;
-    } else {
-        current = current * 10 + 9;
-        expr_str = expr_str + "9";
-    }
-    update_display();
-}
-
-// 运算符回调
-fn on_add() {
-    if op != "" { do_calc(); } else { result = current; }
-    op = "+";
-    new_input = true;
-    expr_str = expr_str + " + ";
-    update_display();
-}
-
-fn on_sub() {
-    if op != "" { do_calc(); } else { result = current; }
-    op = "-";
-    new_input = true;
-    expr_str = expr_str + " - ";
-    update_display();
-}
-
-fn on_mul() {
-    if op != "" { do_calc(); } else { result = current; }
-    op = "*";
-    new_input = true;
-    expr_str = expr_str + " * ";
-    update_display();
-}
-
-fn on_div() {
-    if op != "" { do_calc(); } else { result = current; }
-    op = "/";
-    new_input = true;
-    expr_str = expr_str + " / ";
-    update_display();
-}
-
-fn on_eq() {
-    if op != "" {
-        do_calc();
-        op = "";
-        expr_str = expr_str + " = " + str(current);
-    }
-    new_input = true;
-    update_display();
-}
-
-fn on_clear() {
-    result = 0;
-    current = 0;
-    op = "";
-    new_input = true;
-    expr_str = "0";
-    update_display();
-}
-
-fn on_neg() {
-    current = 0 - current;
-    // 显示当前值
-    expr_str = str(current); 
-    update_display();
-}
-
-// ============================================================
-// 主程序
-// ============================================================
-
-gui.init();
-win = gui.window("Bolide 计算器", 300, 400);
-win.center();
-
-// 显示区域
-display = gui.label(win, "0", 15, 15, 270, 60);
-
-// 按钮布局
-let bw: int = 65;
-let bh: int = 50;
-let margin: int = 15;
-let spacing: int = 5;
-let start_y: int = 85;
-
-// 第一行: C, +/-, /, *
-let bc: gui.Button = gui.button(win, "C", margin, start_y, bw, bh); bc.on_click(on_clear);
-let bn: gui.Button = gui.button(win, "+/-", margin + bw + spacing, start_y, bw, bh); bn.on_click(on_neg);
-let bd: gui.Button = gui.button(win, "/", margin + 2 * (bw + spacing), start_y, bw, bh); bd.on_click(on_div);
-let bm: gui.Button = gui.button(win, "*", margin + 3 * (bw + spacing), start_y, bw, bh); bm.on_click(on_mul);
-
-// 第二行: 7, 8, 9, -
-let y2: int = start_y + bh + spacing;
-let b7: gui.Button = gui.button(win, "7", margin, y2, bw, bh); b7.on_click(on_7);
-let b8: gui.Button = gui.button(win, "8", margin + bw + spacing, y2, bw, bh); b8.on_click(on_8);
-let b9: gui.Button = gui.button(win, "9", margin + 2 * (bw + spacing), y2, bw, bh); b9.on_click(on_9);
-let bs: gui.Button = gui.button(win, "-", margin + 3 * (bw + spacing), y2, bw, bh); bs.on_click(on_sub);
-
-// 第三行: 4, 5, 6, +
-let y3: int = start_y + 2 * (bh + spacing);
-let b4: gui.Button = gui.button(win, "4", margin, y3, bw, bh); b4.on_click(on_4);
-let b5: gui.Button = gui.button(win, "5", margin + bw + spacing, y3, bw, bh); b5.on_click(on_5);
-let b6: gui.Button = gui.button(win, "6", margin + 2 * (bw + spacing), y3, bw, bh); b6.on_click(on_6);
-let ba: gui.Button = gui.button(win, "+", margin + 3 * (bw + spacing), y3, bw, bh); ba.on_click(on_add);
-
-// 第四行: 1, 2, 3, =
-let y4: int = start_y + 3 * (bh + spacing);
-let b1: gui.Button = gui.button(win, "1", margin, y4, bw, bh); b1.on_click(on_1);
-let b2: gui.Button = gui.button(win, "2", margin + bw + spacing, y4, bw, bh); b2.on_click(on_2);
-let b3: gui.Button = gui.button(win, "3", margin + 2 * (bw + spacing), y4, bw, bh); b3.on_click(on_3);
-let be: gui.Button = gui.button(win, "=", margin + 3 * (bw + spacing), y4, bw, bh); be.on_click(on_eq);
-
-// 第五行: 0
-let y5: int = start_y + 4 * (bh + spacing);
-let b0: gui.Button = gui.button(win, "0", margin, y5, bw * 2 + spacing, bh); b0.on_click(on_0);
-let b00: gui.Button = gui.button(win, "00", margin + 2 * (bw + spacing), y5, bw * 2 + spacing, bh); b00.on_click(on_0);
-
-print("Bolide 计算器已启动！");
-gui.run();
+gui.run("Bolide GUI", 420, 280, root);
 ```
 
-### 关键概念
+### 计算器示例
 
-- **初始化与运行**: 必须调用 `gui.init()` 初始化环境，最后调用 `gui.run()` 进入事件循环。
-- **窗口**: 使用 `gui.window(title, width, height)` 创建窗口。
-- **控件**:
-    - `gui.label(parent, text, x, y, w, h)`: 静态文本
-    - `gui.button(parent, text, x, y, w, h)`: 按钮
-- **事件**: 使用 `button.on_click(callback)` 绑定点击事件，回调函数必须是无参函数。
-- **布局**: 计算器示例使用了绝对坐标计算 (`x, y, w, h`) 来排布按钮。
+完整计算器位于 `examples/calculator.bl`。它展示了更接近桌面应用的布局方式：上方显示区固定高度，底部按键区使用 `fill(buttons_panel)`，按键通过 `grid("calculator-buttons", 4, false, buttons_grid)` 自动撑满窗口剩余空间。
+
+运行 JIT 版本：
+
+```bash
+bolide run examples/calculator.bl
+```
+
+编译 AOT 版本：
+
+```bash
+bolide compile examples/calculator.bl -o examples/calculator.exe
+examples/calculator.exe
+```
+
+### 常用控件
+
+- 文本：`label`、`heading`、`small`、`strong`。
+- 命令与选择：`button`、`selectable`、`link`。
+- 输入：`text_input`、`password_input`、`multiline_input`、`checkbox`、`slider`。
+- 状态：`progress`、`separator`、`space`。
+- 尺寸查询：`available_width()`、`available_height()`。
+- 重绘：`request_repaint()`。
+
+### 实现与发布
+
+`std/gui/gui.bl` 通过 `extern "bolide"` 调用 runtime 中的 GUI 后端。AOT 链接时 GUI 后端随 Bolide runtime 静态进入最终程序；Windows 下 runtime 会配置 winit event loop 兼容 AOT 入口线程。中文显示通过系统 CJK 字体回退处理。
 
 ## 许可证
 

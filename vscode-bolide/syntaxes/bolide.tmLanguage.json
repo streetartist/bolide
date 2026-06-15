@@ -10,6 +10,9 @@
             "include": "#strings"
         },
         {
+            "include": "#declarations"
+        },
+        {
             "include": "#keywords"
         },
         {
@@ -51,25 +54,131 @@
                     "patterns": [
                         {
                             "name": "constant.character.escape.bolide",
-                            "match": "\\\\."
+                            "match": "\\\\(?:[\"\\\\nrt0]|x[0-9A-Fa-f]{2}|u\\{[0-9A-Fa-f_]+\\}|.)"
                         }
                     ]
+                }
+            ]
+        },
+        "declarations": {
+            "patterns": [
+                {
+                    "name": "meta.function.definition.bolide",
+                    "match": "\\b(?:(export)\\s+)?(?:(async)\\s+)?(fn)\\s+([A-Za-z_][A-Za-z0-9_]*)\\b",
+                    "captures": {
+                        "1": {
+                            "name": "storage.modifier.export.bolide"
+                        },
+                        "2": {
+                            "name": "storage.modifier.async.bolide"
+                        },
+                        "3": {
+                            "name": "keyword.declaration.function.bolide"
+                        },
+                        "4": {
+                            "name": "entity.name.function.bolide"
+                        }
+                    }
+                },
+                {
+                    "name": "meta.class.definition.bolide",
+                    "match": "\\b(class)\\s+([A-Za-z_][A-Za-z0-9_]*)\\b",
+                    "captures": {
+                        "1": {
+                            "name": "keyword.declaration.class.bolide"
+                        },
+                        "2": {
+                            "name": "entity.name.type.class.bolide"
+                        }
+                    }
+                },
+                {
+                    "name": "meta.enum.definition.bolide",
+                    "match": "\\b(enum|union)\\s+([A-Za-z_][A-Za-z0-9_]*)\\b",
+                    "captures": {
+                        "1": {
+                            "name": "keyword.declaration.enum.bolide"
+                        },
+                        "2": {
+                            "name": "entity.name.type.enum.bolide"
+                        }
+                    }
+                },
+                {
+                    "name": "meta.extern-struct.definition.bolide",
+                    "match": "\\b(struct)\\s+([A-Za-z_][A-Za-z0-9_]*)\\b",
+                    "captures": {
+                        "1": {
+                            "name": "keyword.declaration.struct.bolide"
+                        },
+                        "2": {
+                            "name": "entity.name.type.struct.bolide"
+                        }
+                    }
+                },
+                {
+                    "name": "meta.type-alias.definition.bolide",
+                    "match": "\\b(type)\\s+([A-Za-z_][A-Za-z0-9_]*)\\b",
+                    "captures": {
+                        "1": {
+                            "name": "keyword.declaration.type.bolide"
+                        },
+                        "2": {
+                            "name": "entity.name.type.alias.bolide"
+                        }
+                    }
                 }
             ]
         },
         "keywords": {
             "patterns": [
                 {
-                    "name": "keyword.control.bolide",
-                    "match": "\\b(if|elif|else|while|for|in|break|continue|return|import|as|select|timeout|default)\\b"
+                    "name": "meta.spawn-all.bolide",
+                    "match": "\\b(spawn)\\s+(all)\\b",
+                    "captures": {
+                        "1": {
+                            "name": "keyword.control.concurrent.spawn.bolide"
+                        },
+                        "2": {
+                            "name": "keyword.control.concurrent.all.bolide"
+                        }
+                    }
                 },
                 {
-                    "name": "keyword.other.bolide",
-                    "match": "\\b(fn|let|class|extern|struct|type|from)\\b"
+                    "name": "meta.spawn-select.bolide",
+                    "match": "\\b(spawn)\\s+(select)\\b",
+                    "captures": {
+                        "1": {
+                            "name": "keyword.control.concurrent.spawn.bolide"
+                        },
+                        "2": {
+                            "name": "keyword.control.concurrent.select.bolide"
+                        }
+                    }
+                },
+                {
+                    "name": "meta.await-scope.bolide",
+                    "match": "\\b(await)\\s+(scope)\\b",
+                    "captures": {
+                        "1": {
+                            "name": "keyword.control.async.await.bolide"
+                        },
+                        "2": {
+                            "name": "keyword.control.async.scope.bolide"
+                        }
+                    }
+                },
+                {
+                    "name": "keyword.control.bolide",
+                    "match": "\\b(if|elif|else|while|for|in|break|continue|return|import|as|throw|try|catch|finally|match|select|timeout|default)\\b"
+                },
+                {
+                    "name": "keyword.declaration.bolide",
+                    "match": "\\b(fn|let|class|extern|struct|type|export|enum|union|from)\\b"
                 },
                 {
                     "name": "keyword.control.async.bolide",
-                    "match": "\\b(async|await|spawn|pool|scope|all)\\b"
+                    "match": "\\b(async|await|spawn|pool|scope)\\b"
                 },
                 {
                     "name": "storage.modifier.bolide",
@@ -88,8 +197,8 @@
         "types": {
             "patterns": [
                 {
-                    "name": "storage.type.bolide",
-                    "match": "\\b(int|float|bool|str|bigint|decimal|dynamic|ptr|future|void)\\b"
+                    "name": "storage.type.primitive.bolide",
+                    "match": "\\b(int|float|bool|str|bytes|bigint|decimal|dynamic|ptr|future|void)\\b"
                 },
                 {
                     "name": "storage.type.generic.bolide",
@@ -97,7 +206,7 @@
                 },
                 {
                     "name": "storage.type.c.bolide",
-                    "match": "\\b(c_int|c_uint|c_float|c_double|c_bool|char|uchar|short|ushort|long|ulong|longlong|ulonglong|i8|u8|i16|u16|i32|u32|i64|u64|size_t|ptrdiff_t)\\b"
+                    "match": "\\b(c_int|c_uint|c_float|c_double|c_bool|char|uchar|short|ushort|long|ulong|longlong|ulonglong|i8|u8|i16|u16|i32|u32|i64|u64|size_t|ptrdiff_t|string)\\b"
                 }
             ]
         },
@@ -109,47 +218,88 @@
                 },
                 {
                     "name": "constant.numeric.integer.bigint.bolide",
-                    "match": "\\b[0-9]+[Bb]\\b"
+                    "match": "\\b[0-9][0-9_]*[Bb]\\b"
                 },
                 {
                     "name": "constant.numeric.float.decimal.bolide",
-                    "match": "\\b[0-9]+(\\.[0-9]+)?[Dd]\\b"
+                    "match": "\\b[0-9][0-9_]*(?:\\.[0-9][0-9_]*)?[Dd]\\b"
+                },
+                {
+                    "name": "constant.numeric.integer.hex.bolide",
+                    "match": "\\b0x[0-9A-Fa-f][0-9A-Fa-f_]*\\b"
                 },
                 {
                     "name": "constant.numeric.float.bolide",
-                    "match": "\\b[0-9]+\\.[0-9]+\\b"
+                    "match": "\\b[0-9][0-9_]*\\.[0-9][0-9_]*\\b"
                 },
                 {
                     "name": "constant.numeric.integer.bolide",
-                    "match": "\\b[0-9]+\\b"
+                    "match": "\\b[0-9][0-9_]*\\b"
+                }
+            ]
+        },
+        "functions": {
+            "patterns": [
+                {
+                    "name": "meta.method-call.bolide",
+                    "match": "(\\.)([A-Za-z_][A-Za-z0-9_]*)\\s*(?=\\()",
+                    "captures": {
+                        "1": {
+                            "name": "punctuation.accessor.bolide"
+                        },
+                        "2": {
+                            "name": "entity.name.function.method.bolide"
+                        }
+                    }
+                },
+                {
+                    "name": "meta.function-call.bolide",
+                    "match": "\\b(?!if\\b|while\\b|for\\b|match\\b|catch\\b|timeout\\b|spawn\\b|await\\b|fn\\b|func\\b|select\\b)([A-Za-z_][A-Za-z0-9_]*)\\s*(?=\\()",
+                    "captures": {
+                        "1": {
+                            "name": "entity.name.function.call.bolide"
+                        }
+                    }
                 }
             ]
         },
         "operators": {
             "patterns": [
                 {
+                    "name": "keyword.operator.arrow.fat.bolide",
+                    "match": "=>"
+                },
+                {
                     "name": "keyword.operator.arrow.skinny.bolide",
-                    "match": "\\->"
+                    "match": "->"
                 },
                 {
                     "name": "keyword.operator.channel.bolide",
                     "match": "<-"
                 },
                 {
-                    "name": "keyword.operator.arrow.fat.bolide",
-                    "match": "=>"
+                    "name": "keyword.operator.assignment.compound.bolide",
+                    "match": "\\+=|-=|\\*=|/=|%="
+                },
+                {
+                    "name": "keyword.operator.bitwise.shift.bolide",
+                    "match": "<<|>>"
                 },
                 {
                     "name": "keyword.operator.comparison.bolide",
                     "match": "==|!=|<=|>=|<|>"
                 },
                 {
-                    "name": "keyword.operator.arithmetic.bolide",
-                    "match": "[+*/%]"
+                    "name": "keyword.operator.spread.bolide",
+                    "match": "\\*\\*"
+                },
+                {
+                    "name": "keyword.operator.bitwise.bolide",
+                    "match": "\\||\\^|&"
                 },
                 {
                     "name": "keyword.operator.arithmetic.bolide",
-                    "match": "-"
+                    "match": "[+*/%-]"
                 },
                 {
                     "name": "keyword.operator.assignment.bolide",
@@ -157,16 +307,12 @@
                 }
             ]
         },
-        "functions": {
-            "patterns": [
-                {
-                    "name": "entity.name.function.bolide",
-                    "match": "\\b([a-zA-Z_][a-zA-Z0-9_]*)\\s*(?=\\()"
-                }
-            ]
-        },
         "punctuation": {
             "patterns": [
+                {
+                    "name": "punctuation.varargs.bolide",
+                    "match": "\\.\\.\\."
+                },
                 {
                     "name": "punctuation.separator.bolide",
                     "match": "[;,:]"

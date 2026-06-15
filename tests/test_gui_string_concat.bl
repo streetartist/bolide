@@ -1,4 +1,0 @@
-import "std/gui/gui.bl";
-
-print("后端: " + gui.backend());
-

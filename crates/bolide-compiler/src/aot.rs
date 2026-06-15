@@ -560,6 +560,7 @@ pub const RUNTIME_SYMBOLS: &[&str] = &[
     "bolide_gui_separator",
     "bolide_gui_space",
     "bolide_gui_button",
+    "bolide_gui_selectable",
     "bolide_gui_link",
     "bolide_gui_text_input",
     "bolide_gui_password_input",
@@ -10570,8 +10571,15 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         let is_main = self.current_func == "__bolide_entry__" || self.current_func == "__main__";
         if is_main && self.global_refs.contains_key(&decl.name) {
             if let Some(ref value) = decl.value {
-                let raw_val = self.compile_expr(value)?;
-                let val = if let Some(target_ty) = self.global_var_types.get(&decl.name).cloned() {
+                let target_ty = self.global_var_types.get(&decl.name).cloned();
+                let raw_val = if matches!(value, Expr::List(items) if items.is_empty())
+                    && matches!(target_ty.as_ref(), Some(BolideType::List(_)))
+                {
+                    self.compile_list_with_hint(&[], target_ty.as_ref())?
+                } else {
+                    self.compile_expr(value)?
+                };
+                let val = if let Some(target_ty) = target_ty {
                     let raw_ty = self
                         .infer_expr_type(value)
                         .map(|ty| self.normalize_bolide_type(&ty))
@@ -10777,7 +10785,13 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
                     let global_ty = self.global_var_types.get(var_name).cloned();
 
                     // 先编译新值
-                    let raw_val = self.compile_expr(&assign.value)?;
+                    let raw_val = if matches!(&assign.value, Expr::List(items) if items.is_empty())
+                        && matches!(global_ty.as_ref(), Some(BolideType::List(_)))
+                    {
+                        self.compile_list_with_hint(&[], global_ty.as_ref())?
+                    } else {
+                        self.compile_expr(&assign.value)?
+                    };
                     let val = if let Some(ref ty) = global_ty {
                         let raw_ty = self
                             .infer_expr_type(&assign.value)
@@ -10873,7 +10887,13 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
                     self.ref_params_reassigned.insert(var_name.to_string());
                 }
 
-                let raw_val = self.compile_expr(&assign.value)?;
+                let raw_val = if matches!(&assign.value, Expr::List(items) if items.is_empty())
+                    && matches!(var_ty.as_ref(), Some(BolideType::List(_)))
+                {
+                    self.compile_list_with_hint(&[], var_ty.as_ref())?
+                } else {
+                    self.compile_expr(&assign.value)?
+                };
                 let val = if let Some(ref ty) = var_ty {
                     let raw_ty = self
                         .infer_expr_type(&assign.value)

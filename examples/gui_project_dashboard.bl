@@ -1,0 +1,477 @@
+import "std/gui/gui.bl";
+
+let view_filter: str = "全部";
+let search_text: str = "";
+let selected_task: int = 0;
+let status: str = "就绪";
+
+let titles: list<str> = [];
+let modules: list<str> = [];
+let owners: list<str> = [];
+let notes: list<str> = [];
+let progress_values: list<int> = [];
+let priorities: list<int> = [];
+let done_values: list<bool> = [];
+
+let edit_title: str = "";
+let edit_module: str = "";
+let edit_owner: str = "";
+let edit_note: str = "";
+let edit_progress: int = 0;
+let edit_priority: int = 3;
+let edit_done: bool = false;
+
+fn add_task(title: str, module: str, owner: str, note: str, progress: int, priority: int, done: bool) {
+    titles.push(title);
+    modules.push(module);
+    owners.push(owner);
+    notes.push(note);
+    progress_values.push(progress);
+    priorities.push(priority);
+    done_values.push(done);
+}
+
+fn seed_data() {
+    add_task("文章编辑页保存后刷新列表", "博客后台", "陈远", "保存文章后保持在当前页面，并提示发布时间。", 80, 4, false);
+    add_task("登录态过期提示", "账号系统", "林舟", "会话失效时跳转登录页，保留原访问地址。", 45, 5, false);
+    add_task("模板缓存失效策略", "标准库", "周宁", "模板文件修改后自动刷新，热路径尽量少做 IO。", 100, 5, true);
+    add_task("GUI 选择控件", "GUI", "沈青", "侧边栏、列表和标签页需要选择态，不能全部用按钮模拟。", 70, 4, false);
+    add_task("README GUI 示例", "文档", "沈青", "补充布局语义和 AOT 发布方式。", 100, 3, true);
+    add_task("压测结果归档", "Web", "陈远", "记录 hello、博客和 Go 对照版本的压测条件。", 30, 2, false);
+    load_editor();
+}
+
+fn task_count() -> int {
+    return titles.len();
+}
+
+fn selected_valid() -> bool {
+    if selected_task < 0 {
+        return false;
+    }
+    return selected_task < task_count();
+}
+
+fn clamp_selection() {
+    if task_count() <= 0 {
+        selected_task = 0;
+        return;
+    }
+    if selected_task < 0 {
+        selected_task = 0;
+    }
+    if selected_task >= task_count() {
+        selected_task = task_count() - 1;
+    }
+}
+
+fn load_editor() {
+    clamp_selection();
+    if not selected_valid() {
+        edit_title = "";
+        edit_module = "";
+        edit_owner = "";
+        edit_note = "";
+        edit_progress = 0;
+        edit_priority = 3;
+        edit_done = false;
+        return;
+    }
+
+    edit_title = titles[selected_task];
+    edit_module = modules[selected_task];
+    edit_owner = owners[selected_task];
+    edit_note = notes[selected_task];
+    edit_progress = progress_values[selected_task];
+    edit_priority = priorities[selected_task];
+    edit_done = done_values[selected_task];
+}
+
+fn select_task(index: int) {
+    selected_task = index;
+    load_editor();
+    status = "已选择: " + edit_title;
+}
+
+fn new_task() {
+    add_task("新工单", "GUI", "未分配", "", 0, 3, false);
+    selected_task = task_count() - 1;
+    load_editor();
+    status = "已新增工单";
+}
+
+fn save_task() {
+    if not selected_valid() {
+        new_task();
+        return;
+    }
+    if edit_title.strip() == "" {
+        status = "标题不能为空";
+        return;
+    }
+
+    titles[selected_task] = edit_title.strip();
+    modules[selected_task] = edit_module.strip();
+    owners[selected_task] = edit_owner.strip();
+    notes[selected_task] = edit_note;
+    progress_values[selected_task] = edit_progress;
+    priorities[selected_task] = edit_priority;
+    done_values[selected_task] = edit_done;
+    if edit_done {
+        progress_values[selected_task] = 100;
+        edit_progress = 100;
+    }
+    status = "已保存: " + titles[selected_task];
+}
+
+fn delete_task() {
+    if not selected_valid() {
+        status = "没有可删除的工单";
+        return;
+    }
+    let removed: str = titles.remove(selected_task);
+    modules.remove(selected_task);
+    owners.remove(selected_task);
+    notes.remove(selected_task);
+    progress_values.remove(selected_task);
+    priorities.remove(selected_task);
+    done_values.remove(selected_task);
+    clamp_selection();
+    load_editor();
+    status = "已删除: " + removed;
+}
+
+fn mark_done() {
+    if not selected_valid() {
+        return;
+    }
+    done_values[selected_task] = true;
+    progress_values[selected_task] = 100;
+    load_editor();
+    status = "已完成: " + edit_title;
+}
+
+fn bump_progress() {
+    if not selected_valid() {
+        return;
+    }
+    let next: int = progress_values[selected_task] + 10;
+    if next >= 100 {
+        next = 100;
+        done_values[selected_task] = true;
+    }
+    progress_values[selected_task] = next;
+    load_editor();
+    status = "进度更新到 " + str(next) + "%";
+}
+
+fn state_text(index: int) -> str {
+    if done_values[index] {
+        return "已完成";
+    }
+    if progress_values[index] > 0 {
+        return "进行中";
+    }
+    return "待处理";
+}
+
+fn priority_text(value: int) -> str {
+    if value >= 5 {
+        return "P0";
+    }
+    if value >= 4 {
+        return "P1";
+    }
+    if value <= 2 {
+        return "P3";
+    }
+    return "P2";
+}
+
+fn count_done() -> int {
+    let total: int = 0;
+    for i in range(task_count()) {
+        if done_values[i] {
+            total = total + 1;
+        }
+    }
+    return total;
+}
+
+fn count_open() -> int {
+    return task_count() - count_done();
+}
+
+fn count_high() -> int {
+    let total: int = 0;
+    for i in range(task_count()) {
+        if priorities[i] >= 4 {
+            if not done_values[i] {
+                total = total + 1;
+            }
+        }
+    }
+    return total;
+}
+
+fn average_progress() -> int {
+    if task_count() <= 0 {
+        return 0;
+    }
+    let total: int = 0;
+    for i in range(task_count()) {
+        total = total + progress_values[i];
+    }
+    return total / task_count();
+}
+
+fn filter_match(index: int) -> bool {
+    if view_filter == "待处理" {
+        if done_values[index] {
+            return false;
+        }
+    }
+    if view_filter == "已完成" {
+        if not done_values[index] {
+            return false;
+        }
+    }
+    if view_filter == "高优先级" {
+        if priorities[index] < 4 {
+            return false;
+        }
+    }
+    if search_text.strip() != "" {
+        let text: str = titles[index] + " " + modules[index] + " " + owners[index] + " " + notes[index];
+        if not text.contains(search_text.strip()) {
+            return false;
+        }
+    }
+    return true;
+}
+
+fn app_title(ui: gui.Ui) {
+    ui.strong("Bolide 工单台");
+    ui.small("队列、筛选、详情编辑和状态反馈");
+}
+
+fn top_actions(ui: gui.Ui) {
+    if ui.button("新增") {
+        new_task();
+    }
+    if ui.button("保存") {
+        save_task();
+    }
+    if ui.button("推进") {
+        bump_progress();
+    }
+    if ui.button("完成") {
+        mark_done();
+    }
+}
+
+fn top_bar(ui: gui.Ui) {
+    ui.pad(6, 4, top_bar_inner);
+}
+
+fn top_bar_inner(ui: gui.Ui) {
+    app_title(ui);
+    ui.space(6);
+    ui.pack_left(8, top_actions);
+}
+
+fn set_filter_all(ui: gui.Ui) {
+    if ui.selectable("全部任务  " + str(task_count()), view_filter == "全部") {
+        view_filter = "全部";
+        status = "查看全部任务";
+    }
+}
+
+fn set_filter_open(ui: gui.Ui) {
+    if ui.selectable("待处理  " + str(count_open()), view_filter == "待处理") {
+        view_filter = "待处理";
+        status = "查看待处理任务";
+    }
+}
+
+fn set_filter_done(ui: gui.Ui) {
+    if ui.selectable("已完成  " + str(count_done()), view_filter == "已完成") {
+        view_filter = "已完成";
+        status = "查看已完成任务";
+    }
+}
+
+fn set_filter_high(ui: gui.Ui) {
+    if ui.selectable("高优先级  " + str(count_high()), view_filter == "高优先级") {
+        view_filter = "高优先级";
+        status = "查看高优先级任务";
+    }
+}
+
+fn sidebar_filters(ui: gui.Ui) {
+    ui.strong("视图");
+    set_filter_all(ui);
+    set_filter_open(ui);
+    set_filter_high(ui);
+    set_filter_done(ui);
+}
+
+fn sidebar_stats(ui: gui.Ui) {
+    ui.strong("概览");
+    ui.label("总数 " + str(task_count()));
+    ui.label("未完成 " + str(count_open()));
+    ui.label("高优先级 " + str(count_high()));
+    ui.label("平均进度 " + str(average_progress()) + "%");
+    ui.progress(average_progress(), 100);
+}
+
+fn sidebar_content(ui: gui.Ui) {
+    sidebar_filters(ui);
+    ui.separator();
+    sidebar_stats(ui);
+    ui.separator();
+    ui.small(status);
+}
+
+fn sidebar(ui: gui.Ui) {
+    ui.frame("工作区", sidebar_content);
+}
+
+fn search_box(ui: gui.Ui) {
+    ui.strong("任务队列");
+    search_text = ui.text_input("search", search_text);
+}
+
+fn queue_header(ui: gui.Ui) {
+    ui.height(64, search_box);
+}
+
+fn task_row_title(index: int) -> str {
+    return priority_text(priorities[index]) + "  " + titles[index];
+}
+
+fn task_row(ui: gui.Ui, index: int) {
+    if ui.selectable(task_row_title(index), selected_task == index) {
+        select_task(index);
+    }
+    ui.small(modules[index] + " / " + owners[index] + " / " + state_text(index));
+    ui.progress(progress_values[index], 100);
+    ui.space(4);
+}
+
+fn queue_rows(ui: gui.Ui) {
+    let shown: int = 0;
+    for i in range(task_count()) {
+        if filter_match(i) {
+            task_row(ui, i);
+            shown = shown + 1;
+        }
+    }
+    if shown == 0 {
+        ui.label("没有匹配的任务");
+        ui.small("调整搜索或切换左侧视图。");
+    }
+}
+
+fn queue_content(ui: gui.Ui) {
+    queue_header(ui);
+    ui.separator();
+    ui.scroll("work-queue-scroll", 0, queue_rows);
+}
+
+fn queue_panel(ui: gui.Ui) {
+    ui.frame("队列", queue_content);
+}
+
+fn detail_grid(ui: gui.Ui) {
+    ui.strong("标题");
+    edit_title = ui.text_input("detail-title", edit_title);
+    ui.end_row();
+
+    ui.strong("模块");
+    edit_module = ui.text_input("detail-module", edit_module);
+    ui.end_row();
+
+    ui.strong("负责人");
+    edit_owner = ui.text_input("detail-owner", edit_owner);
+    ui.end_row();
+
+    ui.strong("优先级");
+    edit_priority = ui.slider("优先级", edit_priority, 1, 5);
+    ui.end_row();
+
+    ui.strong("进度");
+    edit_progress = ui.slider("进度", edit_progress, 0, 100);
+    ui.end_row();
+
+    ui.strong("完成");
+    edit_done = ui.checkbox("已完成", edit_done);
+    ui.end_row();
+}
+
+fn detail_actions(ui: gui.Ui) {
+    if ui.button("保存") {
+        save_task();
+    }
+    if ui.button("删除") {
+        delete_task();
+    }
+}
+
+fn detail_summary(ui: gui.Ui) {
+    if selected_valid() {
+        ui.strong("#" + str(selected_task + 1) + "  " + edit_title);
+        ui.small(edit_module + " / " + edit_owner + " / " + priority_text(edit_priority));
+    } else {
+        ui.strong("没有选中的任务");
+        ui.small("从中间队列选择任务，或点击新增。");
+    }
+}
+
+fn detail_content(ui: gui.Ui) {
+    detail_summary(ui);
+    ui.separator();
+    ui.grid("detail-grid", 2, true, detail_grid);
+    ui.space(8);
+    ui.strong("备注");
+    edit_note = ui.multiline_input("detail-note", edit_note, 8);
+    ui.space(8);
+    ui.pack_left(8, detail_actions);
+    ui.separator();
+    ui.small("状态: " + status);
+}
+
+fn detail_scroll(ui: gui.Ui) {
+    ui.scroll("detail-scroll", 0, detail_content);
+}
+
+fn detail_panel(ui: gui.Ui) {
+    ui.frame("详情", detail_scroll);
+}
+
+fn main_columns(ui: gui.Ui) {
+    ui.width(220, sidebar);
+    ui.width(430, queue_panel);
+    ui.fill_width(detail_panel);
+}
+
+fn main_area(ui: gui.Ui) {
+    ui.pack_left(12, main_columns);
+}
+
+fn app(ui: gui.Ui) {
+    ui.height(96, top_bar);
+    ui.separator();
+    ui.fill(main_area);
+}
+
+fn root(ui: gui.Ui) {
+    ui.pad(12, 10, root_inner);
+}
+
+fn root_inner(ui: gui.Ui) {
+    ui.fill(app);
+}
+
+seed_data();
+gui.run("Bolide 工单台", 1120, 720, root);

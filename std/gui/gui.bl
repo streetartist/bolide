@@ -12,6 +12,7 @@ extern "bolide" {
     fn bolide_gui_separator(ui: *void);
     fn bolide_gui_space(ui: *void, points: i64);
     fn bolide_gui_button(ui: *void, text: str) -> i64;
+    fn bolide_gui_selectable(ui: *void, text: str, selected: i64) -> i64;
     fn bolide_gui_link(ui: *void, label: str, url: str) -> i64;
     fn bolide_gui_text_input(ui: *void, id: str, value: str) -> str;
     fn bolide_gui_password_input(ui: *void, id: str, value: str) -> str;
@@ -73,6 +74,13 @@ class Ui {
 
     fn button(text: str) -> bool {
         return bolide_gui_button(self.handle, text) != 0;
+    }
+
+    fn selectable(text: str, selected: bool) -> bool {
+        if selected {
+            return bolide_gui_selectable(self.handle, text, 1) != 0;
+        }
+        return bolide_gui_selectable(self.handle, text, 0) != 0;
     }
 
     fn link(label: str, url: str) -> bool {

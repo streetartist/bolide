@@ -1,0 +1,73 @@
+let selected_task: int = 0;
+let status: str = "就绪";
+
+let titles: list<str> = [];
+let modules: list<str> = [];
+let owners: list<str> = [];
+let notes: list<str> = [];
+let progress_values: list<int> = [];
+let priorities: list<int> = [];
+let done_values: list<bool> = [];
+
+let edit_title: str = "";
+let edit_module: str = "";
+let edit_owner: str = "";
+let edit_note: str = "";
+let edit_progress: int = 0;
+let edit_priority: int = 3;
+let edit_done: bool = false;
+
+fn add_task(title: str, module: str, owner: str, note: str, progress: int, priority: int, done: bool) {
+    titles.push(title);
+    modules.push(module);
+    owners.push(owner);
+    notes.push(note);
+    progress_values.push(progress);
+    priorities.push(priority);
+    done_values.push(done);
+}
+
+fn load_editor() {
+    edit_title = titles[selected_task];
+    edit_module = modules[selected_task];
+    edit_owner = owners[selected_task];
+    edit_note = notes[selected_task];
+    edit_progress = progress_values[selected_task];
+    edit_priority = priorities[selected_task];
+    edit_done = done_values[selected_task];
+}
+
+fn save_task() {
+    titles[selected_task] = edit_title.strip();
+    modules[selected_task] = edit_module.strip();
+    owners[selected_task] = edit_owner.strip();
+    notes[selected_task] = edit_note;
+    progress_values[selected_task] = edit_progress;
+    priorities[selected_task] = edit_priority;
+    done_values[selected_task] = edit_done;
+    if edit_done {
+        progress_values[selected_task] = 100;
+        edit_progress = 100;
+    }
+    status = "已保存: " + titles[selected_task];
+}
+
+fn bump_progress() {
+    let next: int = progress_values[selected_task] + 10;
+    if next >= 100 {
+        next = 100;
+        done_values[selected_task] = true;
+    }
+    progress_values[selected_task] = next;
+    load_editor();
+    status = "进度更新到 " + str(next) + "%";
+}
+
+add_task("文章编辑页保存后刷新列表", "博客后台", "陈远", "保存文章后保持在当前页面。", 80, 4, false);
+load_editor();
+save_task();
+print(status);
+bump_progress();
+print(status);
+save_task();
+print(status);

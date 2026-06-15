@@ -1,0 +1,36 @@
+import "std/gui/gui.bl";
+
+let count: int = 0;
+let status: str = "准备";
+
+fn toolbar(ui: gui.Ui) {
+    if ui.button("增加") {
+        count = count + 1;
+        status = "计数 " + str(count);
+    }
+    if ui.button("清零") {
+        count = 0;
+        status = "已清零";
+    }
+}
+
+fn status_line(ui: gui.Ui) {
+    ui.strong(status);
+}
+
+fn body(ui: gui.Ui) {
+    ui.heading("Bolide GUI");
+    ui.pack_left(8, toolbar);
+    ui.space(12);
+    ui.right(status_line);
+}
+
+fn root(ui: gui.Ui) {
+    ui.pad(16, 16, root_padded);
+}
+
+fn root_padded(ui: gui.Ui) {
+    ui.fill(body);
+}
+
+gui.run("Bolide GUI", 420, 280, root);

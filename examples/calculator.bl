@@ -5,25 +5,39 @@ let current: int = 0;
 let op: str = "";
 let fresh: bool = true;
 let display: str = "0";
+let hint: str = "准备输入";
 
 fn refresh_display() {
     display = str(current);
+    if op != "" {
+        hint = str(result) + " " + op;
+    } else {
+        hint = "准备输入";
+    }
 }
 
 fn digit(value: int) {
     if fresh {
         current = value;
         fresh = false;
+    } elif current < 0 {
+        current = current * 10 - value;
     } else {
         current = current * 10 + value;
     }
     refresh_display();
 }
 
+fn double_zero() {
+    digit(0);
+    digit(0);
+}
+
 fn set_op(next: str) {
     result = current;
     op = next;
     fresh = true;
+    hint = str(result) + " " + op;
 }
 
 fn calculate() {
@@ -36,10 +50,29 @@ fn calculate() {
     } elif op == "/" {
         if current != 0 {
             current = result / current;
+        } else {
+            hint = "不能除以 0";
+            return;
         }
     }
     op = "";
     fresh = true;
+    refresh_display();
+}
+
+fn clear_entry() {
+    current = 0;
+    fresh = true;
+    refresh_display();
+}
+
+fn backspace() {
+    current = current / 10;
+    refresh_display();
+}
+
+fn toggle_sign() {
+    current = 0 - current;
     refresh_display();
 }
 
@@ -49,40 +82,51 @@ fn clear() {
     op = "";
     fresh = true;
     display = "0";
+    hint = "准备输入";
+}
+
+fn display_value(ui: gui.Ui) {
+    ui.heading(display);
 }
 
 fn display_panel(ui: gui.Ui) {
-    ui.heading(display);
-    if op != "" {
-        ui.small("运算符: " + op);
-    } else {
-        ui.small(" ");
-    }
+    ui.pad(14, 12, display_content);
+}
+
+fn display_content(ui: gui.Ui) {
+    ui.strong(hint);
+    ui.right(display_value);
 }
 
 fn buttons_grid(ui: gui.Ui) {
+    if ui.button("C") { clear(); }
+    if ui.button("CE") { clear_entry(); }
+    if ui.button("<-") { backspace(); }
+    if ui.button("/") { set_op("/"); }
+    ui.end_row();
+
     if ui.button("7") { digit(7); }
     if ui.button("8") { digit(8); }
     if ui.button("9") { digit(9); }
-    if ui.button("/") { set_op("/"); }
+    if ui.button("*") { set_op("*"); }
     ui.end_row();
 
     if ui.button("4") { digit(4); }
     if ui.button("5") { digit(5); }
     if ui.button("6") { digit(6); }
-    if ui.button("*") { set_op("*"); }
+    if ui.button("-") { set_op("-"); }
     ui.end_row();
 
     if ui.button("1") { digit(1); }
     if ui.button("2") { digit(2); }
     if ui.button("3") { digit(3); }
-    if ui.button("-") { set_op("-"); }
+    if ui.button("+") { set_op("+"); }
     ui.end_row();
 
+    if ui.button("+/-") { toggle_sign(); }
     if ui.button("0") { digit(0); }
-    if ui.button("C") { clear(); }
+    if ui.button("00") { double_zero(); }
     if ui.button("=") { calculate(); }
-    if ui.button("+") { set_op("+"); }
     ui.end_row();
 }
 
@@ -90,10 +134,18 @@ fn buttons_panel(ui: gui.Ui) {
     ui.grid("calculator-buttons", 4, false, buttons_grid);
 }
 
-fn root(ui: gui.Ui) {
-    ui.frame("", display_panel);
-    ui.space(10);
-    ui.frame("", buttons_panel);
+fn app_body(ui: gui.Ui) {
+    ui.height(104, display_panel);
+    ui.space(12);
+    ui.fill(buttons_panel);
 }
 
-gui.run("Bolide 计算器", 360, 420, root);
+fn root(ui: gui.Ui) {
+    ui.pad(16, 16, root_padded);
+}
+
+fn root_padded(ui: gui.Ui) {
+    ui.fill(app_body);
+}
+
+gui.run("Bolide 计算器", 420, 560, root);

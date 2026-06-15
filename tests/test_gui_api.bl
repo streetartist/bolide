@@ -2,6 +2,8 @@ import "std/gui/gui.bl";
 
 fn child(ui: gui.Ui) {
     ui.label("child");
+    ui.button("button");
+    ui.selectable("selected", true);
     ui.end_row();
 }
 

@@ -1,0 +1,16 @@
+let titles: list<str> = [];
+let edit_title: str = "";
+let status: str = "就绪";
+
+titles.push("文章编辑页保存后刷新列表");
+edit_title = titles[0];
+titles[0] = edit_title.strip();
+status = "已保存: " + titles[0];
+print(status);
+print(titles[0]);
+
+edit_title = titles[0];
+titles[0] = edit_title.strip();
+status = "再次: " + titles[0];
+print(status);
+print(titles[0]);
