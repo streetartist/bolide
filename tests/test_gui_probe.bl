@@ -1,0 +1,79 @@
+import "std/gui/gui.bl";
+
+let name: str = "Bolide";
+let email: str = "hello@bolide.dev";
+let password: str = "";
+let note: str = "这里是多行文本。\n可以直接编辑内容。";
+let enabled: bool = true;
+let volume: int = 42;
+let progress: int = 30;
+let clicks: int = 0;
+let status: str = "就绪";
+
+fn header(ui: gui.Ui) {
+    ui.centered(header_center);
+}
+
+fn header_center(ui: gui.Ui) {
+    ui.heading("Bolide GUI");
+    ui.small("跨平台 egui 后端，使用 pack/grid/place/pad 做布局");
+}
+
+fn toolbar(ui: gui.Ui) {
+    if ui.button("保存") {
+        status = "已保存 " + name;
+    }
+    if ui.button("点击") {
+        clicks = clicks + 1;
+        status = "点击次数 " + str(clicks);
+    }
+}
+
+fn sidebar(ui: gui.Ui) {
+    ui.frame("导航", sidebar_items);
+}
+
+fn sidebar_items(ui: gui.Ui) {
+    ui.strong("页面");
+    if ui.button("仪表盘") {
+        status = "打开仪表盘";
+    }
+    ui.separator();
+    ui.small(gui.backend());
+}
+
+fn form_grid(ui: gui.Ui) {
+    ui.strong("名称");
+    name = ui.text_input("name", name);
+    ui.end_row();
+
+    ui.strong("邮箱");
+    email = ui.text_input("email", email);
+    ui.end_row();
+
+    ui.strong("密码");
+    password = ui.password_input("password", password);
+    ui.end_row();
+
+    ui.strong("启用");
+    enabled = ui.checkbox("启用功能", enabled);
+    ui.end_row();
+
+    ui.strong("音量");
+    volume = ui.slider("音量", volume, 0, 100);
+    ui.end_row();
+}
+
+fn root(ui: gui.Ui) {
+    ui.pad(10, 8, header);
+    ui.separator();
+    ui.pack_left(12, toolbar);
+    ui.separator();
+    ui.width(180, sidebar);
+}
+
+fn status_line(ui: gui.Ui) {
+    ui.small(status);
+}
+
+gui.run("Bolide GUI Probe", 640, 420, root);

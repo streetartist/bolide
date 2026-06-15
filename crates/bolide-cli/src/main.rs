@@ -7,7 +7,6 @@ use std::process::Command;
 use bolide_compiler::{AotCompiler, JitCompiler};
 use bolide_parser::parse_source;
 
-const STD_GUI_LIB: &str = "std:gui";
 const NATIVE_LIB_PREFIX: &str = "lib:";
 
 fn is_shared_library_path(lib: &str) -> bool {
@@ -390,29 +389,65 @@ fn find_runtime_lib() -> miette::Result<String> {
     #[cfg(not(target_os = "windows"))]
     let lib_name = "libbolide_runtime.a";
 
-    let lib_path = exe_dir.join(lib_name);
-    if lib_path.exists() {
-        println!("Found runtime library: {}", lib_path.display());
-        return Ok(lib_path.display().to_string());
+    for path in [exe_dir.join(lib_name), exe_dir.join("..").join(lib_name)] {
+        if path.exists() {
+            let path = path.canonicalize().unwrap_or(path);
+            println!("Found runtime library: {}", path.display());
+            return Ok(path.display().to_string());
+        }
     }
 
-    // 尝试在 target/debug 目录下查找
-    let debug_path = exe_dir.join("..").join(lib_name);
-    if debug_path.exists() {
-        let path = debug_path.canonicalize().unwrap();
+    for dir in [exe_dir.join("deps"), exe_dir.join("..").join("deps")] {
+        if let Some(path) = find_hashed_runtime_lib(&dir) {
+            println!("Found runtime library: {}", path.display());
+            return Ok(path.display().to_string());
+        }
+    }
+
+    let cwd_path = PathBuf::from("target/debug").join(lib_name);
+    if cwd_path.exists() {
+        let path = cwd_path.canonicalize().unwrap_or(cwd_path);
         println!("Found runtime library: {}", path.display());
         return Ok(path.display().to_string());
     }
 
-    // 尝试在当前工作目录的 target/debug 下查找
-    let cwd_path = PathBuf::from("target/debug").join(lib_name);
-    if cwd_path.exists() {
-        let path = cwd_path.canonicalize().unwrap();
+    if let Some(path) = find_hashed_runtime_lib(Path::new("target/debug/deps")) {
         println!("Found runtime library: {}", path.display());
         return Ok(path.display().to_string());
     }
 
     Err(miette::miette!("Runtime library not found: {}", lib_name))
+}
+
+fn find_hashed_runtime_lib(dir: &Path) -> Option<PathBuf> {
+    let entries = fs::read_dir(dir).ok()?;
+    let mut best: Option<(std::time::SystemTime, PathBuf)> = None;
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = path.file_name()?.to_string_lossy();
+
+        #[cfg(target_os = "windows")]
+        let matches = name.starts_with("bolide_runtime-") && name.ends_with(".lib");
+        #[cfg(not(target_os = "windows"))]
+        let matches = name.starts_with("libbolide_runtime-") && name.ends_with(".a");
+
+        if !matches {
+            continue;
+        }
+
+        let modified = entry
+            .metadata()
+            .and_then(|metadata| metadata.modified())
+            .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+
+        match &best {
+            Some((best_modified, _)) if *best_modified >= modified => {}
+            _ => best = Some((modified, path)),
+        }
+    }
+
+    best.map(|(_, path)| path.canonicalize().unwrap_or(path))
 }
 
 /// 链接可执行文件
@@ -468,40 +503,29 @@ fn link_windows(
         "userenv.lib".to_string(),
         "advapi32.lib".to_string(),
         "bcrypt.lib".to_string(),
+        "user32.lib".to_string(),
+        "shell32.lib".to_string(),
+        "gdi32.lib".to_string(),
+        "opengl32.lib".to_string(),
+        "shlwapi.lib".to_string(),
+        "msimg32.lib".to_string(),
+        "winspool.lib".to_string(),
+        "dbghelp.lib".to_string(),
+        "ole32.lib".to_string(),
+        "dwmapi.lib".to_string(),
+        "imm32.lib".to_string(),
+        "winmm.lib".to_string(),
+        "uxtheme.lib".to_string(),
+        "shcore.lib".to_string(),
+        "pathcch.lib".to_string(),
         "ntdll.lib".to_string(),
         "legacy_stdio_definitions.lib".to_string(),
     ];
 
-    let mut needs_std_gui = false;
     let mut user_lib_args = Vec::new();
     for lib in extern_libs {
-        if lib == STD_GUI_LIB {
-            needs_std_gui = true;
-        } else {
-            user_lib_args.push(native_link_arg_windows(lib)?);
-        }
+        user_lib_args.push(native_link_arg_windows(lib)?);
     }
-
-    let std_gui_obj = if needs_std_gui {
-        let gui_obj = compile_std_gui_object(output)?;
-        println!("Adding std:gui object: {}", gui_obj.display());
-        args.push(gui_obj.display().to_string());
-
-        for lib in [
-            "user32.lib",
-            "gdi32.lib",
-            "comctl32.lib",
-            "comdlg32.lib",
-            "shell32.lib",
-            "ole32.lib",
-        ] {
-            args.push(lib.to_string());
-        }
-
-        Some(gui_obj)
-    } else {
-        None
-    };
 
     for lib in user_lib_args {
         println!("Adding external library: {}", lib);
@@ -514,10 +538,6 @@ fn link_windows(
         .status()
         .map_err(|e| miette::miette!("Linker not found: {}", e))?;
 
-    if let Some(path) = std_gui_obj {
-        let _ = fs::remove_file(path);
-    }
-
     if status.success() {
         Ok(())
     } else {
@@ -525,130 +545,8 @@ fn link_windows(
     }
 }
 
-#[cfg(target_os = "windows")]
-fn compile_std_gui_object(output: &Path) -> miette::Result<PathBuf> {
-    let source = find_std_gui_source()?;
-    let output_dir = output.parent().unwrap_or_else(|| Path::new("."));
-    let stem = output
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("bolide");
-    let obj_path = output_dir.join(format!("{}.std_gui.{}.obj", stem, std::process::id()));
-
-    println!("Compiling std:gui C library: {}", source.display());
-
-    let source_arg = source.display().to_string();
-    let obj_arg = obj_path.display().to_string();
-    let attempts = vec![
-        (
-            "clang",
-            vec![
-                "-x".to_string(),
-                "c".to_string(),
-                "-c".to_string(),
-                source_arg.clone(),
-                "-DBOLIDE_GUI_STATIC".to_string(),
-                "-DUNICODE".to_string(),
-                "-D_UNICODE".to_string(),
-                "-o".to_string(),
-                obj_arg.clone(),
-            ],
-        ),
-        (
-            "clang-cl",
-            vec![
-                "/nologo".to_string(),
-                "/TC".to_string(),
-                "/c".to_string(),
-                "/DBOLIDE_GUI_STATIC".to_string(),
-                "/DUNICODE".to_string(),
-                "/D_UNICODE".to_string(),
-                format!("/Fo{}", obj_arg),
-                source_arg.clone(),
-            ],
-        ),
-        (
-            "cl",
-            vec![
-                "/nologo".to_string(),
-                "/TC".to_string(),
-                "/c".to_string(),
-                "/DBOLIDE_GUI_STATIC".to_string(),
-                "/DUNICODE".to_string(),
-                "/D_UNICODE".to_string(),
-                format!("/Fo{}", obj_path.display()),
-                source_arg,
-            ],
-        ),
-    ];
-
-    let mut last_err = String::new();
-    for (tool, args) in attempts {
-        match Command::new(tool).args(&args).output() {
-            Ok(output) if output.status.success() && obj_path.exists() => return Ok(obj_path),
-            Ok(output) => {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                last_err = format!(
-                    "{} failed with {}: {}{}",
-                    tool, output.status, stdout, stderr
-                );
-            }
-            Err(e) => {
-                last_err = format!("{} not found: {}", tool, e);
-            }
-        }
-    }
-
-    Err(miette::miette!(
-        "Failed to compile std:gui C library. Install clang or MSVC cl.exe. Last error: {}",
-        last_err
-    ))
-}
-
-#[cfg(target_os = "windows")]
-fn find_std_gui_source() -> miette::Result<PathBuf> {
-    let rel = Path::new("std").join("gui").join("gui.c");
-    let mut candidates = Vec::new();
-
-    if let Ok(cwd) = std::env::current_dir() {
-        candidates.push(cwd.join(&rel));
-    }
-
-    candidates.push(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("..")
-            .join("..")
-            .join(&rel),
-    );
-
-    if let Ok(exe_path) = std::env::current_exe() {
-        if let Some(exe_dir) = exe_path.parent() {
-            candidates.push(exe_dir.join(&rel));
-            candidates.push(exe_dir.join("..").join(&rel));
-            candidates.push(exe_dir.join("..").join("..").join(&rel));
-        }
-    }
-
-    for candidate in candidates {
-        if candidate.exists() {
-            return Ok(candidate.canonicalize().unwrap_or(candidate));
-        }
-    }
-
-    Err(miette::miette!(
-        "std:gui source not found; expected std/gui/gui.c near the current directory or compiler installation"
-    ))
-}
-
 #[cfg(not(target_os = "windows"))]
 fn link_unix(obj_path: &PathBuf, output: &PathBuf, extern_libs: &[String]) -> miette::Result<()> {
-    if extern_libs.iter().any(|lib| lib == STD_GUI_LIB) {
-        return Err(miette::miette!(
-            "std:gui is currently a Win32 C library and can only be AOT-linked on Windows"
-        ));
-    }
-
     let runtime_lib = find_runtime_lib()?;
 
     let mut args = vec![

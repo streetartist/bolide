@@ -1,0 +1,7 @@
+import "std/gui/gui.bl";
+
+fn root(ui: gui.Ui) {
+    ui.label("你好");
+}
+
+gui.run("Bolide GUI Min", 320, 200, root);

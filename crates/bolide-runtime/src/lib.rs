@@ -16,6 +16,7 @@
 //! - `web`: HTTP 服务
 //! - `template`: HTML 模板渲染
 //! - `db`: 嵌入式文件数据库
+//! - `gui`: 跨平台 egui 桌面界面
 //! - `thread`: 线程和线程池
 //! - `channel`: 线程安全通道
 
@@ -31,6 +32,7 @@ mod dynamic;
 mod exception;
 mod ffi;
 mod fs;
+mod gui;
 pub mod list;
 mod object;
 mod print;
@@ -53,6 +55,7 @@ pub use dynamic::*;
 pub use exception::*;
 pub use ffi::*;
 pub use fs::*;
+pub use gui::*;
 pub use list::*;
 pub use object::*;
 pub use print::*;

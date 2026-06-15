@@ -1,0 +1,31 @@
+import "std/gui/gui.bl";
+
+fn child(ui: gui.Ui) {
+    ui.label("child");
+    ui.end_row();
+}
+
+fn layout(ui: gui.Ui) {
+    ui.pack_top(4, child);
+    ui.pack_left(4, child);
+    ui.grid("test-grid", 2, true, child);
+    ui.frame("frame", child);
+    ui.scroll("scroll", 120, child);
+    ui.indent("indent", child);
+    ui.centered(child);
+    ui.align("right", child);
+    ui.pad(8, 6, child);
+    ui.width(160, child);
+    ui.height(40, child);
+    ui.size(160, 40, child);
+    ui.fill_width(child);
+    ui.fill_height(child);
+    ui.fill(child);
+    ui.place(8, 8, 120, 32, child);
+    ui.collapsing("more", child);
+}
+
+let backend_name: str = gui.backend();
+print(backend_name);
+print(backend_name + " ok");
+print("后端: " + gui.backend());

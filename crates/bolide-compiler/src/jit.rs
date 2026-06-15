@@ -1389,6 +1389,162 @@ impl JitCompiler {
             "bolide_db_count",
             bolide_runtime::bolide_db_count as *const u8,
         );
+        builder.symbol(
+            "bolide_gui_backend",
+            bolide_runtime::bolide_gui_backend as *const u8,
+        );
+        builder.symbol(
+            "bolide_gui_run",
+            bolide_runtime::bolide_gui_run as *const u8,
+        );
+        builder.symbol(
+            "bolide_gui_label",
+            bolide_runtime::bolide_gui_label as *const u8,
+        );
+        builder.symbol(
+            "bolide_gui_heading",
+            bolide_runtime::bolide_gui_heading as *const u8,
+        );
+        builder.symbol(
+            "bolide_gui_small",
+            bolide_runtime::bolide_gui_small as *const u8,
+        );
+        builder.symbol(
+            "bolide_gui_strong",
+            bolide_runtime::bolide_gui_strong as *const u8,
+        );
+        builder.symbol(
+            "bolide_gui_separator",
+            bolide_runtime::bolide_gui_separator as *const u8,
+        );
+        builder.symbol(
+            "bolide_gui_space",
+            bolide_runtime::bolide_gui_space as *const u8,
+        );
+        builder.symbol(
+            "bolide_gui_button",
+            bolide_runtime::bolide_gui_button as *const u8,
+        );
+        builder.symbol(
+            "bolide_gui_link",
+            bolide_runtime::bolide_gui_link as *const u8,
+        );
+        builder.symbol(
+            "bolide_gui_text_input",
+            bolide_runtime::bolide_gui_text_input as *const u8,
+        );
+        builder.symbol(
+            "bolide_gui_password_input",
+            bolide_runtime::bolide_gui_password_input as *const u8,
+        );
+        builder.symbol(
+            "bolide_gui_multiline_input",
+            bolide_runtime::bolide_gui_multiline_input as *const u8,
+        );
+        builder.symbol(
+            "bolide_gui_checkbox",
+            bolide_runtime::bolide_gui_checkbox as *const u8,
+        );
+        builder.symbol(
+            "bolide_gui_slider",
+            bolide_runtime::bolide_gui_slider as *const u8,
+        );
+        builder.symbol(
+            "bolide_gui_progress",
+            bolide_runtime::bolide_gui_progress as *const u8,
+        );
+        builder.symbol(
+            "bolide_gui_pack",
+            bolide_runtime::bolide_gui_pack as *const u8,
+        );
+        builder.symbol(
+            "bolide_gui_row",
+            bolide_runtime::bolide_gui_row as *const u8,
+        );
+        builder.symbol(
+            "bolide_gui_column",
+            bolide_runtime::bolide_gui_column as *const u8,
+        );
+        builder.symbol(
+            "bolide_gui_group",
+            bolide_runtime::bolide_gui_group as *const u8,
+        );
+        builder.symbol(
+            "bolide_gui_grid",
+            bolide_runtime::bolide_gui_grid as *const u8,
+        );
+        builder.symbol(
+            "bolide_gui_end_row",
+            bolide_runtime::bolide_gui_end_row as *const u8,
+        );
+        builder.symbol(
+            "bolide_gui_frame",
+            bolide_runtime::bolide_gui_frame as *const u8,
+        );
+        builder.symbol(
+            "bolide_gui_scroll",
+            bolide_runtime::bolide_gui_scroll as *const u8,
+        );
+        builder.symbol(
+            "bolide_gui_indent",
+            bolide_runtime::bolide_gui_indent as *const u8,
+        );
+        builder.symbol(
+            "bolide_gui_centered",
+            bolide_runtime::bolide_gui_centered as *const u8,
+        );
+        builder.symbol(
+            "bolide_gui_align",
+            bolide_runtime::bolide_gui_align as *const u8,
+        );
+        builder.symbol(
+            "bolide_gui_pad",
+            bolide_runtime::bolide_gui_pad as *const u8,
+        );
+        builder.symbol(
+            "bolide_gui_width",
+            bolide_runtime::bolide_gui_width as *const u8,
+        );
+        builder.symbol(
+            "bolide_gui_height",
+            bolide_runtime::bolide_gui_height as *const u8,
+        );
+        builder.symbol(
+            "bolide_gui_size",
+            bolide_runtime::bolide_gui_size as *const u8,
+        );
+        builder.symbol(
+            "bolide_gui_fill_width",
+            bolide_runtime::bolide_gui_fill_width as *const u8,
+        );
+        builder.symbol(
+            "bolide_gui_fill_height",
+            bolide_runtime::bolide_gui_fill_height as *const u8,
+        );
+        builder.symbol(
+            "bolide_gui_fill",
+            bolide_runtime::bolide_gui_fill as *const u8,
+        );
+        builder.symbol(
+            "bolide_gui_place",
+            bolide_runtime::bolide_gui_place as *const u8,
+        );
+        builder.symbol(
+            "bolide_gui_collapsing",
+            bolide_runtime::bolide_gui_collapsing as *const u8,
+        );
+        builder.symbol(
+            "bolide_gui_available_width",
+            bolide_runtime::bolide_gui_available_width as *const u8,
+        );
+        builder.symbol(
+            "bolide_gui_available_height",
+            bolide_runtime::bolide_gui_available_height as *const u8,
+        );
+        builder.symbol(
+            "bolide_gui_request_repaint",
+            bolide_runtime::bolide_gui_request_repaint as *const u8,
+        );
 
         // 注册运行时函数 - RC 引用计数管理
         builder.symbol(
@@ -9560,6 +9716,13 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             }
         }
 
+        if matches!(left_ty, BolideType::Str) || matches!(right_ty, BolideType::Str) {
+            return Err(format!(
+                "Cannot apply {:?} to {:?} and {:?}",
+                op, left_ty, right_ty
+            ));
+        }
+
         // Float 运算
         let is_float =
             matches!(left_ty, BolideType::Float) || matches!(right_ty, BolideType::Float);
@@ -11271,6 +11434,15 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                         }
                     }
                 } else if let Expr::Member(base, method) = callee.as_ref() {
+                    if let Expr::Ident(module_name) = base.as_ref() {
+                        if self.modules.contains_key(module_name) {
+                            let func_name = format!("@{}_{}", module_name, method);
+                            if let Some(Some(ret_ty)) = self.func_return_types.get(&func_name) {
+                                return ret_ty.clone();
+                            }
+                        }
+                    }
+
                     let base_ty = self.infer_expr_type(base);
                     match base_ty {
                         BolideType::Dict(k, v) => match method.as_str() {
