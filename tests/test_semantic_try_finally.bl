@@ -1,0 +1,38 @@
+// try/catch/finally control flow in one function.
+
+let log_value: int = 0;
+
+fn append_digit(d: int) {
+    log_value = log_value * 10 + d;
+}
+
+fn check(name: str, got: int, want: int) {
+    if got == want {
+        print("ok " + name);
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want));
+    }
+}
+
+try {
+    append_digit(1);
+    throw 42;
+    append_digit(9);
+} catch (e: int) {
+    append_digit(2);
+    check("caught value", e, 42);
+} finally {
+    append_digit(3);
+}
+check("throw catch finally order", log_value, 123);
+
+try {
+    append_digit(4);
+} catch (e: int) {
+    append_digit(8);
+} finally {
+    append_digit(5);
+}
+check("no throw finally order", log_value, 12345);
+
+print("try finally done");

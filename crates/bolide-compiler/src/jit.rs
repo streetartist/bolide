@@ -86,6 +86,21 @@ struct AdtInfo {
 }
 
 #[derive(Clone)]
+struct BindingSnapshot {
+    name: String,
+    variable: Option<Variable>,
+    var_type: Option<BolideType>,
+    scope_depth: Option<usize>,
+    borrowed: Option<(String, usize)>,
+    weak: bool,
+    moved: bool,
+    closure_var: bool,
+    closure_param_var: bool,
+    spawn_func: Option<String>,
+    lifetime_source: Option<String>,
+}
+
+#[derive(Clone)]
 enum PreparedArg {
     Expr(Expr),
     PackedArgs {
@@ -5299,6 +5314,7 @@ impl JitCompiler {
             }
 
             // 写回 Ref 参数
+            compile_ctx.write_back_closure_captures();
             compile_ctx.write_back_ref_params();
 
             if let Some(ref ret_ty) = func.return_type {
@@ -5414,6 +5430,8 @@ impl JitCompiler {
 
         let block_params = compile_ctx.builder.block_params(entry_block).to_vec();
         let env_ptr = block_params[0];
+        compile_ctx.closure_env_ptr = Some(env_ptr);
+        compile_ctx.closure_captures = job.captures.clone();
 
         // 从 env 恢复捕获变量为局部（借用语义）
         for (i, (name, ty)) in job.captures.iter().enumerate() {
@@ -5463,6 +5481,7 @@ impl JitCompiler {
 
         if !terminated {
             compile_ctx.emit_rc_cleanup();
+            compile_ctx.write_back_closure_captures();
             compile_ctx.write_back_ref_params();
             if let Some(ref ret_ty) = job.return_type {
                 let zero = match ret_ty {
@@ -6351,6 +6370,12 @@ struct CompileContext<'a, 'b> {
     closure_vars: HashSet<String>,
     /// 函数类型参数名（闭包 ABI 调用，但不拥有所有权，作用域结束不释放）
     closure_param_vars: HashSet<String>,
+    /// 每个词法作用域内被遮蔽的名称，用于离开作用域时恢复外层绑定。
+    scope_bindings: Vec<Vec<BindingSnapshot>>,
+    /// 当前 lifted closure 的 env 指针。
+    closure_env_ptr: Option<Value>,
+    /// 当前 lifted closure 捕获变量布局。
+    closure_captures: Vec<(String, BolideType)>,
 }
 
 impl<'a, 'b> CompileContext<'a, 'b> {
@@ -6418,6 +6443,9 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             closure_temps: Vec::new(),
             closure_vars: HashSet::new(),
             closure_param_vars: HashSet::new(),
+            scope_bindings: Vec::new(),
+            closure_env_ptr: None,
+            closure_captures: Vec::new(),
         }
     }
 
@@ -6552,6 +6580,7 @@ impl<'a, 'b> CompileContext<'a, 'b> {
     /// 进入新作用域
     fn enter_scope(&mut self) {
         self.scope_depth += 1;
+        self.scope_bindings.push(Vec::new());
     }
 
     /// 离开作用域，检查借用变量是否悬空
@@ -6578,14 +6607,123 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             }
         }
 
-        // 清理当前作用域的变量
+        // 清理当前作用域的生命周期记录
         for var in &vars_in_scope {
             self.var_scope_depth.remove(var);
             self.borrowed_vars.remove(var);
         }
 
+        if let Some(mut snapshots) = self.scope_bindings.pop() {
+            while let Some(snapshot) = snapshots.pop() {
+                let BindingSnapshot {
+                    name,
+                    variable,
+                    var_type,
+                    scope_depth,
+                    borrowed,
+                    weak,
+                    moved,
+                    closure_var,
+                    closure_param_var,
+                    spawn_func,
+                    lifetime_source,
+                } = snapshot;
+
+                match variable {
+                    Some(var) => {
+                        self.variables.insert(name.clone(), var);
+                    }
+                    None => {
+                        self.variables.remove(&name);
+                    }
+                }
+                match var_type {
+                    Some(ty) => {
+                        self.var_types.insert(name.clone(), ty);
+                    }
+                    None => {
+                        self.var_types.remove(&name);
+                    }
+                }
+                match scope_depth {
+                    Some(depth) => {
+                        self.var_scope_depth.insert(name.clone(), depth);
+                    }
+                    None => {
+                        self.var_scope_depth.remove(&name);
+                    }
+                }
+                match borrowed {
+                    Some(info) => {
+                        self.borrowed_vars.insert(name.clone(), info);
+                    }
+                    None => {
+                        self.borrowed_vars.remove(&name);
+                    }
+                }
+                if weak {
+                    self.weak_variables.insert(name.clone());
+                } else {
+                    self.weak_variables.remove(&name);
+                }
+                if moved {
+                    self.moved_variables.insert(name.clone());
+                } else {
+                    self.moved_variables.remove(&name);
+                }
+                if closure_var {
+                    self.closure_vars.insert(name.clone());
+                } else {
+                    self.closure_vars.remove(&name);
+                }
+                if closure_param_var {
+                    self.closure_param_vars.insert(name.clone());
+                } else {
+                    self.closure_param_vars.remove(&name);
+                }
+                match spawn_func {
+                    Some(func) => {
+                        self.spawn_func_map.insert(name.clone(), func);
+                    }
+                    None => {
+                        self.spawn_func_map.remove(&name);
+                    }
+                }
+                match lifetime_source {
+                    Some(source) => {
+                        self.var_lifetime_source.insert(name, source);
+                    }
+                    None => {
+                        self.var_lifetime_source.remove(&name);
+                    }
+                }
+            }
+        }
+
         self.scope_depth -= 1;
         Ok(())
+    }
+
+    fn snapshot_binding_for_scope(&mut self, name: &str) {
+        let Some(scope) = self.scope_bindings.last_mut() else {
+            return;
+        };
+        if scope.iter().any(|snapshot| snapshot.name == name) {
+            return;
+        }
+        scope.push(BindingSnapshot {
+            name: name.to_string(),
+            variable: self.variables.get(name).copied(),
+            var_type: self.var_types.get(name).cloned(),
+            scope_depth: self.var_scope_depth.get(name).copied(),
+            borrowed: self.borrowed_vars.get(name).cloned(),
+            weak: self.weak_variables.contains(name),
+            moved: self.moved_variables.contains(name),
+            closure_var: self.closure_vars.contains(name),
+            closure_param_var: self.closure_param_vars.contains(name),
+            spawn_func: self.spawn_func_map.get(name).cloned(),
+            lifetime_source: self.var_lifetime_source.get(name).cloned(),
+        });
     }
 
     /// 推断 await 一个 future 表达式后得到的类型
@@ -7185,6 +7323,7 @@ impl<'a, 'b> CompileContext<'a, 'b> {
 
     /// 声明变量
     fn declare_variable(&mut self, name: &str, ty: types::Type) -> Variable {
+        self.snapshot_binding_for_scope(name);
         let var = Variable::new(self.var_counter);
         self.var_counter += 1;
         self.builder.declare_var(var, ty);
@@ -7202,6 +7341,7 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         let var = self.declare_variable(name, c_ty);
         self.builder.def_var(var, val);
         self.var_types.insert(name.to_string(), ty);
+        self.record_var_scope(name);
         Ok(())
     }
 
@@ -7654,7 +7794,9 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             match &arm.pattern {
                 bolide_parser::Pattern::Wildcard => {
                     saw_catch_all = true;
+                    self.enter_scope();
                     let diverted = self.compile_match_arm_body(&arm.body)?;
+                    self.leave_scope()?;
                     if !diverted {
                         self.builder.ins().jump(after_block, &[]);
                         all_diverted = false;
@@ -7662,12 +7804,14 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                 }
                 bolide_parser::Pattern::Bind(name) => {
                     saw_catch_all = true;
+                    self.enter_scope();
                     self.bind_match_value(
                         name,
                         scrutinee_val,
                         &BolideType::Adt(adt_name.to_string(), type_args.to_vec()),
                     )?;
                     let diverted = self.compile_match_arm_body(&arm.body)?;
+                    self.leave_scope()?;
                     if !diverted {
                         self.builder.ins().jump(after_block, &[]);
                         all_diverted = false;
@@ -7712,6 +7856,7 @@ impl<'a, 'b> CompileContext<'a, 'b> {
 
                     self.builder.switch_to_block(body_block);
                     self.builder.seal_block(body_block);
+                    self.enter_scope();
                     self.bind_adt_variant_pattern_fields(
                         scrutinee_val,
                         &variant_info,
@@ -7719,6 +7864,7 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                         &type_map,
                     )?;
                     let diverted = self.compile_match_arm_body(&arm.body)?;
+                    self.leave_scope()?;
                     if !diverted {
                         self.builder.ins().jump(after_block, &[]);
                         all_diverted = false;
@@ -7853,6 +7999,7 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         }
         self.builder.def_var(var, bind_val);
         self.var_types.insert(name.to_string(), ty.clone());
+        self.record_var_scope(name);
         self.track_rc_variable(name, ty);
         Ok(())
     }
@@ -8213,6 +8360,7 @@ impl<'a, 'b> CompileContext<'a, 'b> {
     fn compile_var_decl(&mut self, decl: &VarDecl) -> Result<(), String> {
         // from 借用检查：借用存活期间禁止重声明来源变量（旧对象会被释放）
         self.check_borrow_source_assign(&decl.name)?;
+        self.snapshot_binding_for_scope(&decl.name);
 
         // 确定 Bolide 类型
         let raw_bolide_ty = if let Some(ref t) = decl.ty {
@@ -8260,14 +8408,21 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         // 记录局部变量的 Bolide 类型（需要规范化类型名称）
         self.var_types.insert(decl.name.clone(), bolide_ty.clone());
 
-        // 记录变量的作用域深度
-        self.record_var_scope(&decl.name);
-
         // 转换为 Cranelift 类型
         let ty = self.bolide_type_to_cranelift(&bolide_ty);
 
         // 检查变量是否已存在（循环中已预初始化的变量）
-        let existing_var = self.variables.get(&decl.name).copied();
+        let existing_var = self
+            .variables
+            .get(&decl.name)
+            .copied()
+            .filter(|_| {
+                self.var_scope_depth
+                    .get(&decl.name)
+                    .copied()
+                    .unwrap_or(0)
+                    == self.scope_depth
+            });
 
         let var = if let Some(v) = existing_var {
             // 变量已存在（循环中预初始化过），release 旧值
@@ -8302,6 +8457,7 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             // 首次声明
             self.declare_variable(&decl.name, ty)
         };
+        self.record_var_scope(&decl.name);
 
         if let Some(ref value) = decl.value {
             // 空列表字面量需用类型标注确定元素类型
@@ -8542,6 +8698,7 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             }
 
             // 写回 Ref 参数
+            self.write_back_closure_captures();
             self.write_back_ref_params();
 
             self.builder.ins().return_(&[final_val]);
@@ -8560,6 +8717,7 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             }
 
             // 写回 Ref 参数
+            self.write_back_closure_captures();
             self.write_back_ref_params();
 
             self.builder.ins().return_(&[]);
@@ -8601,6 +8759,23 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             self.builder
                 .ins()
                 .store(MemFlags::new(), current_val, *ptr_addr, 0);
+        }
+    }
+
+    fn write_back_closure_captures(&mut self) {
+        let Some(env_ptr) = self.closure_env_ptr else {
+            return;
+        };
+        for (i, (name, ty)) in self.closure_captures.clone().iter().enumerate() {
+            if let Some(&var) = self.variables.get(name) {
+                let mut val = self.builder.use_var(var);
+                if matches!(ty, BolideType::Float) {
+                    val = self.builder.ins().bitcast(types::I64, MemFlags::new(), val);
+                }
+                self.builder
+                    .ins()
+                    .store(MemFlags::trusted(), val, env_ptr, (i * 8) as i32);
+            }
         }
     }
 
@@ -8672,6 +8847,7 @@ impl<'a, 'b> CompileContext<'a, 'b> {
     ) -> Result<bool, String> {
         if elif_branches.is_empty() {
             if let Some(ref body) = else_body {
+                self.enter_scope();
                 let mut terminated = false;
                 for stmt in body {
                     if terminated {
@@ -8679,6 +8855,7 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                     }
                     terminated = self.compile_stmt(stmt)?;
                 }
+                self.leave_scope()?;
                 if !terminated {
                     self.builder.ins().jump(merge_block, &[]);
                 }
@@ -8701,6 +8878,7 @@ impl<'a, 'b> CompileContext<'a, 'b> {
 
         self.builder.switch_to_block(then_block);
         self.builder.seal_block(then_block);
+        self.enter_scope();
         let mut then_terminated = false;
         for stmt in then_body {
             if then_terminated {
@@ -8708,6 +8886,7 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             }
             then_terminated = self.compile_stmt(stmt)?;
         }
+        self.leave_scope()?;
         if !then_terminated {
             self.builder.ins().jump(merge_block, &[]);
         }
@@ -8874,10 +9053,13 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             _ => return Err("range() expects 1, 2, or 3 arguments".to_string()),
         };
 
+        self.enter_scope();
+
         // 创建循环变量
         let loop_var = self.declare_variable(var_name, types::I64);
         self.builder.def_var(loop_var, start_val);
         self.var_types.insert(var_name.to_string(), BolideType::Int);
+        self.record_var_scope(var_name);
 
         // 创建基本块（latch 块承载递增逻辑，continue 跳到 latch 以保证步进）
         let header_block = self.builder.create_block();
@@ -8952,6 +9134,7 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         self.builder.seal_block(header_block);
         self.builder.switch_to_block(exit_block);
         self.builder.seal_block(exit_block);
+        self.leave_scope()?;
 
         Ok(())
     }
@@ -8972,6 +9155,8 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             .ok_or("list_len not found")?;
         let len_call = self.builder.ins().call(list_len_ref, &[list_ptr]);
         let list_length = self.builder.inst_results(len_call)[0];
+
+        self.enter_scope();
 
         // 使用第一个变量名作为索引变量后缀
         let loop_base_name = if !vars.is_empty() { &vars[0] } else { "loop" };
@@ -8996,6 +9181,7 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             // 注册类型
             self.var_types
                 .insert(vars[0].to_string(), elem_type.clone());
+            self.record_var_scope(&vars[0]);
             Some(v)
         } else {
             None // Destructuring handled inside body
@@ -9125,6 +9311,7 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         self.builder.seal_block(header_block);
         self.builder.switch_to_block(exit_block);
         self.builder.seal_block(exit_block);
+        self.leave_scope()?;
 
         Ok(())
     }
@@ -9141,7 +9328,16 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             BolideType::List(inner) => *inner,
             _ => BolideType::Int,
         };
-        self.compile_list_iteration_loop(vars, list_ptr, elem_type, body)
+        let iter_ty = BolideType::List(Box::new(elem_type.clone()));
+        let owns_temp_iter = self.temp_rc_values.iter().any(|(v, _)| *v == list_ptr);
+        if owns_temp_iter {
+            self.remove_temp_rc_value(list_ptr);
+        }
+        self.compile_list_iteration_loop(vars, list_ptr, elem_type, body)?;
+        if owns_temp_iter {
+            self.emit_release(list_ptr, &iter_ty);
+        }
+        Ok(())
     }
 
     /// 编译 for key in dict { ... }
@@ -9152,6 +9348,7 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         body: &[Statement],
     ) -> Result<(), String> {
         let dict_ptr = self.compile_expr(iter_expr)?;
+        self.enter_scope();
 
         let dict_iter = *self
             .func_refs
@@ -9270,6 +9467,7 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             .get("@_list_release")
             .ok_or("list_release not found")?;
         self.builder.ins().call(release_fn, &[keys_list_ptr]);
+        self.leave_scope()?;
 
         Ok(())
     }
@@ -9721,6 +9919,10 @@ impl<'a, 'b> CompileContext<'a, 'b> {
 
     /// 编译二元操作
     fn compile_binop(&mut self, left: &Expr, op: &BinOp, right: &Expr) -> Result<Value, String> {
+        if matches!(op, BinOp::And | BinOp::Or) {
+            return self.compile_short_circuit_binop(left, op, right);
+        }
+
         // 推断操作数类型
         let left_ty = self.infer_expr_type(left);
         let right_ty = self.infer_expr_type(right);
@@ -9746,6 +9948,10 @@ impl<'a, 'b> CompileContext<'a, 'b> {
 
         let lhs = self.compile_expr(left)?;
         let rhs = self.compile_expr(right)?;
+
+        if matches!(left_ty, BolideType::Dynamic) || matches!(right_ty, BolideType::Dynamic) {
+            return self.compile_dynamic_binop(lhs, &left_ty, op, rhs, &right_ty);
+        }
 
         // BigInt 运算
         if matches!(left_ty, BolideType::BigInt) || matches!(right_ty, BolideType::BigInt) {
@@ -9898,6 +10104,114 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         };
 
         Ok(result)
+    }
+
+    fn compile_dynamic_binop(
+        &mut self,
+        lhs: Value,
+        left_ty: &BolideType,
+        op: &BinOp,
+        rhs: Value,
+        right_ty: &BolideType,
+    ) -> Result<Value, String> {
+        let lhs_dyn = if matches!(left_ty, BolideType::Dynamic) {
+            lhs
+        } else {
+            self.convert_to_dynamic(lhs, left_ty)?
+        };
+        let rhs_dyn = if matches!(right_ty, BolideType::Dynamic) {
+            rhs
+        } else {
+            self.convert_to_dynamic(rhs, right_ty)?
+        };
+
+        let func_name = match op {
+            BinOp::Add => "@_dynamic_add",
+            BinOp::Sub => "@_dynamic_sub",
+            BinOp::Mul => "@_dynamic_mul",
+            BinOp::Div => "@_dynamic_div",
+            _ => {
+                return Err(format!(
+                    "Unsupported dynamic operation: {:?}",
+                    op
+                ))
+            }
+        };
+        let func_ref = *self
+            .func_refs
+            .get(func_name)
+            .ok_or_else(|| format!("{} not found", func_name))?;
+        let call = self.builder.ins().call(func_ref, &[lhs_dyn, rhs_dyn]);
+        let result = self.builder.inst_results(call)[0];
+        self.track_temp_rc_value(result, &BolideType::Dynamic);
+        Ok(result)
+    }
+
+    fn boolish_to_i64(&mut self, value: Value) -> Value {
+        let ty = self.builder.func.dfg.value_type(value);
+        if ty == types::I64 {
+            let zero = self.builder.ins().iconst(types::I64, 0);
+            let cmp = self.builder.ins().icmp(IntCC::NotEqual, value, zero);
+            self.builder.ins().uextend(types::I64, cmp)
+        } else if ty == types::I8 {
+            let zero = self.builder.ins().iconst(types::I8, 0);
+            let cmp = self.builder.ins().icmp(IntCC::NotEqual, value, zero);
+            self.builder.ins().uextend(types::I64, cmp)
+        } else {
+            value
+        }
+    }
+
+    fn compile_short_circuit_binop(
+        &mut self,
+        left: &Expr,
+        op: &BinOp,
+        right: &Expr,
+    ) -> Result<Value, String> {
+        let lhs = self.compile_expr(left)?;
+        let result_var = self.declare_variable(
+            &format!("@_logical_result_{}", self.var_counter),
+            types::I64,
+        );
+
+        let rhs_block = self.builder.create_block();
+        let skip_block = self.builder.create_block();
+        let merge_block = self.builder.create_block();
+
+        match op {
+            BinOp::And => {
+                self.builder
+                    .ins()
+                    .brif(lhs, rhs_block, &[], skip_block, &[]);
+                self.builder.switch_to_block(skip_block);
+                self.builder.seal_block(skip_block);
+                let false_val = self.builder.ins().iconst(types::I64, 0);
+                self.builder.def_var(result_var, false_val);
+                self.builder.ins().jump(merge_block, &[]);
+            }
+            BinOp::Or => {
+                self.builder
+                    .ins()
+                    .brif(lhs, skip_block, &[], rhs_block, &[]);
+                self.builder.switch_to_block(skip_block);
+                self.builder.seal_block(skip_block);
+                let true_val = self.builder.ins().iconst(types::I64, 1);
+                self.builder.def_var(result_var, true_val);
+                self.builder.ins().jump(merge_block, &[]);
+            }
+            _ => unreachable!(),
+        }
+
+        self.builder.switch_to_block(rhs_block);
+        self.builder.seal_block(rhs_block);
+        let rhs = self.compile_expr(right)?;
+        let rhs_bool = self.boolish_to_i64(rhs);
+        self.builder.def_var(result_var, rhs_bool);
+        self.builder.ins().jump(merge_block, &[]);
+
+        self.builder.switch_to_block(merge_block);
+        self.builder.seal_block(merge_block);
+        Ok(self.builder.use_var(result_var))
     }
 
     fn collect_string_concat_operands<'expr>(&self, expr: &'expr Expr, out: &mut Vec<&'expr Expr>) {
@@ -11419,6 +11733,17 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                         BinOp::Add => BolideType::Str,
                         BinOp::Eq | BinOp::Ne => BolideType::Bool,
                         _ => BolideType::Int,
+                    },
+                    (BolideType::Dynamic, _) | (_, BolideType::Dynamic) => match op {
+                        BinOp::Eq
+                        | BinOp::Ne
+                        | BinOp::Lt
+                        | BinOp::Le
+                        | BinOp::Gt
+                        | BinOp::Ge
+                        | BinOp::And
+                        | BinOp::Or => BolideType::Bool,
+                        _ => BolideType::Dynamic,
                     },
                     (BolideType::Float, _) | (_, BolideType::Float) => BolideType::Float,
                     (BolideType::BigInt, _) | (_, BolideType::BigInt) => BolideType::BigInt,

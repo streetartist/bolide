@@ -1,0 +1,32 @@
+// Comprehensions with closures and outer variables.
+
+fn check(name: str, got: int, want: int) {
+    if got == want {
+        print("ok " + name);
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want));
+    }
+}
+
+let offset: int = 10;
+let nums: list<int> = [1, 2, 3, 4, 5];
+let shifted: list<int> = [x + offset for x in nums if x % 2 == 1];
+
+check("comprehension length", shifted.len(), 3);
+check("comprehension first", shifted[0], 11);
+check("comprehension last", shifted[2], 15);
+
+let make = fn(scale: int) -> list<int> {
+    return [x * scale + offset for x in range(4)];
+};
+
+let made: list<int> = make(3);
+check("closure comprehension first", made[0], 10);
+check("closure comprehension last", made[3], 19);
+
+let x: int = 99;
+let shadow: list<int> = [x for x in [7, 8]];
+check("outer not overwritten by comprehension", x, 99);
+check("shadow value", shadow[1], 8);
+
+print("comprehension capture done");

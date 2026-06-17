@@ -1,0 +1,33 @@
+// Closures should capture the right lexical environment and keep state.
+
+fn check(name: str, got: int, want: int) {
+    if got == want {
+        print("ok " + name);
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want));
+    }
+}
+
+fn make_counter(start: int) -> func(int) -> int {
+    let value: int = start;
+    return fn(delta: int) -> int {
+        value = value + delta;
+        return value;
+    };
+}
+
+let a = make_counter(10);
+let b = make_counter(100);
+
+check("counter a first", a(1), 11);
+check("counter a second", a(5), 16);
+check("counter b isolated", b(7), 107);
+check("counter a still isolated", a(0), 16);
+
+let factor: int = 3;
+let scale = fn(x: int) -> int { return x * factor; };
+check("capture sees original lexical value", scale(4), 12);
+factor = 9;
+check("capture after outer mutation", scale(4), 36);
+
+print("closure mutation done");

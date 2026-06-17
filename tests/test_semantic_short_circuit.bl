@@ -1,0 +1,36 @@
+// Boolean short-circuiting must not evaluate the skipped side.
+
+let hits: int = 0;
+
+fn bump() -> bool {
+    hits = hits + 1;
+    return true;
+}
+
+fn check(name: str, got: int, want: int) {
+    if got == want {
+        print("ok " + name);
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want));
+    }
+}
+
+if false and bump() {
+    print("FAIL and branch");
+}
+check("and skipped right", hits, 0);
+
+if true or bump() {
+    check("or branch entered", 1, 1);
+}
+check("or skipped right", hits, 0);
+
+if true and bump() {
+    check("and evaluated right", hits, 1);
+}
+
+if false or bump() {
+    check("or evaluated right", hits, 2);
+}
+
+print("short circuit done");

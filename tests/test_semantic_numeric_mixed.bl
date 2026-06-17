@@ -1,0 +1,28 @@
+// Numeric conversions and mixed-type arithmetic/compare semantics.
+
+fn check(name: str, got: int, want: int) {
+    if got == want {
+        print("ok " + name);
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want));
+    }
+}
+
+let a: int = int(3.9);
+let b: int = int("40");
+let c: int = int(12B);
+let d: int = int(5.8D);
+
+check("numeric conversion sum", a + b + c + d, 60);
+
+let big: bigint = bigint(100) + 23B;
+check("bigint roundtrip", int(big), 123);
+
+let dec: decimal = decimal(1) + 2.5D;
+check("decimal to int trunc", int(dec), 3);
+
+let dyn: dynamic = 21;
+check("dynamic arithmetic int", int(dyn + dyn), 42);
+check("string parse negative", int("-17") + 20, 3);
+
+print("numeric mixed done");

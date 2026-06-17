@@ -1,0 +1,50 @@
+// Method dispatch, overrides, inherited fields, and super lookup.
+
+class Base {
+    n: int;
+
+    fn value() -> int {
+        return self.n;
+    }
+
+    fn twice() -> int {
+        return self.value() * 2;
+    }
+}
+
+class Mid: Base {
+    fn value() -> int {
+        return super.value() + 10;
+    }
+}
+
+class Leaf: Mid {
+    extra: int;
+
+    fn value() -> int {
+        return super.value() + self.extra;
+    }
+
+    fn via_base() -> int {
+        return super.twice();
+    }
+}
+
+fn check(name: str, got: int, want: int) {
+    if got == want {
+        print("ok " + name);
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want));
+    }
+}
+
+let leaf: Leaf = Leaf(5, 7);
+check("override chain", leaf.value(), 22);
+check("base method uses dynamic self", leaf.twice(), 44);
+check("super base method still dynamic", leaf.via_base(), 44);
+
+leaf.n = 20;
+leaf.extra = 1;
+check("field update inherited", leaf.value(), 31);
+
+print("dispatch super done");

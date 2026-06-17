@@ -1,0 +1,46 @@
+// Defaults, named args, variadics, and side-effect order.
+
+let calls: int = 0;
+
+fn next_default() -> int {
+    calls = calls + 1;
+    return calls * 10;
+}
+
+fn pack(a: int = next_default(), b: int = next_default(), c: int = next_default()) -> int {
+    return a * 100 + b * 10 + c;
+}
+
+fn sum_all(label: str = "x", base: int = 0, *nums: int, **opts: int) -> int {
+    let total: int = base + label.len();
+    for n in nums {
+        total = total + n;
+    }
+    if opts.contains("bonus") {
+        total = total + opts.get("bonus");
+    }
+    if opts.contains("penalty") {
+        total = total - opts.get("penalty");
+    }
+    return total;
+}
+
+fn check(name: str, got: int, want: int) {
+    if got == want {
+        print("ok " + name);
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want));
+    }
+}
+
+check("all defaults", pack(), 1230);
+check("default calls count", calls, 3);
+check("skip provided default", pack(b=7), 4120);
+check("default calls count after skip", calls, 5);
+
+let xs: list<int> = [1, 2, 3];
+let opts: dict<str, int> = {"bonus": 5, "penalty": 2};
+check("spread and kwargs", sum_all(label="ab", base=10, *xs, **opts), 21);
+check("positional variadic", sum_all("long", 1, 2, 3), 10);
+
+print("defaults eval done");

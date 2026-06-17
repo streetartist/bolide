@@ -1,0 +1,38 @@
+// Container assignment-copy and slice-copy behavior.
+
+fn check(name: str, got: int, want: int) {
+    if got == want {
+        print("ok " + name);
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want));
+    }
+}
+
+let xs: list<int> = [1, 2, 3, 4, 5];
+let copied: list<int> = xs;
+copied[1] = 20;
+check("list assignment copies", xs[1], 2);
+check("list copy mutation", copied[1], 20);
+
+let mid: list<int> = xs[1:4];
+mid[0] = 200;
+check("slice is independent", xs[1], 2);
+check("slice mutation", mid[0], 200);
+
+let rev: list<int> = xs[::-1];
+check("reverse slice first", rev[0], 5);
+check("reverse slice last", rev[4], 1);
+
+let d: dict<str, int> = {"a": 1, "b": 2};
+let d_copy: dict<str, int> = d;
+d_copy["a"] = 10;
+check("dict assignment copies", d["a"], 1);
+check("dict copy mutation", d_copy["a"], 10);
+
+let keys: list<str> = d.keys();
+check("keys length snapshot", keys.len(), 2);
+d["c"] = 3;
+check("keys snapshot unchanged", keys.len(), 2);
+check("dict updated", d.len(), 3);
+
+print("container copy slice done");

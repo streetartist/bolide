@@ -1,0 +1,66 @@
+// Nested ADT match and shadowing in patterns.
+
+enum Tree {
+    Leaf(int),
+    Pair(Tree, Tree),
+    Empty,
+}
+
+fn sum_tree(t: Tree) -> int {
+    match t {
+        Tree.Leaf(value) => {
+            return value;
+        },
+        Tree.Pair(left, right) => {
+            return sum_tree(left) + sum_tree(right);
+        },
+        Tree.Empty() => {
+            return 0;
+        },
+    }
+}
+
+fn classify(t: Tree) -> int {
+    match t {
+        Leaf(v) => {
+            if v > 10 {
+                return 2;
+            }
+            return 1;
+        },
+        Pair(a, b) => {
+            return classify(a) + classify(b);
+        },
+        Empty() => {
+            return 0;
+        },
+    }
+}
+
+fn check(name: str, got: int, want: int) {
+    if got == want {
+        print("ok " + name);
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want));
+    }
+}
+
+let t: Tree = Tree.Pair(Tree.Leaf(4), Tree.Pair(Tree.Empty(), Tree.Leaf(20)));
+check("sum nested tree", sum_tree(t), 24);
+check("classify nested tree", classify(t), 3);
+
+let value: int = 99;
+match Tree.Leaf(7) {
+    Leaf(value) => {
+        check("pattern shadows outer", value, 7);
+    },
+    Empty() => {
+        print("FAIL wrong match arm");
+    },
+    Pair(a, b) => {
+        print("FAIL wrong pair arm");
+    },
+}
+check("outer after pattern", value, 99);
+
+print("match nested done");

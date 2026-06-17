@@ -1,0 +1,43 @@
+// Scope and shadowing semantics.
+
+fn check(name: str, got: int, want: int) {
+    if got == want {
+        print("ok " + name);
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want));
+    }
+}
+
+let outer: int = 10;
+
+fn read_outer() -> int {
+    return outer;
+}
+
+fn block_shadow() -> int {
+    let x: int = 1;
+    if true {
+        let x: int = 2;
+        if true {
+            let x: int = 3;
+            check("inner shadow", x, 3);
+        }
+        check("middle shadow", x, 2);
+    }
+    return x;
+}
+
+fn loop_shadow() -> int {
+    let total: int = 0;
+    let i: int = 99;
+    for i in range(4) {
+        total = total + i;
+    }
+    check("loop induction does not overwrite outer", i, 99);
+    return total;
+}
+
+check("global read", read_outer(), 10);
+check("block shadow leaves outer", block_shadow(), 1);
+check("loop sum", loop_shadow(), 6);
+print("scope shadow done");
