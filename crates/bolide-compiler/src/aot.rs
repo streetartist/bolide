@@ -6225,7 +6225,7 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
                     .func_ptr_return_type(&args[0])
                     .unwrap_or_else(|| src_elem.clone());
                 let result_tag = Self::bolide_type_to_element_tag(&ret_ty);
-                let func_ptr = self.compile_expr_as_func_ptr(&args[0])?;
+                let func_ptr = self.compile_expr_as_list_map_func_ptr(&args[0], &src_elem)?;
                 let f = *self
                     .func_refs
                     .get("@_list_map")
@@ -6271,6 +6271,52 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
                 let val = self.compile_expr(expr)?;
                 Ok(val)
             }
+        }
+    }
+
+    /// 将 list.map 的回调编译为函数指针。转换内置函数没有用户级函数声明，
+    /// 但其 runtime 符号可直接作为对应源元素类型的回调。
+    fn compile_expr_as_list_map_func_ptr(
+        &mut self,
+        expr: &Expr,
+        src_elem_ty: &BolideType,
+    ) -> Result<Value, String> {
+        if let Expr::Ident(name) = expr {
+            if let Some(runtime_name) = Self::builtin_map_callback_name(name, src_elem_ty) {
+                let func_ref = *self
+                    .func_refs
+                    .get(runtime_name)
+                    .ok_or_else(|| format!("{} not found", runtime_name))?;
+                return Ok(self.builder.ins().func_addr(self.ptr_type, func_ref));
+            }
+        }
+        self.compile_expr_as_func_ptr(expr)
+    }
+
+    fn builtin_map_callback_name(name: &str, src_elem_ty: &BolideType) -> Option<&'static str> {
+        match (name, src_elem_ty) {
+            ("str", BolideType::Int) | ("string", BolideType::Int) => Some("@_string_from_int"),
+            ("str", BolideType::Float) | ("string", BolideType::Float) => {
+                Some("@_string_from_float")
+            }
+            ("str", BolideType::Bool) | ("string", BolideType::Bool) => Some("@_string_from_bool"),
+            ("str", BolideType::BigInt) | ("string", BolideType::BigInt) => {
+                Some("@_string_from_bigint")
+            }
+            ("str", BolideType::Decimal) | ("string", BolideType::Decimal) => {
+                Some("@_string_from_decimal")
+            }
+            ("str", BolideType::Dynamic) | ("string", BolideType::Dynamic) => {
+                Some("@_dynamic_to_string")
+            }
+            ("int", BolideType::Str) => Some("@_string_to_int"),
+            ("float", BolideType::Str) => Some("@_string_to_float"),
+            ("bigint", BolideType::Int) => Some("@_bigint_from_i64"),
+            ("bigint", BolideType::Str) => Some("@_bigint_from_str"),
+            ("decimal", BolideType::Int) => Some("@_decimal_from_i64"),
+            ("decimal", BolideType::Float) => Some("@_decimal_from_f64"),
+            ("decimal", BolideType::Str) => Some("@_decimal_from_str"),
+            _ => None,
         }
     }
 
@@ -9138,6 +9184,14 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
     /// 推断作为 map/filter 回调的函数表达式的返回类型。
     fn func_ptr_return_type(&self, expr: &Expr) -> Option<BolideType> {
         if let Expr::Ident(name) = expr {
+            match name.as_str() {
+                "str" | "string" => return Some(BolideType::Str),
+                "int" => return Some(BolideType::Int),
+                "float" => return Some(BolideType::Float),
+                "bigint" => return Some(BolideType::BigInt),
+                "decimal" => return Some(BolideType::Decimal),
+                _ => {}
+            }
             if let Some(Some(ret_ty)) = self.func_return_types.get(name) {
                 return Some(ret_ty.clone());
             }
