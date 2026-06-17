@@ -1,0 +1,110 @@
+// Bolide website database schema.
+// SQLite + Prisma. All identity is via Gitea OAuth; first user becomes admin.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id          String   @id @default(cuid())
+  githubId    Int      @unique
+  login       String   @unique
+  email       String?
+  avatarUrl   String?
+  role        String   @default("user") // "user" | "admin"
+  createdAt   DateTime @default(now())
+
+  submissions  Submission[] @relation("Submitter")
+  reviewedPkgs Package[]    @relation("Reviewer")
+  tweets       Tweet[]      @relation("TweetAuthor")
+}
+
+model Package {
+  id           String   @id @default(cuid())
+  name         String   @unique
+  description  String?
+  homepage     String?
+  repository   String
+  // GitHub-style owner/repo derived from `repository` for tarball generation.
+  owner        String
+  repo         String
+  license      String?
+  authors      String?  // comma-separated for simplicity
+  status       String   @default("approved") // "approved" | "yanked"
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  reviewerId   String?
+  reviewer     User?    @relation("Reviewer", fields: [reviewerId], references: [id])
+
+  versions     PackageVersion[]
+  submissions  Submission[]
+
+  @@index([name])
+}
+
+model PackageVersion {
+  id           String   @id @default(cuid())
+  packageId    String
+  package      Package  @relation(fields: [packageId], references: [id], onDelete: Cascade)
+  version      String
+  ref          String   // git tag, e.g. "v0.1.0" or commit
+  downloadUrl  String
+  checksum     String   // sha256 hex
+  yank         Boolean  @default(false)
+  createdAt    DateTime @default(now())
+
+  @@unique([packageId, version])
+}
+
+model Submission {
+  id           String   @id @default(cuid())
+  name         String
+  repository   String
+  ref          String   @default("main")
+  description  String?
+  homepage     String?
+  license      String?
+  authors      String?
+  version      String   // proposed initial version
+  status       String   @default("pending") // "pending" | "approved" | "rejected"
+  rejectionReason String?
+  createdAt    DateTime @default(now())
+  decidedAt    DateTime?
+
+  submitterId  String
+  submitter    User     @relation("Submitter", fields: [submitterId], references: [id])
+
+  packageId    String?
+  package      Package? @relation(fields: [packageId], references: [id])
+
+  @@index([status])
+}
+
+model Tweet {
+  id           String   @id @default(cuid())
+  slug         String   @unique
+  title        String
+  body         String   // markdown
+  publishedAt  DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  authorId     String
+  author       User     @relation("TweetAuthor", fields: [authorId], references: [id])
+}
+
+model WebhookEvent {
+  id           String   @id @default(cuid())
+  source       String   // "gitea"
+  event        String
+  delivery     String?  // X-Gitea-Delivery
+  signature    String?
+  payload      String   // raw JSON
+  receivedAt   DateTime @default(now())
+  processed    Boolean  @default(false)
+  error        String?
+}
