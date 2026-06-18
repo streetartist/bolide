@@ -1,0 +1,70 @@
+// Function values should keep their identity through branches and repeated returns.
+
+let order_log: int = 0;
+
+fn touch(d: int) -> int {
+    order_log = order_log * 10 + d;
+    return d;
+}
+
+fn add3(a: int, b: int, c: int) -> int {
+    return a + b + c;
+}
+
+fn pack3(a: int, b: int, c: int) -> int {
+    return a * 100 + b * 10 + c;
+}
+
+fn choose(flag: int) -> func(int, int, int) -> int {
+    if flag == 1 {
+        return pack3;
+    }
+    return add3;
+}
+
+fn choose_via_local(flag: int) -> func(int, int, int) -> int {
+    let f = add3;
+    if flag == 1 {
+        f = pack3;
+    }
+    return f;
+}
+
+fn relay(f: func(int, int, int) -> int) -> func(int, int, int) -> int {
+    return f;
+}
+
+fn choose_relay(flag: int) -> func(int, int, int) -> int {
+    return relay(choose(flag));
+}
+
+fn choose_relay_twice(flag: int) -> func(int, int, int) -> int {
+    let f = choose_relay(flag);
+    return relay(f);
+}
+
+fn check(name: str, got: int, want: int) {
+    if got == want {
+        print("ok " + name);
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want));
+    }
+}
+
+order_log = 0;
+check("branch direct selected func", choose(1)(touch(1), touch(2), touch(3)), 123);
+check("branch direct eval order", order_log, 123);
+
+order_log = 0;
+check("branch alternate selected func", choose(0)(touch(1), touch(2), touch(3)), 6);
+check("branch alternate eval order", order_log, 123);
+
+order_log = 0;
+check("branch local selected func", choose_via_local(1)(touch(1), touch(2), touch(3)), 123);
+check("branch local eval order", order_log, 123);
+
+order_log = 0;
+check("branch relay twice selected func", choose_relay_twice(1)(touch(1), touch(2), touch(3)), 123);
+check("branch relay twice eval order", order_log, 123);
+
+print("func value branch flow done");

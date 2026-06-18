@@ -12,7 +12,7 @@
     <img src="https://img.shields.io/badge/License-MIT-brightgreen.svg" alt="License: MIT">
   </a>
   <a href="#">
-    <img src="https://img.shields.io/badge/version-0.12.1-blue.svg" alt="Version">
+    <img src="https://img.shields.io/badge/version-0.12.3-blue.svg" alt="Version">
   </a>
   <a href="#">
     <img src="https://img.shields.io/badge/platform-windows%20%7C%20linux-lightgrey.svg" alt="Platform">
@@ -39,6 +39,7 @@
 - **异步协程** - 一等公民的 async/await 支持
 - **双向 FFI** - 无缝调用 C 库（支持回调）；也可将 Bolide 编译为静态库供 C 调用（`export fn` + `.h` 生成）
 - **模块系统** - 命名空间隔离的模块导入
+- **源码级报错** - `run`、`compile` 和 REPL 输出文件名、行列号、源码片段、指针标注与修复提示
 - **丰富类型** - BigInt、Decimal、Dynamic 等
 - **并发支持** - 线程、通道、线程池
 - **Web 标准库** - 高性能 HTTP 服务、路由、会话、静态文件和 AOT 单文件部署
@@ -91,6 +92,34 @@ AOT 编译的优势：
 - **无需运行时** - 生成的可执行文件可独立运行
 - **更快启动** - 跳过 JIT 编译阶段
 - **便于分发** - 单文件部署，无依赖
+
+### 源码级错误诊断
+
+`bolide run`、`bolide compile` 和 REPL 都会输出带源码位置的诊断信息。语法错误使用解析器保留的精确位置；常见语义错误（未定义变量/函数/通道、未知方法、缺少必填参数、导入失败等）会定位到最相关的源码 token，并附带简短修复提示。
+
+例如：
+
+```bolide
+let x = missing_name + 1;
+print(x);
+```
+
+运行后会得到类似输出：
+
+```text
+Error: bolide::compile
+
+  × Compile error: Undefined variable or function: missing_name
+   ╭─[example.bl:1:9]
+ 1 │ let x = missing_name + 1;
+   ·         ──────┬─────
+   ·               ╰── 'missing_name' is not defined
+ 2 │ print(x);
+   ╰────
+  help: Define the name before using it, or check for a spelling/import mistake.
+```
+
+这套诊断覆盖 JIT 运行、AOT 编译和静态库编译入口；REPL 中也会显示 `<repl>:行:列`、源码行和 caret 标注。
 
 #### 编译为静态库（C 调用 Bolide）
 

@@ -2,14 +2,105 @@
 
 use crate::ast::*;
 use crate::{BolideParser, Rule};
+use pest::error::{ErrorVariant, InputLocation};
 use pest::iterators::Pair;
+use pest::iterators::Pairs;
 use pest::Parser;
+use std::fmt;
+
+/// Structured parse diagnostic with byte-based source location.
+#[derive(Debug, Clone)]
+pub struct ParseDiagnostic {
+    pub message: String,
+    pub span: Option<(usize, usize)>,
+    pub label: Option<String>,
+    pub help: Option<String>,
+}
+
+impl ParseDiagnostic {
+    fn from_pest(source: &str, error: pest::error::Error<Rule>) -> Self {
+        let span = match error.location {
+            InputLocation::Pos(offset) => {
+                let len = source[offset..]
+                    .chars()
+                    .next()
+                    .map(|c| c.len_utf8())
+                    .unwrap_or(0);
+                Some((offset, len))
+            }
+            InputLocation::Span((start, end)) => Some((start, end.saturating_sub(start))),
+        };
+
+        let (message, help) = match &error.variant {
+            ErrorVariant::ParsingError {
+                positives,
+                negatives,
+            } => {
+                let expected = format_rules(positives);
+                let unexpected = format_rules(negatives);
+                let message = match (expected.is_empty(), unexpected.is_empty()) {
+                    (false, false) => {
+                        format!("invalid syntax: expected {}, not {}", expected, unexpected)
+                    }
+                    (false, true) => format!("invalid syntax: expected {}", expected),
+                    (true, false) => format!("invalid syntax: unexpected {}", unexpected),
+                    (true, true) => "invalid syntax".to_string(),
+                };
+                let help = if expected.contains("';'") {
+                    Some("Bolide statements usually end with ';'.".to_string())
+                } else if expected.contains("'}'") || expected.contains("block") {
+                    Some("Check that every '{' has a matching '}'.".to_string())
+                } else if expected.contains("expression") {
+                    Some("An expression is required here.".to_string())
+                } else {
+                    Some("Check the token at the marked position.".to_string())
+                };
+                (message, help)
+            }
+            ErrorVariant::CustomError { message } => (message.clone(), None),
+        };
+
+        Self {
+            message,
+            span,
+            label: Some("syntax error starts here".to_string()),
+            help,
+        }
+    }
+
+    fn from_conversion(message: String) -> Self {
+        Self {
+            message,
+            span: None,
+            label: None,
+            help: Some(
+                "The parser accepted the syntax but could not build a valid AST.".to_string(),
+            ),
+        }
+    }
+}
+
+impl fmt::Display for ParseDiagnostic {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+
+impl std::error::Error for ParseDiagnostic {}
 
 /// 解析源代码为 AST
 pub fn parse(source: &str) -> Result<Program, String> {
-    let pairs =
-        BolideParser::parse(Rule::program, source).map_err(|e| format!("Parse error: {}", e))?;
+    parse_with_diagnostics(source).map_err(|e| e.to_string())
+}
 
+/// 解析源代码为 AST，并保留语法错误位置。
+pub fn parse_with_diagnostics(source: &str) -> Result<Program, ParseDiagnostic> {
+    let pairs = BolideParser::parse(Rule::program, source)
+        .map_err(|e| ParseDiagnostic::from_pest(source, e))?;
+    parse_pairs(pairs).map_err(ParseDiagnostic::from_conversion)
+}
+
+fn parse_pairs(pairs: Pairs<Rule>) -> Result<Program, String> {
     let mut statements = Vec::new();
     for pair in pairs {
         if pair.as_rule() == Rule::program {
@@ -28,6 +119,42 @@ pub fn parse(source: &str) -> Result<Program, String> {
     }
 
     Ok(Program { statements })
+}
+
+fn format_rules(rules: &[Rule]) -> String {
+    let mut parts: Vec<&'static str> = rules.iter().filter_map(friendly_rule_name).collect();
+    parts.sort_unstable();
+    parts.dedup();
+    parts.join(", ")
+}
+
+fn friendly_rule_name(rule: &Rule) -> Option<&'static str> {
+    match rule {
+        Rule::EOI => Some("end of file"),
+        Rule::statement => Some("statement"),
+        Rule::expr | Rule::or_expr | Rule::and_expr => Some("expression"),
+        Rule::primary => Some("literal, identifier, or parenthesized expression"),
+        Rule::ident => Some("identifier"),
+        Rule::block => Some("block"),
+        Rule::type_expr => Some("type"),
+        Rule::param => Some("parameter"),
+        Rule::param_list => Some("parameter list"),
+        Rule::call_arg | Rule::call_args => Some("call argument"),
+        Rule::var_decl => Some("'let' declaration"),
+        Rule::func_def => Some("'fn' definition"),
+        Rule::class_def => Some("'class' definition"),
+        Rule::if_stmt => Some("'if' statement"),
+        Rule::while_stmt => Some("'while' statement"),
+        Rule::for_stmt => Some("'for' statement"),
+        Rule::return_stmt => Some("'return' statement"),
+        Rule::expr_stmt => Some("expression statement"),
+        Rule::assign_stmt => Some("assignment"),
+        Rule::string_lit => Some("string literal"),
+        Rule::int_lit | Rule::float_lit | Rule::bigint_lit | Rule::decimal_lit => {
+            Some("number literal")
+        }
+        _ => None,
+    }
 }
 
 fn parse_statement(pair: Pair<Rule>) -> Result<Option<Statement>, String> {

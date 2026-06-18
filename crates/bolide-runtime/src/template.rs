@@ -249,7 +249,9 @@ fn lookup_in_dict(dict: *const BolideDict, key: &str) -> ValueRef {
         ElementType::Dict => ValueRef::Dict(raw as *const BolideDict),
         ElementType::Dynamic => ValueRef::Dynamic(raw as *const BolideDynamic),
         ElementType::Bytes => ValueRef::Bytes(raw as *const BolideBytes),
-        ElementType::BigInt | ElementType::Decimal | ElementType::Ptr => ValueRef::None,
+        ElementType::BigInt | ElementType::Decimal | ElementType::Ptr | ElementType::Closure => {
+            ValueRef::None
+        }
     }
 }
 
@@ -378,7 +380,10 @@ fn list_items(value: ValueRef) -> Vec<ValueRef> {
             ElementType::Dict => ValueRef::Dict(raw as *const BolideDict),
             ElementType::Dynamic => ValueRef::Dynamic(raw as *const BolideDynamic),
             ElementType::Bytes => ValueRef::Bytes(raw as *const BolideBytes),
-            ElementType::BigInt | ElementType::Decimal | ElementType::Ptr => ValueRef::None,
+            ElementType::BigInt
+            | ElementType::Decimal
+            | ElementType::Ptr
+            | ElementType::Closure => ValueRef::None,
         };
         items.push(item);
     }

@@ -1,0 +1,64 @@
+// Function values should survive all typed container and field storage paths.
+
+fn inc(x: int) -> int {
+    return x + 1;
+}
+
+fn triple(x: int) -> int {
+    return x * 3;
+}
+
+fn make_adder(n: int) -> func(int) -> int {
+    return fn(x: int) -> int {
+        return x + n;
+    };
+}
+
+class Slot {
+    f: func(int) -> int;
+
+    fn get() -> func(int) -> int {
+        return self.f;
+    }
+}
+
+fn check(name: str, got: int, want: int) {
+    if got == want {
+        print("ok " + name);
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want));
+    }
+}
+
+let funcs: list<func(int) -> int> = [inc, make_adder(10)];
+check("list raw function", funcs[0](4), 5);
+check("list closure", funcs[1](4), 14);
+
+funcs[0] = make_adder(20);
+funcs[1] = triple;
+check("list closure assignment", funcs[0](4), 24);
+check("list raw assignment", funcs[1](4), 12);
+
+let table: dict<str, func(int) -> int> = {"a": make_adder(30), "b": inc};
+let picked = table["a"];
+check("dict closure fetch", picked(2), 32);
+check("dict raw fetch", table["b"](2), 3);
+
+table["a"] = triple;
+table["c"] = make_adder(40);
+check("dict raw overwrite", table["a"](3), 9);
+check("dict closure assignment", table["c"](3), 43);
+
+let pair: (func(int) -> int, func(int) -> int) = (make_adder(50), inc);
+let first = pair[0];
+check("tuple closure fetch", first(5), 55);
+check("tuple raw fetch", pair[1](5), 6);
+
+let slot = Slot(make_adder(60));
+check("field constructor closure", slot.get()(6), 66);
+slot.f = triple;
+check("field raw assignment", slot.get()(6), 18);
+slot.f = make_adder(70);
+check("field closure assignment", slot.get()(6), 76);
+
+print("func value containers done");

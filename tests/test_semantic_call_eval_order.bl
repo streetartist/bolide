@@ -1,0 +1,29 @@
+// Call argument expressions should run left-to-right as written.
+
+let order_log: int = 0;
+
+fn bump(d: int) -> int {
+    order_log = order_log * 10 + d;
+    return d;
+}
+
+fn pack3(a: int, b: int, c: int) -> int {
+    return a * 100 + b * 10 + c;
+}
+
+fn check(name: str, got: int, want: int) {
+    if got == want {
+        print("ok " + name);
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want));
+    }
+}
+
+check("positional result", pack3(bump(1), bump(2), bump(3)), 123);
+check("positional eval order", order_log, 123);
+
+order_log = 0;
+check("named result", pack3(c=bump(3), a=bump(1), b=bump(2)), 123);
+check("named eval order", order_log, 312);
+
+print("call eval order done");

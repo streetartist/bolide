@@ -30,10 +30,6 @@ fn add_free(
     if bound.contains(name) || seen.contains(name) {
         return;
     }
-    // self / super 不是普通捕获变量
-    if name == "self" || name == "super" {
-        return;
-    }
     seen.insert(name.to_string());
     free.push(name.to_string());
 }

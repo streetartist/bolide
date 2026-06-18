@@ -1,0 +1,37 @@
+// Nested try/catch should run inner finally before rethrowing to outer catch.
+
+let log_value: int = 0;
+
+fn mark(d: int) {
+    log_value = log_value * 10 + d;
+}
+
+fn check(name: str, got: int, want: int) {
+    if got == want {
+        print("ok " + name);
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want));
+    }
+}
+
+try {
+    try {
+        mark(1);
+        throw 7;
+        mark(9);
+    } catch (e: int) {
+        mark(2);
+        throw e;
+    } finally {
+        mark(3);
+    }
+} catch (e: int) {
+    mark(4);
+    check("outer catch value", e, 7);
+} finally {
+    mark(5);
+}
+
+check("rethrow finally order", log_value, 12345);
+
+print("rethrow finally done");

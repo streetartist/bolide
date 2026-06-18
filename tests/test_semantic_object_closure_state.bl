@@ -1,0 +1,80 @@
+// Object captures inside closures should keep object identity, field mutation,
+// dynamic dispatch, and container ownership consistent.
+
+class BaseBox {
+    n: int;
+
+    fn value() -> int {
+        return self.n;
+    }
+
+    fn make_reader(bias: int) -> func(int) -> int {
+        return fn(x: int) -> int {
+            return self.value() + bias + x;
+        };
+    }
+
+    fn make_bumper(step: int) -> func(int) -> int {
+        return fn(x: int) -> int {
+            self.n = self.n + step;
+            return self.value() + x;
+        };
+    }
+}
+
+class FancyBox: BaseBox {
+    extra: int;
+
+    fn value() -> int {
+        return super.value() + self.extra;
+    }
+}
+
+fn choose(flag: int, a: func(int) -> int, b: func(int) -> int) -> func(int) -> int {
+    if flag == 1 {
+        return a;
+    }
+    return b;
+}
+
+fn check(name: str, got: int, want: int) {
+    if got == want {
+        print("ok " + name);
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want));
+    }
+}
+
+let box: FancyBox = FancyBox(10, 5);
+check("initial dynamic value", box.value(), 15);
+
+let reader = box.make_reader(3);
+check("closure reads dynamic method", reader(2), 20);
+
+box.n = 20;
+check("closure sees object field update", reader(2), 30);
+
+let bumper = box.make_bumper(4);
+check("closure mutates captured object", bumper(1), 30);
+check("reader sees bumper mutation", reader(0), 32);
+
+let funcs: list<func(int) -> int> = [reader, bumper];
+check("list stored object closure read", funcs[0](1), 33);
+check("list stored object closure mutate", funcs[1](0), 33);
+
+let picked = choose(1, funcs[0], funcs[1]);
+check("selected stored closure reads object", picked(2), 38);
+
+let boxes: list<FancyBox> = [box];
+let alias = boxes[0];
+alias.extra = 7;
+check("object fetched from list aliases original", box.value(), 35);
+check("closure observes aliased object mutation", reader(0), 38);
+
+let dict: dict<str, FancyBox> = {"box": box};
+let from_dict = dict.get("box");
+from_dict.n = 30;
+check("object fetched from dict aliases original", box.value(), 37);
+check("stored closure after dict object mutation", funcs[0](0), 40);
+
+print("object closure state done");

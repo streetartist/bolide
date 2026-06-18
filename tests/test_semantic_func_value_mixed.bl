@@ -1,0 +1,10 @@
+fn double(x: int) -> int {
+    return x * 2;
+}
+
+fn apply(f: func(int) -> int, x: int) -> int {
+    return f(x);
+}
+
+print(apply(double, 5));
+print(apply(fn(x: int) -> int { return x + 7; }, 5));

@@ -1,0 +1,32 @@
+// elif branches should get their own scope and not leak bindings.
+
+fn check(name: str, got: int, want: int) {
+    if got == want {
+        print("ok " + name);
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want));
+    }
+}
+
+fn classify(n: int) -> int {
+    let x: int = 1;
+    if n == 0 {
+        let x: int = 10;
+        check("if branch shadow", x, 10);
+    } elif n == 1 {
+        let x: int = 20;
+        check("elif branch shadow", x, 20);
+    } else {
+        let x: int = 30;
+        check("else branch shadow", x, 30);
+    }
+    return x;
+}
+
+let outer: int = 99;
+check("if branch result", classify(0), 1);
+check("elif branch result", classify(1), 1);
+check("else branch result", classify(2), 1);
+check("outer after elif chain", outer, 99);
+
+print("elif shadow done");

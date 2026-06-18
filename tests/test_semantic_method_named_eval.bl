@@ -1,0 +1,40 @@
+// Method named arguments and defaults should evaluate in the expected order.
+
+let order_log: int = 0;
+let default_calls: int = 0;
+
+fn touch(d: int) -> int {
+    order_log = order_log * 10 + d;
+    return d;
+}
+
+fn next_default() -> int {
+    default_calls = default_calls + 1;
+    order_log = order_log * 10 + 9;
+    return default_calls * 10;
+}
+
+class Packer {
+    fn pack(a: int = next_default(), b: int = next_default(), c: int = next_default()) -> int {
+        return a * 100 + b * 10 + c;
+    }
+}
+
+fn check(name: str, got: int, want: int) {
+    if got == want {
+        print("ok " + name);
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want));
+    }
+}
+
+let p = Packer();
+check("method named result", p.pack(c=touch(3), a=touch(1), b=touch(2)), 123);
+check("method named eval order", order_log, 312);
+
+order_log = 0;
+check("method default skip result", p.pack(b=7), 1090);
+check("method default skip eval order", order_log, 99);
+check("method default skip calls", default_calls, 2);
+
+print("method named eval done");

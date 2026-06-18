@@ -1,0 +1,39 @@
+// Literal elements and indexed assignment should evaluate left-to-right.
+
+let order_log: int = 0;
+
+fn touch(d: int) -> int {
+    order_log = order_log * 10 + d;
+    return d;
+}
+
+fn check(name: str, got: int, want: int) {
+    if got == want {
+        print("ok " + name);
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want));
+    }
+}
+
+order_log = 0;
+let xs: list<int> = [touch(1), touch(2), touch(3)];
+check("list literal order", order_log, 123);
+check("list literal value", xs[2], 3);
+
+order_log = 0;
+let d: dict<int, int> = {touch(1): touch(2), touch(3): touch(4)};
+check("dict literal order", order_log, 1234);
+check("dict literal first value", d[1], 2);
+check("dict literal second value", d[3], 4);
+
+order_log = 0;
+xs[touch(1)] = touch(4);
+check("list indexed assignment order", order_log, 14);
+check("list indexed assignment value", xs[1], 4);
+
+order_log = 0;
+d[touch(5)] = touch(6);
+check("dict indexed assignment order", order_log, 56);
+check("dict indexed assignment value", d[5], 6);
+
+print("literal assign eval order done");

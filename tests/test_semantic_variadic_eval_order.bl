@@ -1,0 +1,42 @@
+// Spread and kw-spread expressions should run left-to-right as written.
+
+let order_log: int = 0;
+
+fn touch(d: int) -> int {
+    order_log = order_log * 10 + d;
+    return d;
+}
+
+fn nums_from(tag: int) -> list<int> {
+    order_log = order_log * 10 + tag;
+    return [tag * 10];
+}
+
+fn opts_from(tag: int) -> dict<str, int> {
+    order_log = order_log * 10 + tag;
+    return {"bonus": tag};
+}
+
+fn collect(a: int, b: int, *nums: int, **opts: int) -> int {
+    let total: int = a * 100 + b * 10;
+    for n in nums {
+        total = total + n;
+    }
+    if opts.contains("bonus") {
+        total = total + opts.get("bonus");
+    }
+    return total;
+}
+
+fn check(name: str, got: int, want: int) {
+    if got == want {
+        print("ok " + name);
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want));
+    }
+}
+
+check("variadic result", collect(a=touch(1), *nums_from(2), b=touch(3), **opts_from(4)), 154);
+check("variadic eval order", order_log, 1234);
+
+print("variadic eval order done");

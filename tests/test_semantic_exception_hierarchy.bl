@@ -1,0 +1,40 @@
+// Exception subclass matching should respect type hierarchy and clause order.
+
+class MyError: Error {}
+class OtherError: Error {}
+
+fn check(name: str, got: int, want: int) {
+    if got == want {
+        print("ok " + name);
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want));
+    }
+}
+
+let log_value: int = 0;
+
+fn mark(d: int) {
+    log_value = log_value * 10 + d;
+}
+
+try {
+    throw MyError("boom");
+} catch (e: OtherError) {
+    mark(9);
+} catch (e: MyError) {
+    mark(1);
+    check("specific catch message", e.message.len(), 4);
+} catch (e: Error) {
+    mark(8);
+}
+
+try {
+    throw MyError("boom");
+} catch (e: Error) {
+    mark(2);
+    check("parent catches subclass", e.message.len(), 4);
+}
+
+check("exception hierarchy order", log_value, 12);
+
+print("exception hierarchy done");

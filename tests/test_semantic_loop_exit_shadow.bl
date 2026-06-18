@@ -1,0 +1,33 @@
+// Loop-local bindings must be cleaned up correctly on continue and break.
+
+fn check(name: str, got: int, want: int) {
+    if got == want {
+        print("ok " + name);
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want));
+    }
+}
+
+fn loop_shadow() -> int {
+    let x: int = 100;
+    let total: int = 0;
+    let i: int = 0;
+    while i < 4 {
+        let x: int = i;
+        if i == 1 {
+            i = i + 1;
+            continue;
+        }
+        if i == 3 {
+            break;
+        }
+        total = total + x;
+        i = i + 1;
+    }
+    check("outer after while", x, 100);
+    return total;
+}
+
+check("loop shadow total", loop_shadow(), 2);
+
+print("loop exit shadow done");

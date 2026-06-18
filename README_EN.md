@@ -12,7 +12,7 @@
     <img src="https://img.shields.io/badge/License-MIT-brightgreen.svg" alt="License: MIT">
   </a>
   <a href="#">
-    <img src="https://img.shields.io/badge/version-0.12.1-blue.svg" alt="Version">
+    <img src="https://img.shields.io/badge/version-0.12.3-blue.svg" alt="Version">
   </a>
   <a href="#">
     <img src="https://img.shields.io/badge/platform-windows%20%7C%20linux-lightgrey.svg" alt="Platform">
@@ -31,6 +31,7 @@
 - **Async Coroutines** - First-class async/await support
 - **Bidirectional FFI** - Call C libraries (with callbacks); also compile Bolide to a static library callable from C (`export fn` + `.h` generation)
 - **Module System** - Namespace-isolated module imports
+- **Source Diagnostics** - `run`, `compile`, and the REPL report filenames, line/column numbers, source snippets, carets, and targeted help
 - **Rich Types** - BigInt, Decimal, Dynamic, and more
 - **Concurrency** - Threads, channels, thread pools
 - **Memory Management** - ARC (atomic refcounts) + checked lifetime annotations + liveness-checked weak/unowned references
@@ -82,6 +83,34 @@ AOT compilation advantages:
 - **No runtime needed** - Generated executables run independently
 - **Faster startup** - Skip JIT compilation phase
 - **Easy distribution** - Single file deployment, no dependencies
+
+### Source Diagnostics
+
+`bolide run`, `bolide compile`, and the REPL print source-aware diagnostics. Syntax errors use exact parser locations; common semantic errors such as undefined variables/functions/channels, unknown methods, missing required arguments, and import failures are mapped back to the most relevant source token with a short help message.
+
+Example:
+
+```bolide
+let x = missing_name + 1;
+print(x);
+```
+
+The CLI reports:
+
+```text
+Error: bolide::compile
+
+  × Compile error: Undefined variable or function: missing_name
+   ╭─[example.bl:1:9]
+ 1 │ let x = missing_name + 1;
+   ·         ──────┬─────
+   ·               ╰── 'missing_name' is not defined
+ 2 │ print(x);
+   ╰────
+  help: Define the name before using it, or check for a spelling/import mistake.
+```
+
+The same diagnostic layer is used by JIT runs, AOT builds, and static-library builds. In the REPL, diagnostics are shown with `<repl>:line:column`, the source line, and a caret marker.
 
 ## Syntax Examples
 

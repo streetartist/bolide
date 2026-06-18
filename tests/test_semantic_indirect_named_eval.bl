@@ -1,0 +1,39 @@
+// Indirect function/closure calls should preserve positional evaluation order.
+
+let order_log: int = 0;
+
+fn touch(d: int) -> int {
+    order_log = order_log * 10 + d;
+    return d;
+}
+
+fn pack3(a: int, b: int, c: int) -> int {
+    return a * 100 + b * 10 + c;
+}
+
+fn make_packer() -> func(int, int, int) -> int {
+    return pack3;
+}
+
+fn check(name: str, got: int, want: int) {
+    if got == want {
+        print("ok " + name);
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want));
+    }
+}
+
+let fp = pack3;
+check("func var positional result", fp(touch(1), touch(2), touch(3)), 123);
+check("func var positional order", order_log, 123);
+
+order_log = 0;
+let cp = make_packer();
+check("closure positional result", cp(touch(1), touch(2), touch(3)), 123);
+check("closure positional order", order_log, 123);
+
+order_log = 0;
+check("returned func direct result", make_packer()(touch(1), touch(2), touch(3)), 123);
+check("returned func direct order", order_log, 123);
+
+print("indirect positional eval done");

@@ -18,11 +18,12 @@ pub enum ElementType {
     String = 3,
     BigInt = 4,
     Decimal = 5,
-    List = 6,    // 嵌套列表
-    Ptr = 7,     // 通用指针
-    Dict = 8,    // 字典
-    Dynamic = 9, // 动态类型
-    Bytes = 10,  // 二进制缓冲区
+    List = 6,     // 嵌套列表
+    Ptr = 7,      // 通用指针
+    Dict = 8,     // 字典
+    Dynamic = 9,  // 动态类型
+    Bytes = 10,   // 二进制缓冲区
+    Closure = 11, // 闭包对象
 }
 
 impl ElementType {
@@ -50,6 +51,7 @@ impl ElementType {
             8 => ElementType::Dict,
             9 => ElementType::Dynamic,
             10 => ElementType::Bytes,
+            11 => ElementType::Closure,
             _ => ElementType::Int,
         }
     }
@@ -250,6 +252,9 @@ impl BolideList {
             ElementType::Bytes => {
                 crate::bolide_bytes_retain(ptr as *mut crate::BolideBytes);
             }
+            ElementType::Closure => {
+                crate::bolide_closure_retain(ptr);
+            }
             _ => {}
         }
     }
@@ -281,6 +286,9 @@ impl BolideList {
             }
             ElementType::Bytes => {
                 crate::bolide_bytes_release(ptr as *mut crate::BolideBytes);
+            }
+            ElementType::Closure => {
+                crate::bolide_closure_release(ptr);
             }
             _ => {}
         }
@@ -359,6 +367,7 @@ pub extern "C" fn bolide_list_new(elem_type: u8) -> *mut BolideList {
         8 => ElementType::Dict,
         9 => ElementType::Dynamic,
         10 => ElementType::Bytes,
+        11 => ElementType::Closure,
         _ => ElementType::Int,
     };
     BolideList::new(elem_type)
@@ -378,6 +387,7 @@ pub extern "C" fn bolide_list_with_capacity(elem_type: u8, capacity: usize) -> *
         8 => ElementType::Dict,
         9 => ElementType::Dynamic,
         10 => ElementType::Bytes,
+        11 => ElementType::Closure,
         _ => ElementType::Ptr,
     };
     BolideList::with_capacity(elem_type, capacity)
@@ -984,6 +994,7 @@ pub(crate) fn print_element_inline(elem_type: ElementType, val: i64) {
             }
         }
         ElementType::Bytes => crate::bolide_print_bytes_inline(val as *const crate::BolideBytes),
+        ElementType::Closure => print!("<closure 0x{:x}>", val),
         ElementType::Ptr => print!("0x{:x}", val),
     }
 }

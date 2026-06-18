@@ -1,0 +1,65 @@
+// Function values should survive pass-through, method return, and container fetch.
+
+let order_log: int = 0;
+
+fn touch(d: int) -> int {
+    order_log = order_log * 10 + d;
+    return d;
+}
+
+fn pack3(a: int, b: int, c: int) -> int {
+    return a * 100 + b * 10 + c;
+}
+
+fn forward(f: func(int, int, int) -> int) -> func(int, int, int) -> int {
+    return f;
+}
+
+fn bounce(f: func(int, int, int) -> int, a: int, b: int, c: int) -> int {
+    let g = forward(f);
+    return g(a, b, c);
+}
+
+fn relay(f: func(int, int, int) -> int) -> func(int, int, int) -> int {
+    let g = forward(f);
+    return g;
+}
+
+class Factory {
+    fn get() -> func(int, int, int) -> int {
+        return pack3;
+    }
+}
+
+fn check(name: str, got: int, want: int) {
+    if got == want {
+        print("ok " + name);
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want));
+    }
+}
+
+order_log = 0;
+check("forward return result", forward(pack3)(touch(1), touch(2), touch(3)), 123);
+check("forward return order", order_log, 123);
+
+order_log = 0;
+check("bounce param result", bounce(pack3, touch(1), touch(2), touch(3)), 123);
+check("bounce param order", order_log, 123);
+
+order_log = 0;
+check("relay local return result", relay(pack3)(touch(1), touch(2), touch(3)), 123);
+check("relay local return order", order_log, 123);
+
+order_log = 0;
+let maker = Factory();
+check("method returned func result", maker.get()(touch(1), touch(2), touch(3)), 123);
+check("method returned func order", order_log, 123);
+
+order_log = 0;
+let funcs: list<func(int, int, int) -> int> = [pack3];
+let picked = funcs[0];
+check("list fetched func result", picked(touch(1), touch(2), touch(3)), 123);
+check("list fetched func order", order_log, 123);
+
+print("func value flow done");

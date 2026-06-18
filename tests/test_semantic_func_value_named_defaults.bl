@@ -1,0 +1,85 @@
+// Function-valued arguments should survive named/default/spread argument normalization.
+
+fn inc(x: int) -> int {
+    return x + 1;
+}
+
+fn double(x: int) -> int {
+    return x * 2;
+}
+
+fn make_adder(n: int) -> func(int) -> int {
+    return fn(x: int) -> int {
+        return x + n;
+    };
+}
+
+fn choose_pos(flag: int, a: func(int) -> int, b: func(int) -> int) -> func(int) -> int {
+    if flag == 1 {
+        return a;
+    }
+    return b;
+}
+
+fn choose_named(
+    flag: int = 1,
+    a: func(int) -> int = inc,
+    b: func(int) -> int = double,
+) -> func(int) -> int {
+    if flag == 1 {
+        return a;
+    }
+    return b;
+}
+
+fn relay_default(f: func(int) -> int = inc) -> func(int) -> int {
+    return f;
+}
+
+class Picker {
+    fn choose(flag: int, a: func(int) -> int, b: func(int) -> int) -> func(int) -> int {
+        if flag == 1 {
+            return a;
+        }
+        return b;
+    }
+
+    fn relay(f: func(int) -> int = inc) -> func(int) -> int {
+        return f;
+    }
+}
+
+fn check(name: str, got: int, want: int) {
+    if got == want {
+        print("ok " + name);
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want));
+    }
+}
+
+let picked_named = choose_named(b=inc, flag=1, a=make_adder(20));
+check("named closure param selected", picked_named(5), 25);
+
+let picked_named_raw = choose_named(a=make_adder(20), b=double, flag=0);
+check("named raw param selected", picked_named_raw(5), 10);
+
+let picked_default = choose_named();
+check("default raw func selected", picked_default(5), 6);
+
+let relayed_default = relay_default();
+check("default relay raw func", relayed_default(5), 6);
+
+let relayed_named = relay_default(f=make_adder(30));
+check("named relay closure", relayed_named(5), 35);
+
+let p = Picker();
+let method_named = p.choose(b=inc, flag=1, a=make_adder(40));
+check("method named closure param selected", method_named(5), 45);
+
+let method_named_raw = p.choose(a=make_adder(40), b=double, flag=0);
+check("method named raw param selected", method_named_raw(5), 10);
+
+let method_default = p.relay();
+check("method default raw func", method_default(5), 6);
+
+print("func value named defaults done");

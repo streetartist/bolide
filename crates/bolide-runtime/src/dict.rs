@@ -297,6 +297,9 @@ fn retain_raw_static(elem_type: ElementType, raw: i64) {
         ElementType::Bytes => {
             crate::bolide_bytes_retain(ptr as *mut crate::BolideBytes);
         }
+        ElementType::Closure => {
+            crate::bolide_closure_retain(ptr);
+        }
         _ => {}
     }
 }
@@ -327,6 +330,9 @@ fn release_raw_static(elem_type: ElementType, raw: i64) {
         }
         ElementType::Bytes => {
             crate::bolide_bytes_release(ptr as *mut crate::BolideBytes);
+        }
+        ElementType::Closure => {
+            crate::bolide_closure_release(ptr);
         }
         _ => {}
     }

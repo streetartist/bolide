@@ -12,10 +12,11 @@ use bolide_parser::{
 };
 use cranelift::prelude::isa::{CallConv, TargetIsa};
 use cranelift::prelude::*;
-use cranelift_codegen::ir::{FuncRef, StackSlotData, StackSlotKind, TrapCode};
+use cranelift_codegen::ir::{FuncRef, Function, StackSlotData, StackSlotKind, TrapCode};
 use cranelift_jit::{JITBuilder, JITModule};
 use cranelift_module::{DataDescription, FuncId, Linkage, Module};
 use std::collections::{HashMap, HashSet};
+use std::hash::{Hash, Hasher};
 
 fn validate_jit_extern_lib_path(lib_path: &str) -> Result<(), String> {
     if lib_path == "bolide" {
@@ -100,17 +101,54 @@ struct BindingSnapshot {
     lifetime_source: Option<String>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FuncSigReturnSource {
+    Raw,
+    Closure,
+    Param(usize),
+    ParamSet(u64),
+    Unknown,
+}
+
+fn funcsig_adapter_name(params: &[BolideType], ret: &Option<Box<BolideType>>) -> String {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    format!("{:?}->{:?}", params, ret).hash(&mut hasher);
+    format!("@_funcsig_raw_adapter_{:016x}", hasher.finish())
+}
+
 #[derive(Clone)]
 enum PreparedArg {
-    Expr(Expr),
-    PackedArgs {
+    Expr {
+        expr: Expr,
+        target_index: usize,
+    },
+    PackedArgItem {
+        target_index: usize,
         elem_ty: BolideType,
-        items: Vec<PackedArgItem>,
+        item: PackedArgItem,
     },
-    PackedKwargs {
+    PackedKwargItem {
+        target_index: usize,
         value_ty: BolideType,
-        items: Vec<PackedKwargItem>,
+        item: PackedKwargItem,
     },
+}
+
+impl PreparedArg {
+    fn target_index(&self) -> usize {
+        match self {
+            PreparedArg::Expr { target_index, .. }
+            | PreparedArg::PackedArgItem { target_index, .. }
+            | PreparedArg::PackedKwargItem { target_index, .. } => *target_index,
+        }
+    }
+
+    fn expr(&self) -> Option<&Expr> {
+        match self {
+            PreparedArg::Expr { expr, .. } => Some(expr),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -158,6 +196,10 @@ pub struct JitCompiler {
     modules: HashMap<String, String>,
     /// 使用生命周期模式的函数集合（返回借用而非拥有的值）
     lifetime_funcs: HashSet<String>,
+    /// 函数名 -> 函数值返回来源。
+    funcsig_return_sources: HashMap<String, FuncSigReturnSource>,
+    /// 函数名 -> 需要按闭包对象 ABI 处理的函数类型参数下标。
+    funcsig_closure_param_indices: HashMap<String, HashSet<usize>>,
     /// 全局变量名 -> 数据ID 映射
     global_data_ids: HashMap<String, cranelift_module::DataId>,
     /// 源文件所在目录（import 相对路径的解析基准）
@@ -1869,6 +1911,8 @@ impl JitCompiler {
             dependency_manifest: None,
             closure_counter: 0,
             pending_closures: Vec::new(),
+            funcsig_return_sources: HashMap::new(),
+            funcsig_closure_param_indices: HashMap::new(),
         }
     }
 
@@ -1923,6 +1967,11 @@ impl JitCompiler {
 
         // 声明类方法
         self.declare_class_methods(&program)?;
+        self.funcsig_return_sources = self.collect_funcsig_return_sources(&program);
+        self.funcsig_closure_param_indices = self.collect_funcsig_closure_param_indices(&program);
+        self.funcsig_return_sources = self.collect_funcsig_return_sources(&program);
+        self.funcsig_closure_param_indices = self.collect_funcsig_closure_param_indices(&program);
+        self.declare_funcsig_raw_adapters()?;
 
         // 扫描并生成 trampolines（用于带参数的 spawn）
         let spawn_targets = self.collect_spawn_targets(&program);
@@ -1938,6 +1987,7 @@ impl JitCompiler {
 
         // 编译类方法
         self.compile_class_methods(&program)?;
+        self.compile_funcsig_raw_adapters()?;
 
         // 第二遍：编译所有函数
         let mut toplevel_stmts = Vec::new();
@@ -2690,11 +2740,65 @@ impl JitCompiler {
                             }
                         }
                     }
+                    let base_ty = self.infer_expr_type_static(base);
+                    let class_name = match base_ty {
+                        BolideType::Custom(name) => Some(name),
+                        BolideType::Weak(inner) | BolideType::Unowned(inner) => {
+                            if let BolideType::Custom(name) = *inner {
+                                Some(name)
+                            } else {
+                                None
+                            }
+                        }
+                        _ => None,
+                    };
+                    if let Some(class_name) = class_name {
+                        if let Some(ret_ty) = self.lookup_method_return_type(&class_name, member) {
+                            return ret_ty;
+                        }
+                    }
+                    let base_ty = self.infer_expr_type_static(base);
+                    match base_ty {
+                        BolideType::Dict(k, v) => {
+                            return match member.as_str() {
+                                "keys" => BolideType::List(k),
+                                "values" => BolideType::List(v),
+                                "get" | "remove" => *v,
+                                "clone" => BolideType::Dict(k, v),
+                                _ => BolideType::Int,
+                            };
+                        }
+                        BolideType::List(elem) => {
+                            return match member.as_str() {
+                                "pop" | "get" | "first" | "last" | "remove" => *elem,
+                                "slice" | "copy" | "clone" | "filter" => BolideType::List(elem),
+                                _ => BolideType::Int,
+                            };
+                        }
+                        BolideType::Str => {
+                            return match member.as_str() {
+                                "upper" | "lower" | "trim" | "strip" | "replace" | "repeat"
+                                | "substring" | "char_at" => BolideType::Str,
+                                "split" => BolideType::List(Box::new(BolideType::Str)),
+                                _ => BolideType::Int,
+                            };
+                        }
+                        BolideType::Bytes => {
+                            return match member.as_str() {
+                                "copy" | "clone" => BolideType::Bytes,
+                                _ => BolideType::Int,
+                            };
+                        }
+                        _ => {}
+                    }
                 }
                 BolideType::Int
             }
             // 裸函数名作为值：合成 FuncSig（一等函数支持）
             Expr::Ident(name) => {
+                if let Some(ty) = self.global_var_types.get(name) {
+                    return ty.clone();
+                }
                 if self.functions.contains_key(name) {
                     if let Some(params) = self.func_params.get(name) {
                         let param_types: Vec<BolideType> =
@@ -2722,6 +2826,23 @@ impl JitCompiler {
                     .collect();
                 BolideType::Tuple(elem_types)
             }
+            Expr::Index(base, idx) => match self.infer_expr_type_static(base) {
+                BolideType::Tuple(elem_types) => {
+                    if let Expr::Int(i) = idx.as_ref() {
+                        elem_types
+                            .get(*i as usize)
+                            .cloned()
+                            .unwrap_or(BolideType::Int)
+                    } else {
+                        elem_types.first().cloned().unwrap_or(BolideType::Int)
+                    }
+                }
+                BolideType::List(elem_ty) => *elem_ty,
+                BolideType::Dict(_, val_ty) => *val_ty,
+                BolideType::Bytes => BolideType::Int,
+                BolideType::Str => BolideType::Str,
+                _ => BolideType::Int,
+            },
             Expr::Closure {
                 params,
                 return_type,
@@ -5028,7 +5149,8 @@ impl JitCompiler {
             .module
             .declare_function("@_object_set_class_tag", Linkage::Import, &sig)
             .map_err(|e| format!("{}", e))?;
-        self.functions.insert("@_object_set_class_tag".to_string(), id);
+        self.functions
+            .insert("@_object_set_class_tag".to_string(), id);
 
         // object_class_tag(ptr) -> i64
         let mut sig = self.module.make_signature();
@@ -5241,6 +5363,8 @@ impl JitCompiler {
         let modules = self.modules.clone();
 
         let lifetime_funcs = self.lifetime_funcs.clone();
+        let funcsig_return_sources = self.funcsig_return_sources.clone();
+        let funcsig_closure_param_indices = self.funcsig_closure_param_indices.clone();
 
         // 创建编译上下文
         let mut compile_ctx = CompileContext::new(
@@ -5264,6 +5388,8 @@ impl JitCompiler {
             func.lifetime_deps.clone(),
             func.name.clone(),
             lifetime_funcs,
+            funcsig_return_sources,
+            funcsig_closure_param_indices,
         );
 
         // 绑定参数到变量
@@ -5276,8 +5402,14 @@ impl JitCompiler {
                 .var_types
                 .insert(param.name.clone(), param_ty.clone());
 
-            // 函数类型参数走闭包 ABI 调用（借用，不拥有所有权）
-            if matches!(param_ty, BolideType::FuncSig(_, _) | BolideType::Func) {
+            // 函数类型参数只有在调用点实际传入闭包对象时才走闭包 ABI。
+            if matches!(param_ty, BolideType::FuncSig(_, _) | BolideType::Func)
+                && compile_ctx
+                    .funcsig_closure_param_indices
+                    .get(&func.name)
+                    .map(|indices| indices.contains(&i))
+                    .unwrap_or(false)
+            {
                 compile_ctx.closure_param_vars.insert(param.name.clone());
             }
 
@@ -5432,6 +5564,8 @@ impl JitCompiler {
         let extern_funcs = self.extern_funcs.clone();
         let modules = self.modules.clone();
         let lifetime_funcs = self.lifetime_funcs.clone();
+        let funcsig_return_sources = self.funcsig_return_sources.clone();
+        let funcsig_closure_param_indices = self.funcsig_closure_param_indices.clone();
 
         let mut compile_ctx = CompileContext::new(
             &mut builder,
@@ -5454,6 +5588,8 @@ impl JitCompiler {
             None,
             job.name.clone(),
             lifetime_funcs,
+            funcsig_return_sources,
+            funcsig_closure_param_indices,
         );
 
         let block_params = compile_ctx.builder.block_params(entry_block).to_vec();
@@ -5961,6 +6097,23 @@ impl JitCompiler {
             .and_then(|info| info.variants.iter().find(|v| v.name == variant_name))
     }
 
+    fn lookup_method_return_type(&self, class_name: &str, method_name: &str) -> Option<BolideType> {
+        let mut current = self.normalize_type_name(class_name);
+        loop {
+            let full_name = format!("{}_{}", current, method_name);
+            if let Some(ret) = self.func_return_types.get(&full_name) {
+                return ret.clone();
+            }
+            if let Some(class_info) = self.classes.get(&current) {
+                if let Some(ref parent) = class_info.parent {
+                    current = parent.clone();
+                    continue;
+                }
+            }
+            return None;
+        }
+    }
+
     /// 收集所有类定义（按继承顺序处理）
     fn collect_classes(&mut self, program: &Program) -> Result<(), String> {
         // 先收集所有类定义
@@ -6166,6 +6319,22 @@ impl JitCompiler {
         let set_tag_ref = self.module.declare_func_in_func(set_tag_id, builder.func);
         let tag_val = builder.ins().iconst(types::I64, class_tag);
         builder.ins().call(set_tag_ref, &[obj_ptr, tag_val]);
+        let closure_retain_ref = if class_info
+            .fields
+            .iter()
+            .any(|field| matches!(field.ty, BolideType::FuncSig(_, _) | BolideType::Func))
+        {
+            let closure_retain_id = *self
+                .functions
+                .get("@_closure_retain")
+                .ok_or("closure_retain not found")?;
+            Some(
+                self.module
+                    .declare_func_in_func(closure_retain_id, builder.func),
+            )
+        } else {
+            None
+        };
 
         // 使用传入的参数初始化字段，缺参时填零值
         for (i, field) in class_info.fields.iter().enumerate() {
@@ -6179,6 +6348,11 @@ impl JitCompiler {
             } else {
                 builder.ins().iconst(types::I64, 0)
             };
+            if let Some(retain_ref) = closure_retain_ref {
+                if matches!(field.ty, BolideType::FuncSig(_, _) | BolideType::Func) {
+                    builder.ins().call(retain_ref, &[val]);
+                }
+            }
             builder.ins().store(MemFlags::new(), val, field_ptr, 0);
         }
 
@@ -6241,6 +6415,1098 @@ impl JitCompiler {
             }
         }
         Ok(())
+    }
+
+    fn collect_funcsig_return_sources(
+        &self,
+        program: &Program,
+    ) -> HashMap<String, FuncSigReturnSource> {
+        let mut funcs: Vec<(String, Vec<Param>, Vec<Statement>)> = Vec::new();
+        for stmt in &program.statements {
+            match stmt {
+                Statement::FuncDef(func)
+                    if matches!(
+                        func.return_type,
+                        Some(BolideType::FuncSig(_, _) | BolideType::Func)
+                    ) =>
+                {
+                    funcs.push((func.name.clone(), func.params.clone(), func.body.clone()));
+                }
+                Statement::ClassDef(class_def) => {
+                    for method in &class_def.methods {
+                        if matches!(
+                            method.return_type,
+                            Some(BolideType::FuncSig(_, _) | BolideType::Func)
+                        ) {
+                            let mut params = vec![Param {
+                                name: "self".to_string(),
+                                ty: BolideType::Custom(class_def.name.clone()),
+                                mode: ParamMode::Borrow,
+                                default_value: None,
+                                is_variadic: false,
+                                is_kw_variadic: false,
+                            }];
+                            params.extend(method.params.clone());
+                            funcs.push((
+                                format!("{}_{}", class_def.name, method.name),
+                                params,
+                                method.body.clone(),
+                            ));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let mut sources: HashMap<String, FuncSigReturnSource> = funcs
+            .iter()
+            .map(|(name, _, _)| (name.clone(), FuncSigReturnSource::Unknown))
+            .collect();
+        for _ in 0..funcs.len().saturating_add(1) {
+            let mut changed = false;
+            for (name, params, body) in &funcs {
+                let source = self.analyze_funcsig_return_source(params, body, &sources);
+                if sources.get(name).copied() != Some(source) {
+                    sources.insert(name.clone(), source);
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        sources
+    }
+
+    fn analyze_funcsig_return_source(
+        &self,
+        params: &[Param],
+        body: &[Statement],
+        summaries: &HashMap<String, FuncSigReturnSource>,
+    ) -> FuncSigReturnSource {
+        let param_sources: HashMap<String, FuncSigReturnSource> = params
+            .iter()
+            .enumerate()
+            .filter_map(|(i, p)| {
+                if matches!(p.ty, BolideType::FuncSig(_, _) | BolideType::Func) {
+                    Some((p.name.clone(), FuncSigReturnSource::Param(i)))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        let mut locals = HashMap::new();
+        let mut returns = Vec::new();
+        self.scan_funcsig_return_stmts(body, &param_sources, &mut locals, summaries, &mut returns);
+        Self::merge_funcsig_sources(&returns)
+    }
+
+    fn scan_funcsig_return_stmts(
+        &self,
+        stmts: &[Statement],
+        param_sources: &HashMap<String, FuncSigReturnSource>,
+        locals: &mut HashMap<String, FuncSigReturnSource>,
+        summaries: &HashMap<String, FuncSigReturnSource>,
+        returns: &mut Vec<FuncSigReturnSource>,
+    ) {
+        for stmt in stmts {
+            match stmt {
+                Statement::Return(Some(expr)) => returns.push(self.funcsig_expr_source_static(
+                    expr,
+                    param_sources,
+                    locals,
+                    summaries,
+                )),
+                Statement::Return(None) => returns.push(FuncSigReturnSource::Unknown),
+                Statement::VarDecl(decl) => {
+                    if let Some(value) = &decl.value {
+                        let source = self.funcsig_expr_source_static(
+                            value,
+                            param_sources,
+                            locals,
+                            summaries,
+                        );
+                        if source != FuncSigReturnSource::Unknown {
+                            locals.insert(decl.name.clone(), source);
+                        }
+                    }
+                }
+                Statement::Assign(assign) => {
+                    if let Expr::Ident(name) = &assign.target {
+                        let source = self.funcsig_expr_source_static(
+                            &assign.value,
+                            param_sources,
+                            locals,
+                            summaries,
+                        );
+                        if source != FuncSigReturnSource::Unknown {
+                            locals.insert(name.clone(), source);
+                        }
+                    }
+                }
+                Statement::If(if_stmt) => {
+                    let mut then_locals = locals.clone();
+                    self.scan_funcsig_return_stmts(
+                        &if_stmt.then_body,
+                        param_sources,
+                        &mut then_locals,
+                        summaries,
+                        returns,
+                    );
+                    for (_, body) in &if_stmt.elif_branches {
+                        let mut branch_locals = locals.clone();
+                        self.scan_funcsig_return_stmts(
+                            body,
+                            param_sources,
+                            &mut branch_locals,
+                            summaries,
+                            returns,
+                        );
+                    }
+                    if let Some(body) = &if_stmt.else_body {
+                        let mut else_locals = locals.clone();
+                        self.scan_funcsig_return_stmts(
+                            body,
+                            param_sources,
+                            &mut else_locals,
+                            summaries,
+                            returns,
+                        );
+                    }
+                }
+                Statement::While(while_stmt) => {
+                    let mut inner_locals = locals.clone();
+                    self.scan_funcsig_return_stmts(
+                        &while_stmt.body,
+                        param_sources,
+                        &mut inner_locals,
+                        summaries,
+                        returns,
+                    );
+                }
+                Statement::For(for_stmt) => {
+                    let mut inner_locals = locals.clone();
+                    self.scan_funcsig_return_stmts(
+                        &for_stmt.body,
+                        param_sources,
+                        &mut inner_locals,
+                        summaries,
+                        returns,
+                    );
+                }
+                Statement::Try(try_stmt) => {
+                    let mut try_locals = locals.clone();
+                    self.scan_funcsig_return_stmts(
+                        &try_stmt.try_body,
+                        param_sources,
+                        &mut try_locals,
+                        summaries,
+                        returns,
+                    );
+                    for clause in &try_stmt.catch_clauses {
+                        let mut catch_locals = locals.clone();
+                        self.scan_funcsig_return_stmts(
+                            &clause.body,
+                            param_sources,
+                            &mut catch_locals,
+                            summaries,
+                            returns,
+                        );
+                    }
+                    if let Some(body) = &try_stmt.finally {
+                        let mut finally_locals = locals.clone();
+                        self.scan_funcsig_return_stmts(
+                            body,
+                            param_sources,
+                            &mut finally_locals,
+                            summaries,
+                            returns,
+                        );
+                    }
+                }
+                Statement::Pool(pool_stmt) => {
+                    let mut inner_locals = locals.clone();
+                    self.scan_funcsig_return_stmts(
+                        &pool_stmt.body,
+                        param_sources,
+                        &mut inner_locals,
+                        summaries,
+                        returns,
+                    );
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn funcsig_expr_source_static(
+        &self,
+        expr: &Expr,
+        param_sources: &HashMap<String, FuncSigReturnSource>,
+        locals: &HashMap<String, FuncSigReturnSource>,
+        summaries: &HashMap<String, FuncSigReturnSource>,
+    ) -> FuncSigReturnSource {
+        match expr {
+            Expr::Ident(name) => locals
+                .get(name)
+                .copied()
+                .or_else(|| param_sources.get(name).copied())
+                .unwrap_or_else(|| {
+                    if self.functions.contains_key(name) {
+                        FuncSigReturnSource::Raw
+                    } else {
+                        FuncSigReturnSource::Unknown
+                    }
+                }),
+            Expr::Closure { .. } => FuncSigReturnSource::Closure,
+            Expr::Call(callee, args) => {
+                if let Expr::Ident(name) = callee.as_ref() {
+                    return self.substitute_funcsig_call_source(
+                        name,
+                        summaries
+                            .get(name)
+                            .copied()
+                            .unwrap_or(FuncSigReturnSource::Unknown),
+                        args,
+                        param_sources,
+                        locals,
+                        summaries,
+                    );
+                }
+                if let Expr::Member(base, member) = callee.as_ref() {
+                    if let Expr::Ident(module_name) = base.as_ref() {
+                        if self.modules.contains_key(module_name) {
+                            let name = format!("@{}_{}", module_name, member);
+                            return self.substitute_funcsig_call_source(
+                                &name,
+                                summaries
+                                    .get(&name)
+                                    .copied()
+                                    .unwrap_or(FuncSigReturnSource::Unknown),
+                                args,
+                                param_sources,
+                                locals,
+                                summaries,
+                            );
+                        }
+                    }
+                }
+                FuncSigReturnSource::Unknown
+            }
+            _ => FuncSigReturnSource::Unknown,
+        }
+    }
+
+    fn substitute_funcsig_call_source(
+        &self,
+        func_name: &str,
+        source: FuncSigReturnSource,
+        args: &[Expr],
+        param_sources: &HashMap<String, FuncSigReturnSource>,
+        locals: &HashMap<String, FuncSigReturnSource>,
+        summaries: &HashMap<String, FuncSigReturnSource>,
+    ) -> FuncSigReturnSource {
+        match source {
+            FuncSigReturnSource::Param(i) => {
+                if self
+                    .funcsig_closure_param_indices
+                    .get(func_name)
+                    .map(|indices| indices.contains(&i))
+                    .unwrap_or(false)
+                {
+                    FuncSigReturnSource::Closure
+                } else {
+                    args.get(i)
+                        .map(|arg| {
+                            self.funcsig_expr_source_static(arg, param_sources, locals, summaries)
+                        })
+                        .unwrap_or(FuncSigReturnSource::Unknown)
+                }
+            }
+            FuncSigReturnSource::ParamSet(mask) => {
+                let mut sources = Vec::new();
+                for i in 0..64 {
+                    if (mask & (1u64 << i)) == 0 {
+                        continue;
+                    }
+                    sources.push(
+                        if self
+                            .funcsig_closure_param_indices
+                            .get(func_name)
+                            .map(|indices| indices.contains(&i))
+                            .unwrap_or(false)
+                        {
+                            FuncSigReturnSource::Closure
+                        } else {
+                            args.get(i)
+                                .map(|arg| {
+                                    self.funcsig_expr_source_static(
+                                        arg,
+                                        param_sources,
+                                        locals,
+                                        summaries,
+                                    )
+                                })
+                                .unwrap_or(FuncSigReturnSource::Unknown)
+                        },
+                    );
+                }
+                Self::merge_funcsig_sources(&sources)
+            }
+            other => other,
+        }
+    }
+
+    fn merge_funcsig_sources(sources: &[FuncSigReturnSource]) -> FuncSigReturnSource {
+        let mut result: Option<FuncSigReturnSource> = None;
+        for source in sources.iter().copied() {
+            result = Some(match (result, source) {
+                (None, source) => source,
+                (Some(current), source) if current == source => current,
+                (Some(FuncSigReturnSource::Param(a)), FuncSigReturnSource::Param(b)) => {
+                    let mut mask = 0u64;
+                    if a < 64 {
+                        mask |= 1u64 << a;
+                    }
+                    if b < 64 {
+                        mask |= 1u64 << b;
+                    }
+                    if mask == 0 {
+                        FuncSigReturnSource::Unknown
+                    } else {
+                        FuncSigReturnSource::ParamSet(mask)
+                    }
+                }
+                (Some(FuncSigReturnSource::Param(a)), FuncSigReturnSource::ParamSet(mask))
+                | (Some(FuncSigReturnSource::ParamSet(mask)), FuncSigReturnSource::Param(a)) => {
+                    if a < 64 {
+                        FuncSigReturnSource::ParamSet(mask | (1u64 << a))
+                    } else {
+                        FuncSigReturnSource::Unknown
+                    }
+                }
+                (Some(FuncSigReturnSource::ParamSet(a)), FuncSigReturnSource::ParamSet(b)) => {
+                    FuncSigReturnSource::ParamSet(a | b)
+                }
+                _ => FuncSigReturnSource::Unknown,
+            });
+            if result == Some(FuncSigReturnSource::Unknown) {
+                return FuncSigReturnSource::Unknown;
+            }
+        }
+        result.unwrap_or(FuncSigReturnSource::Unknown)
+    }
+
+    fn funcsig_source_param_indices(source: FuncSigReturnSource) -> Vec<usize> {
+        match source {
+            FuncSigReturnSource::Param(i) => vec![i],
+            FuncSigReturnSource::ParamSet(mask) => {
+                (0..64).filter(|i| (mask & (1u64 << i)) != 0).collect()
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    fn register_returned_funcsig_params_as_closure(
+        &self,
+        out: &mut HashMap<String, HashSet<usize>>,
+    ) {
+        for (func_name, source) in &self.funcsig_return_sources {
+            let Some(params) = self.func_params.get(func_name) else {
+                continue;
+            };
+            for index in Self::funcsig_source_param_indices(*source) {
+                let Some(param) = params.get(index) else {
+                    continue;
+                };
+                if matches!(param.ty, BolideType::FuncSig(_, _) | BolideType::Func) {
+                    out.entry(func_name.clone()).or_default().insert(index);
+                }
+            }
+        }
+    }
+
+    fn collect_funcsig_closure_param_indices(
+        &self,
+        program: &Program,
+    ) -> HashMap<String, HashSet<usize>> {
+        let mut out: HashMap<String, HashSet<usize>> = HashMap::new();
+        self.register_returned_funcsig_params_as_closure(&mut out);
+        for _ in 0..32 {
+            let before = out.clone();
+            self.scan_closure_param_stmts(
+                &program.statements,
+                None,
+                &[],
+                &mut HashMap::new(),
+                &mut out,
+            );
+            if out == before {
+                break;
+            }
+        }
+        out
+    }
+
+    fn funcsig_raw_adapter_sigs(
+        &self,
+    ) -> HashMap<String, (Vec<BolideType>, Option<Box<BolideType>>)> {
+        let mut out = HashMap::new();
+        for ty in self.global_var_types.values() {
+            Self::collect_funcsig_adapter_type(ty, &mut out);
+        }
+        for class_info in self.classes.values() {
+            for field in &class_info.fields {
+                Self::collect_funcsig_adapter_type(&field.ty, &mut out);
+            }
+        }
+        for params in self.func_params.values() {
+            for param in params {
+                Self::collect_funcsig_adapter_type(&param.ty, &mut out);
+            }
+        }
+        for ret in self.func_return_types.values().flatten() {
+            Self::collect_funcsig_adapter_type(ret, &mut out);
+        }
+        for (func_name, indices) in &self.funcsig_closure_param_indices {
+            let Some(params) = self.func_params.get(func_name) else {
+                continue;
+            };
+            for index in indices {
+                let Some(param) = params.get(*index) else {
+                    continue;
+                };
+                if let BolideType::FuncSig(sig_params, sig_ret) = &param.ty {
+                    let name = funcsig_adapter_name(sig_params, sig_ret);
+                    out.entry(name)
+                        .or_insert_with(|| (sig_params.clone(), sig_ret.clone()));
+                }
+            }
+        }
+        out
+    }
+
+    fn collect_funcsig_adapter_type(
+        ty: &BolideType,
+        out: &mut HashMap<String, (Vec<BolideType>, Option<Box<BolideType>>)>,
+    ) {
+        match ty {
+            BolideType::FuncSig(params, ret) => {
+                let name = funcsig_adapter_name(params, ret);
+                out.entry(name)
+                    .or_insert_with(|| (params.clone(), ret.clone()));
+                for param in params {
+                    Self::collect_funcsig_adapter_type(param, out);
+                }
+                if let Some(ret_ty) = ret {
+                    Self::collect_funcsig_adapter_type(ret_ty, out);
+                }
+            }
+            BolideType::List(inner) | BolideType::Weak(inner) | BolideType::Unowned(inner) => {
+                Self::collect_funcsig_adapter_type(inner, out);
+            }
+            BolideType::Dict(key, value) => {
+                Self::collect_funcsig_adapter_type(key, out);
+                Self::collect_funcsig_adapter_type(value, out);
+            }
+            BolideType::Tuple(items) => {
+                for item in items {
+                    Self::collect_funcsig_adapter_type(item, out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn declare_funcsig_raw_adapters(&mut self) -> Result<(), String> {
+        for (name, (params, ret)) in self.funcsig_raw_adapter_sigs() {
+            if self.functions.contains_key(&name) {
+                continue;
+            }
+            let mut sig = self.module.make_signature();
+            sig.params.push(AbiParam::new(self.ptr_type));
+            for param in &params {
+                sig.params
+                    .push(AbiParam::new(self.bolide_type_to_cranelift(param)));
+            }
+            let ret_ty = ret
+                .as_ref()
+                .map(|t| (**t).clone())
+                .unwrap_or(BolideType::Int);
+            sig.returns
+                .push(AbiParam::new(self.bolide_type_to_cranelift(&ret_ty)));
+            let func_id = self
+                .module
+                .declare_function(&name, Linkage::Local, &sig)
+                .map_err(|e| format!("Declare funcsig adapter error: {}", e))?;
+            self.functions.insert(name, func_id);
+        }
+        Ok(())
+    }
+
+    fn compile_funcsig_raw_adapters(&mut self) -> Result<(), String> {
+        for (name, (params, ret)) in self.funcsig_raw_adapter_sigs() {
+            let Some(func_id) = self.functions.get(&name).copied() else {
+                continue;
+            };
+            let param_cl_types: Vec<types::Type> = params
+                .iter()
+                .map(|param| self.bolide_type_to_cranelift(param))
+                .collect();
+            let ret_ty = ret
+                .as_ref()
+                .map(|t| (**t).clone())
+                .unwrap_or(BolideType::Int);
+            let ret_cl_type = self.bolide_type_to_cranelift(&ret_ty);
+
+            self.ctx.func = Function::new();
+            self.ctx.func.signature = self.module.make_signature();
+            self.ctx
+                .func
+                .signature
+                .params
+                .push(AbiParam::new(self.ptr_type));
+            for param_ty in &param_cl_types {
+                self.ctx
+                    .func
+                    .signature
+                    .params
+                    .push(AbiParam::new(*param_ty));
+            }
+            self.ctx
+                .func
+                .signature
+                .returns
+                .push(AbiParam::new(ret_cl_type));
+            self.ctx.func.name = cranelift_codegen::ir::UserFuncName::user(0, func_id.as_u32());
+
+            let mut builder_ctx = FunctionBuilderContext::new();
+            let mut builder = FunctionBuilder::new(&mut self.ctx.func, &mut builder_ctx);
+            let entry = builder.create_block();
+            builder.append_block_params_for_function_params(entry);
+            builder.switch_to_block(entry);
+            builder.seal_block(entry);
+
+            let block_params = builder.block_params(entry).to_vec();
+            let env_ptr = block_params[0];
+            let fn_ptr = builder
+                .ins()
+                .load(self.ptr_type, MemFlags::trusted(), env_ptr, 0);
+
+            #[cfg(target_os = "windows")]
+            let mut raw_sig = Signature::new(CallConv::WindowsFastcall);
+            #[cfg(not(target_os = "windows"))]
+            let mut raw_sig = Signature::new(CallConv::SystemV);
+            for param_ty in &param_cl_types {
+                raw_sig.params.push(AbiParam::new(*param_ty));
+            }
+            raw_sig.returns.push(AbiParam::new(ret_cl_type));
+            let sig_ref = builder.import_signature(raw_sig);
+            let call = builder
+                .ins()
+                .call_indirect(sig_ref, fn_ptr, &block_params[1..]);
+            let result = builder.inst_results(call)[0];
+            builder.ins().return_(&[result]);
+            builder.finalize();
+
+            self.module
+                .define_function(func_id, &mut self.ctx)
+                .map_err(|e| format!("Define funcsig adapter error: {}", e))?;
+            self.module.clear_context(&mut self.ctx);
+        }
+        Ok(())
+    }
+
+    fn scan_closure_param_stmts(
+        &self,
+        stmts: &[Statement],
+        current_func: Option<&str>,
+        current_params: &[Param],
+        locals: &mut HashMap<String, FuncSigReturnSource>,
+        out: &mut HashMap<String, HashSet<usize>>,
+    ) {
+        for stmt in stmts {
+            match stmt {
+                Statement::FuncDef(func) => {
+                    self.scan_closure_param_stmts(
+                        &func.body,
+                        Some(&func.name),
+                        &func.params,
+                        &mut HashMap::new(),
+                        out,
+                    );
+                }
+                Statement::ClassDef(class_def) => {
+                    for method in &class_def.methods {
+                        let mut params = vec![Param {
+                            name: "self".to_string(),
+                            ty: BolideType::Custom(class_def.name.clone()),
+                            mode: ParamMode::Borrow,
+                            default_value: None,
+                            is_variadic: false,
+                            is_kw_variadic: false,
+                        }];
+                        params.extend(method.params.clone());
+                        let method_name = format!("{}_{}", class_def.name, method.name);
+                        self.scan_closure_param_stmts(
+                            &method.body,
+                            Some(&method_name),
+                            &params,
+                            &mut HashMap::new(),
+                            out,
+                        );
+                    }
+                }
+                Statement::VarDecl(decl) => {
+                    if let Some(value) = &decl.value {
+                        self.scan_closure_param_expr(
+                            value,
+                            current_func,
+                            current_params,
+                            locals,
+                            out,
+                        );
+                        let source = self.funcsig_expr_source_for_closure_scan(
+                            value,
+                            current_func,
+                            current_params,
+                            locals,
+                            out,
+                        );
+                        if source != FuncSigReturnSource::Unknown {
+                            locals.insert(decl.name.clone(), source);
+                        }
+                    }
+                }
+                Statement::Assign(assign) => {
+                    self.scan_closure_param_expr(
+                        &assign.value,
+                        current_func,
+                        current_params,
+                        locals,
+                        out,
+                    );
+                    if let Expr::Ident(name) = &assign.target {
+                        let source = self.funcsig_expr_source_for_closure_scan(
+                            &assign.value,
+                            current_func,
+                            current_params,
+                            locals,
+                            out,
+                        );
+                        if source != FuncSigReturnSource::Unknown {
+                            locals.insert(name.clone(), source);
+                        }
+                    }
+                }
+                Statement::If(if_stmt) => {
+                    self.scan_closure_param_expr(
+                        &if_stmt.condition,
+                        current_func,
+                        current_params,
+                        locals,
+                        out,
+                    );
+                    let mut then_locals = locals.clone();
+                    self.scan_closure_param_stmts(
+                        &if_stmt.then_body,
+                        current_func,
+                        current_params,
+                        &mut then_locals,
+                        out,
+                    );
+                    for (cond, body) in &if_stmt.elif_branches {
+                        self.scan_closure_param_expr(
+                            cond,
+                            current_func,
+                            current_params,
+                            locals,
+                            out,
+                        );
+                        let mut branch_locals = locals.clone();
+                        self.scan_closure_param_stmts(
+                            body,
+                            current_func,
+                            current_params,
+                            &mut branch_locals,
+                            out,
+                        );
+                    }
+                    if let Some(body) = &if_stmt.else_body {
+                        let mut else_locals = locals.clone();
+                        self.scan_closure_param_stmts(
+                            body,
+                            current_func,
+                            current_params,
+                            &mut else_locals,
+                            out,
+                        );
+                    }
+                }
+                Statement::While(while_stmt) => {
+                    self.scan_closure_param_expr(
+                        &while_stmt.condition,
+                        current_func,
+                        current_params,
+                        locals,
+                        out,
+                    );
+                    let mut inner_locals = locals.clone();
+                    self.scan_closure_param_stmts(
+                        &while_stmt.body,
+                        current_func,
+                        current_params,
+                        &mut inner_locals,
+                        out,
+                    );
+                }
+                Statement::For(for_stmt) => {
+                    self.scan_closure_param_expr(
+                        &for_stmt.iter,
+                        current_func,
+                        current_params,
+                        locals,
+                        out,
+                    );
+                    let mut inner_locals = locals.clone();
+                    self.scan_closure_param_stmts(
+                        &for_stmt.body,
+                        current_func,
+                        current_params,
+                        &mut inner_locals,
+                        out,
+                    );
+                }
+                Statement::Try(try_stmt) => {
+                    let mut try_locals = locals.clone();
+                    self.scan_closure_param_stmts(
+                        &try_stmt.try_body,
+                        current_func,
+                        current_params,
+                        &mut try_locals,
+                        out,
+                    );
+                    for clause in &try_stmt.catch_clauses {
+                        let mut catch_locals = locals.clone();
+                        self.scan_closure_param_stmts(
+                            &clause.body,
+                            current_func,
+                            current_params,
+                            &mut catch_locals,
+                            out,
+                        );
+                    }
+                    if let Some(body) = &try_stmt.finally {
+                        let mut finally_locals = locals.clone();
+                        self.scan_closure_param_stmts(
+                            body,
+                            current_func,
+                            current_params,
+                            &mut finally_locals,
+                            out,
+                        );
+                    }
+                }
+                Statement::Pool(pool_stmt) => {
+                    let mut inner_locals = locals.clone();
+                    self.scan_closure_param_stmts(
+                        &pool_stmt.body,
+                        current_func,
+                        current_params,
+                        &mut inner_locals,
+                        out,
+                    );
+                }
+                Statement::Expr(expr) | Statement::Return(Some(expr)) | Statement::Throw(expr) => {
+                    self.scan_closure_param_expr(expr, current_func, current_params, locals, out);
+                }
+                Statement::Send(send_stmt) => {
+                    self.scan_closure_param_expr(
+                        &send_stmt.value,
+                        current_func,
+                        current_params,
+                        locals,
+                        out,
+                    );
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn scan_closure_param_expr(
+        &self,
+        expr: &Expr,
+        current_func: Option<&str>,
+        current_params: &[Param],
+        locals: &HashMap<String, FuncSigReturnSource>,
+        out: &mut HashMap<String, HashSet<usize>>,
+    ) {
+        match expr {
+            Expr::Call(callee, args) => {
+                if let Expr::Ident(name) = callee.as_ref() {
+                    self.record_closure_func_args(
+                        name,
+                        args,
+                        current_func,
+                        current_params,
+                        locals,
+                        out,
+                        0,
+                    );
+                } else if let Expr::Member(base, member) = callee.as_ref() {
+                    if let Expr::Ident(module_name) = base.as_ref() {
+                        if self.modules.contains_key(module_name) {
+                            let name = format!("@{}_{}", module_name, member);
+                            self.record_closure_func_args(
+                                &name,
+                                args,
+                                current_func,
+                                current_params,
+                                locals,
+                                out,
+                                0,
+                            );
+                        }
+                    }
+                    self.scan_closure_param_expr(base, current_func, current_params, locals, out);
+                } else {
+                    self.scan_closure_param_expr(callee, current_func, current_params, locals, out);
+                }
+                for arg in args {
+                    self.scan_closure_param_expr(arg, current_func, current_params, locals, out);
+                }
+            }
+            Expr::BinOp(left, _, right) => {
+                self.scan_closure_param_expr(left, current_func, current_params, locals, out);
+                self.scan_closure_param_expr(right, current_func, current_params, locals, out);
+            }
+            Expr::UnaryOp(_, inner) | Expr::Member(inner, _) | Expr::Await(inner) => {
+                self.scan_closure_param_expr(inner, current_func, current_params, locals, out);
+            }
+            Expr::Index(base, index) => {
+                self.scan_closure_param_expr(base, current_func, current_params, locals, out);
+                self.scan_closure_param_expr(index, current_func, current_params, locals, out);
+            }
+            Expr::Slice(base, start, end, step) => {
+                self.scan_closure_param_expr(base, current_func, current_params, locals, out);
+                if let Some(start) = start {
+                    self.scan_closure_param_expr(start, current_func, current_params, locals, out);
+                }
+                if let Some(end) = end {
+                    self.scan_closure_param_expr(end, current_func, current_params, locals, out);
+                }
+                if let Some(step) = step {
+                    self.scan_closure_param_expr(step, current_func, current_params, locals, out);
+                }
+            }
+            Expr::NamedArg(_, inner) | Expr::SpreadArg(inner) | Expr::KwSpreadArg(inner) => {
+                self.scan_closure_param_expr(inner, current_func, current_params, locals, out);
+            }
+            Expr::List(items) | Expr::Tuple(items) | Expr::SpawnAll(items) => {
+                for item in items {
+                    self.scan_closure_param_expr(item, current_func, current_params, locals, out);
+                }
+            }
+            Expr::Dict(entries) => {
+                for (k, v) in entries {
+                    self.scan_closure_param_expr(k, current_func, current_params, locals, out);
+                    self.scan_closure_param_expr(v, current_func, current_params, locals, out);
+                }
+            }
+            Expr::Spawn(_, args) => {
+                for arg in args {
+                    self.scan_closure_param_expr(arg, current_func, current_params, locals, out);
+                }
+            }
+            Expr::Closure { body, .. } => {
+                self.scan_closure_param_stmts(
+                    body,
+                    current_func,
+                    current_params,
+                    &mut locals.clone(),
+                    out,
+                );
+            }
+            Expr::ListComprehension {
+                expr, iter, filter, ..
+            } => {
+                self.scan_closure_param_expr(expr, current_func, current_params, locals, out);
+                self.scan_closure_param_expr(iter, current_func, current_params, locals, out);
+                if let Some(filter) = filter {
+                    self.scan_closure_param_expr(filter, current_func, current_params, locals, out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn record_closure_func_args(
+        &self,
+        func_name: &str,
+        args: &[Expr],
+        current_func: Option<&str>,
+        current_params: &[Param],
+        locals: &HashMap<String, FuncSigReturnSource>,
+        out: &mut HashMap<String, HashSet<usize>>,
+        param_offset: usize,
+    ) {
+        let Some(params) = self.func_params.get(func_name) else {
+            return;
+        };
+        for (arg_index, arg) in args.iter().enumerate() {
+            let param_index = arg_index + param_offset;
+            let Some(param) = params.get(param_index) else {
+                continue;
+            };
+            if !matches!(param.ty, BolideType::FuncSig(_, _) | BolideType::Func) {
+                continue;
+            }
+            let source = self.funcsig_expr_source_for_closure_scan(
+                arg,
+                current_func,
+                current_params,
+                locals,
+                out,
+            );
+            if matches!(source, FuncSigReturnSource::Closure) {
+                out.entry(func_name.to_string())
+                    .or_default()
+                    .insert(param_index);
+            }
+        }
+    }
+
+    fn funcsig_expr_source_for_closure_scan(
+        &self,
+        expr: &Expr,
+        current_func: Option<&str>,
+        current_params: &[Param],
+        locals: &HashMap<String, FuncSigReturnSource>,
+        out: &HashMap<String, HashSet<usize>>,
+    ) -> FuncSigReturnSource {
+        match expr {
+            Expr::Ident(name) => {
+                if let Some(source) = locals.get(name).copied() {
+                    return source;
+                }
+                if let Some((idx, _)) = current_params
+                    .iter()
+                    .enumerate()
+                    .find(|(_, p)| p.name == *name)
+                {
+                    if let Some(func_name) = current_func {
+                        if out
+                            .get(func_name)
+                            .map(|indices| indices.contains(&idx))
+                            .unwrap_or(false)
+                        {
+                            return FuncSigReturnSource::Closure;
+                        }
+                    }
+                    return FuncSigReturnSource::Raw;
+                }
+                if self.functions.contains_key(name) {
+                    FuncSigReturnSource::Raw
+                } else {
+                    FuncSigReturnSource::Unknown
+                }
+            }
+            Expr::Closure { .. } => FuncSigReturnSource::Closure,
+            Expr::Call(callee, args) => {
+                if let Expr::Ident(name) = callee.as_ref() {
+                    return self.substitute_closure_scan_call_source(
+                        name,
+                        self.funcsig_return_sources
+                            .get(name)
+                            .copied()
+                            .unwrap_or(FuncSigReturnSource::Unknown),
+                        args,
+                        current_func,
+                        current_params,
+                        locals,
+                        out,
+                    );
+                }
+                FuncSigReturnSource::Unknown
+            }
+            _ => FuncSigReturnSource::Unknown,
+        }
+    }
+
+    fn substitute_closure_scan_call_source(
+        &self,
+        func_name: &str,
+        source: FuncSigReturnSource,
+        args: &[Expr],
+        current_func: Option<&str>,
+        current_params: &[Param],
+        locals: &HashMap<String, FuncSigReturnSource>,
+        out: &HashMap<String, HashSet<usize>>,
+    ) -> FuncSigReturnSource {
+        match source {
+            FuncSigReturnSource::Param(i) => self.closure_scan_param_source_for_call(
+                func_name,
+                i,
+                args,
+                current_func,
+                current_params,
+                locals,
+                out,
+            ),
+            FuncSigReturnSource::ParamSet(mask) => {
+                let sources: Vec<_> =
+                    Self::funcsig_source_param_indices(FuncSigReturnSource::ParamSet(mask))
+                        .into_iter()
+                        .map(|i| {
+                            self.closure_scan_param_source_for_call(
+                                func_name,
+                                i,
+                                args,
+                                current_func,
+                                current_params,
+                                locals,
+                                out,
+                            )
+                        })
+                        .collect();
+                Self::merge_funcsig_sources(&sources)
+            }
+            other => other,
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn closure_scan_param_source_for_call(
+        &self,
+        func_name: &str,
+        param_index: usize,
+        args: &[Expr],
+        current_func: Option<&str>,
+        current_params: &[Param],
+        locals: &HashMap<String, FuncSigReturnSource>,
+        out: &HashMap<String, HashSet<usize>>,
+    ) -> FuncSigReturnSource {
+        if out
+            .get(func_name)
+            .map(|indices| indices.contains(&param_index))
+            .unwrap_or(false)
+        {
+            return FuncSigReturnSource::Closure;
+        }
+        args.get(param_index)
+            .map(|arg| {
+                self.funcsig_expr_source_for_closure_scan(
+                    arg,
+                    current_func,
+                    current_params,
+                    locals,
+                    out,
+                )
+            })
+            .unwrap_or(FuncSigReturnSource::Unknown)
     }
 
     /// 编译类方法
@@ -6386,6 +7652,10 @@ struct CompileContext<'a, 'b> {
     current_func_name: String,
     /// 使用生命周期模式的函数集合（返回借用而非拥有的值）
     lifetime_funcs: HashSet<String>,
+    /// 函数名 -> 函数值返回来源。
+    funcsig_return_sources: HashMap<String, FuncSigReturnSource>,
+    /// 函数名 -> 需要按闭包对象 ABI 处理的函数类型参数下标。
+    funcsig_closure_param_indices: HashMap<String, HashSet<usize>>,
     /// 变量来源追踪：变量名 -> 来源参数名（用于生命周期检查）
     var_lifetime_source: HashMap<String, String>,
     /// 当前作用域深度（用于调用者端生命周期检查）
@@ -6400,6 +7670,8 @@ struct CompileContext<'a, 'b> {
     loop_stack: Vec<(Block, Block, usize)>,
     /// catch 落点栈：每个 try 块的 catch_block，用于编译 throw（同函数内直接跳转）
     catch_stack: Vec<Block>,
+    /// 当前是否位于 catch 体内；用于决定 throw 是否需要先执行当前 try 的 finally。
+    catch_body_depth: usize,
     /// 当前激活的 finally 语句栈（外层到内层）。
     finally_stack: Vec<Vec<Statement>>,
     /// 控制流退出时可见的 finally 深度上限；用于避免在 finally 中重复执行自身。
@@ -6444,6 +7716,8 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         lifetime_deps: Option<Vec<String>>,
         current_func_name: String,
         lifetime_funcs: HashSet<String>,
+        funcsig_return_sources: HashMap<String, FuncSigReturnSource>,
+        funcsig_closure_param_indices: HashMap<String, HashSet<usize>>,
     ) -> Self {
         Self {
             builder,
@@ -6475,6 +7749,8 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             lifetime_deps,
             current_func_name,
             lifetime_funcs,
+            funcsig_return_sources,
+            funcsig_closure_param_indices,
             var_lifetime_source: HashMap::new(),
             scope_depth: 0,
             var_scope_depth: HashMap::new(),
@@ -6482,6 +7758,7 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             weak_variables: HashSet::new(),
             loop_stack: Vec::new(),
             catch_stack: Vec::new(),
+            catch_body_depth: 0,
             finally_stack: Vec::new(),
             finally_visibility_limit: None,
             pending_closures: Vec::new(),
@@ -7224,7 +8501,12 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             let has_rc_fields = self
                 .classes
                 .get(class_name)
-                .map(|ci| ci.fields.iter().any(|f| Self::is_rc_type(&f.ty)))
+                .map(|ci| {
+                    ci.fields.iter().any(|f| {
+                        Self::is_rc_type(&f.ty)
+                            || matches!(f.ty, BolideType::FuncSig(_, _) | BolideType::Func)
+                    })
+                })
                 .unwrap_or(false);
 
             if has_rc_fields {
@@ -7294,7 +8576,14 @@ impl<'a, 'b> CompileContext<'a, 'b> {
     fn emit_object_fields_cleanup(&mut self, obj_ptr: Value, class_name: &str) {
         if let Some(class_info) = self.classes.get(class_name).cloned() {
             for field in &class_info.fields {
-                if Self::is_rc_type(&field.ty) {
+                if matches!(field.ty, BolideType::FuncSig(_, _) | BolideType::Func) {
+                    let field_ptr = self.builder.ins().iadd_imm(obj_ptr, field.offset as i64);
+                    let field_val =
+                        self.builder
+                            .ins()
+                            .load(types::I64, MemFlags::new(), field_ptr, 0);
+                    self.emit_closure_release(field_val);
+                } else if Self::is_rc_type(&field.ty) {
                     if let Some(func_name) = Self::get_release_func_name(&field.ty) {
                         if let Some(&func_ref) = self.func_refs.get(func_name) {
                             let field_ptr =
@@ -7509,6 +8798,9 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                     .get("@_exception_set")
                     .ok_or("exception_set not found")?;
                 self.builder.ins().call(set_fn, &[val, tag_val]);
+                if self.catch_body_depth > 0 {
+                    self.emit_active_finallys_from(self.current_finally_depth().saturating_sub(1))?;
+                }
 
                 if let Some(&catch_block) = self.catch_stack.last() {
                     // 同函数内有 try：直接跳到 catch 落点
@@ -7619,6 +8911,7 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             // body_block：绑定 typed 异常变量并执行 catch body
             self.builder.switch_to_block(body_block);
             self.builder.seal_block(body_block);
+            self.catch_body_depth += 1;
             self.enter_scope();
             let catch_var = self.declare_variable(&clause.var, ptr_type);
             self.builder.def_var(catch_var, ex_ptr);
@@ -7634,6 +8927,7 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                 clause_diverted = self.compile_stmt(s)?;
             }
             self.pop_active_finally(catch_finally_depth);
+            self.catch_body_depth -= 1;
             self.leave_scope()?;
             if !clause_diverted {
                 self.emit_finally(&finally_body)?;
@@ -8081,7 +9375,10 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         let c_ty = self.bolide_type_to_cranelift(ty);
         let var = self.declare_variable(name, c_ty);
         let mut bind_val = value;
-        if Self::is_rc_type(ty) {
+        if matches!(ty, BolideType::FuncSig(_, _) | BolideType::Func) {
+            self.emit_closure_retain(value);
+            self.closure_vars.insert(name.to_string());
+        } else if Self::is_rc_type(ty) {
             if let Some(func_name) = Self::get_clone_func_name(ty) {
                 if let Some(&func_ref) = self.func_refs.get(func_name) {
                     let call = self.builder.ins().call(func_ref, &[value]);
@@ -8133,10 +9430,12 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         let base_type = self.infer_expr_type(base);
         let base_val = self.compile_expr(base)?;
         let index_val = self.compile_expr(index)?;
-        let value_val = self.compile_expr(value)?;
+        let mut value_val = self.compile_expr(value)?;
 
         match base_type {
             BolideType::List(ref elem_ty) => {
+                value_val =
+                    self.prepare_funcsig_for_container_storage(value_val, value, elem_ty)?;
                 // Int/Float/Bool 内联：单次 store，无运行时调用
                 if matches!(
                     elem_ty.as_ref(),
@@ -8158,7 +9457,9 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                     .call(list_set, &[base_val, index_val, value_val]);
                 Ok(())
             }
-            BolideType::Dict(_, _) => {
+            BolideType::Dict(_, ref value_ty) => {
+                value_val =
+                    self.prepare_funcsig_for_container_storage(value_val, value, value_ty)?;
                 let dict_set = *self
                     .func_refs
                     .get("@_dict_set")
@@ -8349,10 +9650,22 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                 self.remove_temp_closure(val);
                 self.closure_vars.insert(var_name.to_string());
             } else if let Expr::Ident(src) = value {
-                if self.closure_vars.contains(src) {
+                if self.closure_vars.contains(src) || self.closure_param_vars.contains(src) {
                     self.emit_closure_retain(val);
                     self.closure_vars.insert(var_name.to_string());
                 }
+            } else if matches!(
+                global_ty,
+                Some(BolideType::FuncSig(_, _) | BolideType::Func)
+            ) && !self.expr_yields_raw_funcsig(value)
+            {
+                self.emit_closure_retain(val);
+                self.closure_vars.insert(var_name.to_string());
+            } else if matches!(
+                global_ty,
+                Some(BolideType::FuncSig(_, _) | BolideType::Func)
+            ) {
+                self.closure_vars.remove(var_name);
             }
 
             // 调用者端借用检查：全局变量赋值同样记录借用关系
@@ -8407,7 +9720,8 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         let obj_ptr = self.compile_expr(base)?;
 
         // 编译值表达式
-        let val = self.compile_expr(value)?;
+        let mut val = self.compile_expr(value)?;
+        val = self.prepare_funcsig_for_container_storage(val, value, &field_ty)?;
 
         // 计算字段地址
         let field_ptr = self.builder.ins().iadd_imm(obj_ptr, field_offset as i64);
@@ -8419,6 +9733,12 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                 .ins()
                 .load(self.ptr_type, MemFlags::new(), field_ptr, 0);
             self.emit_release(old_val, &field_ty);
+        } else if matches!(field_ty, BolideType::FuncSig(_, _) | BolideType::Func) {
+            let old_val = self
+                .builder
+                .ins()
+                .load(self.ptr_type, MemFlags::new(), field_ptr, 0);
+            self.emit_closure_release(old_val);
         }
 
         // 处理新值的引用计数
@@ -8442,6 +9762,8 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                     }
                 }
             }
+        } else if matches!(field_ty, BolideType::FuncSig(_, _) | BolideType::Func) {
+            self.emit_closure_retain(val);
         }
         self.builder.ins().store(MemFlags::new(), val, field_ptr, 0);
 
@@ -8504,17 +9826,9 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         let ty = self.bolide_type_to_cranelift(&bolide_ty);
 
         // 检查变量是否已存在（循环中已预初始化的变量）
-        let existing_var = self
-            .variables
-            .get(&decl.name)
-            .copied()
-            .filter(|_| {
-                self.var_scope_depth
-                    .get(&decl.name)
-                    .copied()
-                    .unwrap_or(0)
-                    == self.scope_depth
-            });
+        let existing_var = self.variables.get(&decl.name).copied().filter(|_| {
+            self.var_scope_depth.get(&decl.name).copied().unwrap_or(0) == self.scope_depth
+        });
 
         let var = if let Some(v) = existing_var {
             // 变量已存在（循环中预初始化过），release 旧值
@@ -8607,10 +9921,21 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                 self.closure_vars.insert(decl.name.clone());
             } else if let Expr::Ident(src) = value {
                 // 别名另一个闭包变量：retain 一份，新变量独立持有
-                if self.closure_vars.contains(src) {
+                if self.closure_vars.contains(src) || self.closure_param_vars.contains(src) {
                     self.emit_closure_retain(val);
                     self.closure_vars.insert(decl.name.clone());
                 }
+            } else if matches!(
+                self.funcsig_expr_source(value),
+                FuncSigReturnSource::Closure
+            ) {
+                self.emit_closure_retain(val);
+                self.closure_vars.insert(decl.name.clone());
+            } else if matches!(bolide_ty, BolideType::FuncSig(_, _) | BolideType::Func)
+                && !self.expr_yields_raw_funcsig(value)
+            {
+                self.emit_closure_retain(val);
+                self.closure_vars.insert(decl.name.clone());
             }
         } else {
             // 根据类型初始化默认值
@@ -8763,7 +10088,12 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                     .map(|n| self.closure_param_vars.contains(n))
                     .unwrap_or(false);
 
-                if is_closure_temp {
+                let returns_raw_funcsig =
+                    matches!(val_ty, BolideType::FuncSig(_, _) | BolideType::Func)
+                        && self.current_func_returns_raw_funcsig();
+                if returns_raw_funcsig {
+                    // 裸函数值按普通函数指针返回，不走闭包对象引用计数。
+                } else if is_closure_temp {
                     // 返回刚创建的闭包临时值：调用者接管所有权
                     self.remove_temp_closure(val);
                 } else if is_closure_var || is_closure_param {
@@ -8843,6 +10173,260 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         }
 
         Ok(val)
+    }
+
+    fn prepare_funcsig_for_container_storage(
+        &mut self,
+        val: Value,
+        expr: &Expr,
+        target_ty: &BolideType,
+    ) -> Result<Value, String> {
+        if let BolideType::FuncSig(param_types, ret_type) = target_ty {
+            if self.expr_yields_raw_funcsig(expr) {
+                return self.wrap_raw_funcsig_as_closure(val, param_types, ret_type);
+            }
+        }
+        Ok(val)
+    }
+
+    fn wrap_raw_funcsig_as_closure(
+        &mut self,
+        raw_func_ptr: Value,
+        param_types: &[BolideType],
+        ret_type: &Option<Box<BolideType>>,
+    ) -> Result<Value, String> {
+        let alloc_ref = *self
+            .func_refs
+            .get("@_bolide_alloc")
+            .ok_or("bolide_alloc not found")?;
+        let size_val = self.builder.ins().iconst(types::I64, 8);
+        let alloc_call = self.builder.ins().call(alloc_ref, &[size_val]);
+        let env_ptr = self.builder.inst_results(alloc_call)[0];
+        self.builder
+            .ins()
+            .store(MemFlags::trusted(), raw_func_ptr, env_ptr, 0);
+
+        let adapter_name = funcsig_adapter_name(param_types, ret_type);
+        let adapter_ref = *self
+            .func_refs
+            .get(&adapter_name)
+            .ok_or_else(|| format!("funcsig adapter not found: {}", adapter_name))?;
+        let fn_ptr = self.builder.ins().func_addr(self.ptr_type, adapter_ref);
+
+        let new_ref = *self
+            .func_refs
+            .get("@_closure_new")
+            .ok_or("closure_new not found")?;
+        let meta_ptr = self.builder.ins().iconst(self.ptr_type, 0);
+        let call = self
+            .builder
+            .ins()
+            .call(new_ref, &[fn_ptr, env_ptr, size_val, meta_ptr]);
+        let closure_val = self.builder.inst_results(call)[0];
+        self.closure_temps.push(closure_val);
+        Ok(closure_val)
+    }
+
+    fn current_func_returns_raw_funcsig(&self) -> bool {
+        match self
+            .funcsig_return_sources
+            .get(&self.current_func_name)
+            .copied()
+        {
+            Some(FuncSigReturnSource::Raw) => true,
+            Some(FuncSigReturnSource::Param(index)) => self
+                .func_params
+                .get(&self.current_func_name)
+                .and_then(|params| params.get(index))
+                .map(|param| !self.closure_param_vars.contains(&param.name))
+                .unwrap_or(false),
+            Some(FuncSigReturnSource::ParamSet(mask)) => self
+                .func_params
+                .get(&self.current_func_name)
+                .map(|params| {
+                    JitCompiler::funcsig_source_param_indices(FuncSigReturnSource::ParamSet(mask))
+                        .into_iter()
+                        .all(|index| {
+                            params
+                                .get(index)
+                                .map(|param| !self.closure_param_vars.contains(&param.name))
+                                .unwrap_or(false)
+                        })
+                })
+                .unwrap_or(false),
+            _ => false,
+        }
+    }
+
+    fn expr_yields_raw_funcsig(&self, expr: &Expr) -> bool {
+        matches!(self.funcsig_expr_source(expr), FuncSigReturnSource::Raw)
+    }
+
+    fn direct_call_returns_raw_funcsig(&self, func_name: &str, args: &[Expr]) -> bool {
+        matches!(
+            self.substitute_runtime_call_source(
+                func_name,
+                self.funcsig_return_sources
+                    .get(func_name)
+                    .copied()
+                    .unwrap_or(FuncSigReturnSource::Unknown),
+                None,
+                args,
+                0,
+            ),
+            FuncSigReturnSource::Raw
+        )
+    }
+
+    fn funcsig_return_source_uses_param(&self, func_name: &str) -> bool {
+        self.funcsig_return_sources
+            .get(func_name)
+            .copied()
+            .map(|source| !JitCompiler::funcsig_source_param_indices(source).is_empty())
+            .unwrap_or(false)
+    }
+
+    fn method_call_returns_raw_funcsig(&self, func_name: &str, base: &Expr, args: &[Expr]) -> bool {
+        let source = self
+            .funcsig_return_sources
+            .get(func_name)
+            .copied()
+            .unwrap_or(FuncSigReturnSource::Unknown);
+        let resolved = self.substitute_runtime_call_source(func_name, source, Some(base), args, 1);
+        matches!(resolved, FuncSigReturnSource::Raw)
+    }
+
+    fn substitute_runtime_call_source(
+        &self,
+        func_name: &str,
+        source: FuncSigReturnSource,
+        base: Option<&Expr>,
+        args: &[Expr],
+        param_offset: usize,
+    ) -> FuncSigReturnSource {
+        match source {
+            FuncSigReturnSource::Param(i) => {
+                self.funcsig_param_source_for_call(func_name, i, base, args, param_offset)
+            }
+            FuncSigReturnSource::ParamSet(mask) => {
+                let sources: Vec<_> =
+                    JitCompiler::funcsig_source_param_indices(FuncSigReturnSource::ParamSet(mask))
+                        .into_iter()
+                        .map(|i| {
+                            self.funcsig_param_source_for_call(
+                                func_name,
+                                i,
+                                base,
+                                args,
+                                param_offset,
+                            )
+                        })
+                        .collect();
+                JitCompiler::merge_funcsig_sources(&sources)
+            }
+            other => other,
+        }
+    }
+
+    fn funcsig_param_source_for_call(
+        &self,
+        func_name: &str,
+        param_index: usize,
+        base: Option<&Expr>,
+        args: &[Expr],
+        param_offset: usize,
+    ) -> FuncSigReturnSource {
+        if self
+            .funcsig_closure_param_indices
+            .get(func_name)
+            .map(|indices| indices.contains(&param_index))
+            .unwrap_or(false)
+        {
+            return FuncSigReturnSource::Closure;
+        }
+        if param_index < param_offset {
+            return base
+                .map(|expr| self.funcsig_expr_source(expr))
+                .unwrap_or(FuncSigReturnSource::Unknown);
+        }
+        args.get(param_index - param_offset)
+            .map(|arg| self.funcsig_expr_source(arg))
+            .unwrap_or(FuncSigReturnSource::Unknown)
+    }
+
+    fn funcsig_expr_source(&self, expr: &Expr) -> FuncSigReturnSource {
+        match expr {
+            Expr::Ident(name) => {
+                if self.func_refs.contains_key(name) {
+                    return FuncSigReturnSource::Raw;
+                }
+                if self.closure_vars.contains(name) || self.closure_param_vars.contains(name) {
+                    return FuncSigReturnSource::Closure;
+                }
+                if matches!(
+                    self.var_types
+                        .get(name)
+                        .or_else(|| self.global_var_types.get(name)),
+                    Some(BolideType::FuncSig(_, _) | BolideType::Func)
+                ) {
+                    return FuncSigReturnSource::Raw;
+                }
+                FuncSigReturnSource::Unknown
+            }
+            Expr::Closure { .. } => FuncSigReturnSource::Closure,
+            Expr::Index(_, _) | Expr::Member(_, _) => {
+                if matches!(self.infer_expr_type(expr), BolideType::FuncSig(_, _)) {
+                    FuncSigReturnSource::Closure
+                } else {
+                    FuncSigReturnSource::Unknown
+                }
+            }
+            Expr::Call(callee, args) => match callee.as_ref() {
+                Expr::Ident(name) => self.substitute_runtime_call_source(
+                    name,
+                    self.funcsig_return_sources
+                        .get(name)
+                        .copied()
+                        .unwrap_or(FuncSigReturnSource::Unknown),
+                    None,
+                    args,
+                    0,
+                ),
+                Expr::Member(base, member) => {
+                    if let Expr::Ident(module_name) = base.as_ref() {
+                        if self.modules.contains_key(module_name) {
+                            let func_name = format!("@{}_{}", module_name, member);
+                            return self.substitute_runtime_call_source(
+                                &func_name,
+                                self.funcsig_return_sources
+                                    .get(&func_name)
+                                    .copied()
+                                    .unwrap_or(FuncSigReturnSource::Unknown),
+                                None,
+                                args,
+                                0,
+                            );
+                        }
+                    }
+                    if let Ok(BolideType::Custom(class_name)) = self.get_expr_type(base) {
+                        if let Ok(func_name) = self.find_method(&class_name, member) {
+                            if self.method_call_returns_raw_funcsig(&func_name, base, args) {
+                                return FuncSigReturnSource::Raw;
+                            }
+                            if matches!(
+                                self.funcsig_return_sources.get(&func_name),
+                                Some(FuncSigReturnSource::Closure)
+                            ) {
+                                return FuncSigReturnSource::Closure;
+                            }
+                        }
+                    }
+                    FuncSigReturnSource::Unknown
+                }
+                _ => FuncSigReturnSource::Unknown,
+            },
+            _ => FuncSigReturnSource::Unknown,
+        }
     }
 
     /// 写回所有 Ref 参数的值
@@ -10227,12 +11811,7 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             BinOp::Sub => "@_dynamic_sub",
             BinOp::Mul => "@_dynamic_mul",
             BinOp::Div => "@_dynamic_div",
-            _ => {
-                return Err(format!(
-                    "Unsupported dynamic operation: {:?}",
-                    op
-                ))
-            }
+            _ => return Err(format!("Unsupported dynamic operation: {:?}", op)),
         };
         let func_ref = *self
             .func_refs
@@ -10666,8 +12245,8 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         let args_index = params.iter().position(|p| p.is_variadic);
         let kwargs_index = params.iter().position(|p| p.is_kw_variadic);
         let mut slots: Vec<Option<Expr>> = vec![None; params.len()];
-        let mut packed_args = Vec::new();
-        let mut packed_kwargs = Vec::new();
+        let mut explicit_slots = vec![false; params.len()];
+        let mut prepared = Vec::with_capacity(params.len());
         let mut next_pos = 0usize;
         let mut named_or_spread_seen = false;
 
@@ -10685,9 +12264,21 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                                 call_name, name
                             ));
                         }
+                        explicit_slots[i] = true;
                         slots[i] = Some((**value).clone());
-                    } else if kwargs_index.is_some() {
-                        packed_kwargs.push(PackedKwargItem::Entry(name.clone(), (**value).clone()));
+                        prepared.push(PreparedArg::Expr {
+                            expr: (**value).clone(),
+                            target_index: i,
+                        });
+                    } else if let Some(target_index) = kwargs_index {
+                        prepared.push(PreparedArg::PackedKwargItem {
+                            target_index,
+                            value_ty: match &params[target_index].ty {
+                                BolideType::Dict(_, value) => value.as_ref().clone(),
+                                _ => BolideType::Dynamic,
+                            },
+                            item: PackedKwargItem::Entry(name.clone(), (**value).clone()),
+                        });
                     } else {
                         return Err(format!(
                             "{} got unexpected keyword argument '{}'",
@@ -10697,17 +12288,33 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                 }
                 Expr::SpreadArg(value) => {
                     named_or_spread_seen = true;
-                    if args_index.is_none() {
+                    if let Some(target_index) = args_index {
+                        prepared.push(PreparedArg::PackedArgItem {
+                            target_index,
+                            elem_ty: match &params[target_index].ty {
+                                BolideType::List(inner) => inner.as_ref().clone(),
+                                _ => BolideType::Dynamic,
+                            },
+                            item: PackedArgItem::Spread((**value).clone()),
+                        });
+                    } else {
                         return Err(format!("{} does not accept *args", call_name));
                     }
-                    packed_args.push(PackedArgItem::Spread((**value).clone()));
                 }
                 Expr::KwSpreadArg(value) => {
                     named_or_spread_seen = true;
-                    if kwargs_index.is_none() {
+                    if let Some(target_index) = kwargs_index {
+                        prepared.push(PreparedArg::PackedKwargItem {
+                            target_index,
+                            value_ty: match &params[target_index].ty {
+                                BolideType::Dict(_, value) => value.as_ref().clone(),
+                                _ => BolideType::Dynamic,
+                            },
+                            item: PackedKwargItem::Spread((**value).clone()),
+                        });
+                    } else {
                         return Err(format!("{} does not accept **kwargs", call_name));
                     }
-                    packed_kwargs.push(PackedKwargItem::Spread((**value).clone()));
                 }
                 expr => {
                     if named_or_spread_seen {
@@ -10724,10 +12331,22 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                         next_pos += 1;
                     }
                     if next_pos < params.len() {
+                        explicit_slots[next_pos] = true;
                         slots[next_pos] = Some(expr.clone());
+                        prepared.push(PreparedArg::Expr {
+                            expr: expr.clone(),
+                            target_index: next_pos,
+                        });
                         next_pos += 1;
-                    } else if args_index.is_some() {
-                        packed_args.push(PackedArgItem::Expr(expr.clone()));
+                    } else if let Some(target_index) = args_index {
+                        prepared.push(PreparedArg::PackedArgItem {
+                            target_index,
+                            elem_ty: match &params[target_index].ty {
+                                BolideType::List(inner) => inner.as_ref().clone(),
+                                _ => BolideType::Dynamic,
+                            },
+                            item: PackedArgItem::Expr(expr.clone()),
+                        });
                     } else {
                         return Err(format!("{} got too many positional arguments", call_name));
                     }
@@ -10742,6 +12361,10 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             if slots[i].is_none() {
                 if let Some(default_value) = &param.default_value {
                     slots[i] = Some(default_value.clone());
+                    prepared.push(PreparedArg::Expr {
+                        expr: default_value.clone(),
+                        target_index: i,
+                    });
                 } else {
                     return Err(format!(
                         "{} missing required argument '{}'",
@@ -10751,28 +12374,13 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             }
         }
 
-        let mut prepared = Vec::with_capacity(params.len());
         for (i, param) in params.iter().enumerate() {
-            if param.is_variadic {
-                let elem_ty = match &param.ty {
-                    BolideType::List(inner) => inner.as_ref().clone(),
-                    _ => BolideType::Dynamic,
-                };
-                prepared.push(PreparedArg::PackedArgs {
-                    elem_ty,
-                    items: packed_args.clone(),
-                });
-            } else if param.is_kw_variadic {
-                let value_ty = match &param.ty {
-                    BolideType::Dict(_, value) => value.as_ref().clone(),
-                    _ => BolideType::Dynamic,
-                };
-                prepared.push(PreparedArg::PackedKwargs {
-                    value_ty,
-                    items: packed_kwargs.clone(),
-                });
-            } else {
-                prepared.push(PreparedArg::Expr(slots[i].take().unwrap()));
+            if !param.is_variadic
+                && !param.is_kw_variadic
+                && !explicit_slots[i]
+                && slots[i].is_some()
+            {
+                continue;
             }
         }
 
@@ -10796,7 +12404,10 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                 Expr::KwSpreadArg(..) => {
                     return Err(format!("{} does not accept **kwargs", call_name));
                 }
-                expr => prepared.push(PreparedArg::Expr(expr.clone())),
+                expr => prepared.push(PreparedArg::Expr {
+                    expr: expr.clone(),
+                    target_index: prepared.len(),
+                }),
             }
         }
         Ok(prepared)
@@ -10816,42 +12427,100 @@ impl<'a, 'b> CompileContext<'a, 'b> {
 
     fn compile_prepared_arg(&mut self, arg: &PreparedArg) -> Result<Value, String> {
         match arg {
-            PreparedArg::Expr(expr) => self.compile_expr(expr),
-            PreparedArg::PackedArgs { elem_ty, items } => self.compile_packed_args(elem_ty, items),
-            PreparedArg::PackedKwargs { value_ty, items } => {
-                self.compile_packed_kwargs(value_ty, items)
+            PreparedArg::Expr { expr, .. } => self.compile_expr(expr),
+            _ => {
+                Err("internal error: packed argument item compiled as standalone value".to_string())
             }
         }
     }
 
     fn compile_prepared_args_for_params(
         &mut self,
+        call_name: &str,
         prepared_args: &[PreparedArg],
         params: &[Param],
+        param_offset: usize,
     ) -> Result<Vec<Value>, String> {
-        let mut values = Vec::with_capacity(prepared_args.len());
-        for (i, arg) in prepared_args.iter().enumerate() {
-            let raw_val = self.compile_prepared_arg(arg)?;
-            let val = if let (Some(param), PreparedArg::Expr(expr)) = (params.get(i), arg) {
-                let actual_ty = self.normalize_bolide_type(&self.infer_expr_type(expr));
-                self.prepare_value_for_storage(raw_val, &actual_ty, &param.ty)?
-            } else {
-                raw_val
-            };
-            values.push(val);
+        let mut values: Vec<Option<Value>> = vec![None; params.len()];
+        for (i, param) in params.iter().enumerate() {
+            if param.is_variadic {
+                values[i] = Some(self.new_packed_args(&param.ty)?);
+            } else if param.is_kw_variadic {
+                values[i] = Some(self.new_packed_kwargs(&param.ty)?);
+            }
         }
-        Ok(values)
+        for arg in prepared_args.iter() {
+            let target_index = arg.target_index();
+            match arg {
+                PreparedArg::Expr { expr, .. } => {
+                    let raw_val = self.compile_expr(expr)?;
+                    let val = if let Some(param) = params.get(target_index) {
+                        let actual_ty = self.normalize_bolide_type(&self.infer_expr_type(expr));
+                        let mut val =
+                            self.prepare_value_for_storage(raw_val, &actual_ty, &param.ty)?;
+                        let param_index = target_index + param_offset;
+                        let callee_expects_closure = self
+                            .funcsig_closure_param_indices
+                            .get(call_name)
+                            .map(|indices| indices.contains(&param_index))
+                            .unwrap_or(false);
+                        if callee_expects_closure
+                            && matches!(self.funcsig_expr_source(expr), FuncSigReturnSource::Raw)
+                        {
+                            if let BolideType::FuncSig(param_types, ret_type) = &param.ty {
+                                val =
+                                    self.wrap_raw_funcsig_as_closure(val, param_types, ret_type)?;
+                            }
+                        }
+                        val
+                    } else {
+                        raw_val
+                    };
+                    values[target_index] = Some(val);
+                }
+                PreparedArg::PackedArgItem { elem_ty, item, .. } => {
+                    let list_ptr = values[target_index]
+                        .ok_or_else(|| "internal error: missing variadic container".to_string())?;
+                    self.append_packed_arg_item(list_ptr, elem_ty, item)?;
+                }
+                PreparedArg::PackedKwargItem { value_ty, item, .. } => {
+                    let dict_ptr = values[target_index]
+                        .ok_or_else(|| "internal error: missing kwargs container".to_string())?;
+                    self.append_packed_kwarg_item(dict_ptr, value_ty, item)?;
+                }
+            }
+        }
+        values
+            .into_iter()
+            .map(|value| {
+                value.ok_or_else(|| "internal error: missing prepared argument".to_string())
+            })
+            .collect()
     }
 
-    fn compile_packed_args(
-        &mut self,
-        elem_ty: &BolideType,
-        items: &[PackedArgItem],
-    ) -> Result<Value, String> {
+    fn new_packed_args(&mut self, param_ty: &BolideType) -> Result<Value, String> {
         let list_new = *self
             .func_refs
             .get("@_list_new")
             .ok_or("list_new not found")?;
+        let elem_ty = match param_ty {
+            BolideType::List(inner) => inner.as_ref().clone(),
+            _ => BolideType::Dynamic,
+        };
+        let elem_tag = Self::bolide_type_to_element_tag(&elem_ty);
+        let elem_tag_val = self.builder.ins().iconst(types::I8, elem_tag as i64);
+        let call = self.builder.ins().call(list_new, &[elem_tag_val]);
+        let list_ptr = self.builder.inst_results(call)[0];
+        self.track_temp_rc_value(list_ptr, &BolideType::List(Box::new(elem_ty)));
+        Ok(list_ptr)
+    }
+
+    fn append_packed_arg_item(
+        &mut self,
+        list_ptr: Value,
+        elem_ty: &BolideType,
+        item: &PackedArgItem,
+    ) -> Result<(), String> {
         let list_push = *self
             .func_refs
             .get("@_list_push")
@@ -10861,41 +12530,51 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             .get("@_list_extend")
             .ok_or("list_extend not found")?;
         let elem_tag = Self::bolide_type_to_element_tag(elem_ty);
-        let elem_tag_val = self.builder.ins().iconst(types::I8, elem_tag as i64);
-        let call = self.builder.ins().call(list_new, &[elem_tag_val]);
-        let list_ptr = self.builder.inst_results(call)[0];
-
-        for item in items {
-            match item {
-                PackedArgItem::Expr(expr) => {
-                    self.check_borrow_escape(expr, "*args")?;
-                    let mut val = self.compile_expr(expr)?;
-                    if elem_tag == 1 && self.builder.func.dfg.value_type(val) == types::F64 {
-                        val = self.builder.ins().bitcast(types::I64, MemFlags::new(), val);
-                    }
-                    self.builder.ins().call(list_push, &[list_ptr, val]);
+        match item {
+            PackedArgItem::Expr(expr) => {
+                self.check_borrow_escape(expr, "*args")?;
+                let mut val = self.compile_expr(expr)?;
+                if elem_tag == 1 && self.builder.func.dfg.value_type(val) == types::F64 {
+                    val = self.builder.ins().bitcast(types::I64, MemFlags::new(), val);
                 }
-                PackedArgItem::Spread(expr) => {
-                    self.check_borrow_escape(expr, "*args")?;
-                    let spread = self.compile_expr(expr)?;
-                    self.builder.ins().call(list_extend, &[list_ptr, spread]);
-                }
+                self.builder.ins().call(list_push, &[list_ptr, val]);
+            }
+            PackedArgItem::Spread(expr) => {
+                self.check_borrow_escape(expr, "*args")?;
+                let spread = self.compile_expr(expr)?;
+                self.builder.ins().call(list_extend, &[list_ptr, spread]);
             }
         }
-
-        self.track_temp_rc_value(list_ptr, &BolideType::List(Box::new(elem_ty.clone())));
-        Ok(list_ptr)
+        Ok(())
     }
 
-    fn compile_packed_kwargs(
-        &mut self,
-        value_ty: &BolideType,
-        items: &[PackedKwargItem],
-    ) -> Result<Value, String> {
+    fn new_packed_kwargs(&mut self, param_ty: &BolideType) -> Result<Value, String> {
         let dict_new = *self
             .func_refs
             .get("@_dict_new")
             .ok_or("dict_new not found")?;
+        let value_ty = match param_ty {
+            BolideType::Dict(_, value) => value.as_ref().clone(),
+            _ => BolideType::Dynamic,
+        };
+        let key_tag = self.builder.ins().iconst(types::I8, 3);
+        let value_tag = self.builder.ins().iconst(
+            types::I8,
+            Self::bolide_type_to_element_tag(&value_ty) as i64,
+        );
+        let call = self.builder.ins().call(dict_new, &[key_tag, value_tag]);
+        let dict_ptr = self.builder.inst_results(call)[0];
+        let dict_ty = BolideType::Dict(Box::new(BolideType::Str), Box::new(value_ty));
+        self.track_temp_rc_value(dict_ptr, &dict_ty);
+        Ok(dict_ptr)
+    }
+
+    fn append_packed_kwarg_item(
+        &mut self,
+        dict_ptr: Value,
+        value_ty: &BolideType,
+        item: &PackedKwargItem,
+    ) -> Result<(), String> {
         let dict_set = *self
             .func_refs
             .get("@_dict_set")
@@ -10904,39 +12583,26 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             .func_refs
             .get("@_dict_extend")
             .ok_or("dict_extend not found")?;
-        let key_tag = self.builder.ins().iconst(types::I8, 3);
-        let value_tag = self
-            .builder
-            .ins()
-            .iconst(types::I8, Self::bolide_type_to_element_tag(value_ty) as i64);
-        let call = self.builder.ins().call(dict_new, &[key_tag, value_tag]);
-        let dict_ptr = self.builder.inst_results(call)[0];
-
-        for item in items {
-            match item {
-                PackedKwargItem::Entry(name, expr) => {
-                    self.check_borrow_escape(expr, "**kwargs")?;
-                    let key = self.compile_expr(&Expr::String(name.clone()))?;
-                    let mut val = self.compile_expr(expr)?;
-                    if matches!(value_ty, BolideType::Dynamic) {
-                        let actual_ty = self.infer_expr_type(expr);
-                        if actual_ty != BolideType::Dynamic {
-                            val = self.convert_to_dynamic(val, &actual_ty)?;
-                        }
+        match item {
+            PackedKwargItem::Entry(name, expr) => {
+                self.check_borrow_escape(expr, "**kwargs")?;
+                let key = self.compile_expr(&Expr::String(name.clone()))?;
+                let mut val = self.compile_expr(expr)?;
+                if matches!(value_ty, BolideType::Dynamic) {
+                    let actual_ty = self.infer_expr_type(expr);
+                    if actual_ty != BolideType::Dynamic {
+                        val = self.convert_to_dynamic(val, &actual_ty)?;
                     }
-                    self.builder.ins().call(dict_set, &[dict_ptr, key, val]);
                 }
-                PackedKwargItem::Spread(expr) => {
-                    self.check_borrow_escape(expr, "**kwargs")?;
-                    let spread = self.compile_expr(expr)?;
-                    self.builder.ins().call(dict_extend, &[dict_ptr, spread]);
-                }
+                self.builder.ins().call(dict_set, &[dict_ptr, key, val]);
+            }
+            PackedKwargItem::Spread(expr) => {
+                self.check_borrow_escape(expr, "**kwargs")?;
+                let spread = self.compile_expr(expr)?;
+                self.builder.ins().call(dict_extend, &[dict_ptr, spread]);
             }
         }
-
-        let dict_ty = BolideType::Dict(Box::new(BolideType::Str), Box::new(value_ty.clone()));
-        self.track_temp_rc_value(dict_ptr, &dict_ty);
-        Ok(dict_ptr)
+        Ok(())
     }
 
     fn compile_adt_variant(
@@ -10992,7 +12658,14 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                     val = self.convert_to_dynamic(val, &actual_ty)?;
                 }
             }
-            if Self::is_rc_type(&field_ty) {
+            if matches!(field_ty, BolideType::FuncSig(_, _) | BolideType::Func) {
+                val = self.prepare_funcsig_for_container_storage(val, arg, &field_ty)?;
+                if self.closure_temps.contains(&val) {
+                    self.remove_temp_closure(val);
+                } else {
+                    self.emit_closure_retain(val);
+                }
+            } else if Self::is_rc_type(&field_ty) {
                 let is_temp = self.temp_rc_values.iter().any(|(v, _)| *v == val);
                 if is_temp && !Self::is_weak_ref_type(&field_ty) {
                     self.remove_temp_rc_value(val);
@@ -11110,6 +12783,10 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                 }
                 // 返回闭包的表达式调用：走闭包 ABI
                 if let BolideType::FuncSig(params, ret) = self.infer_expr_type(other) {
+                    if self.expr_yields_raw_funcsig(other) {
+                        let func_ptr = self.compile_expr(other)?;
+                        return self.compile_indirect_call_ptr(func_ptr, args, Some((params, ret)));
+                    }
                     let closure_val = self.compile_expr(other)?;
                     // 临时闭包在调用期间保持存活
                     let was_temp = self.closure_temps.contains(&closure_val);
@@ -11208,52 +12885,89 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             .map(|params| params.iter().map(|p| p.mode).collect())
             .unwrap_or_else(|| vec![ParamMode::Borrow; prepared_args.len()]);
 
-        let mut arg_values = Vec::new();
+        let params = self
+            .func_params
+            .get(&func_name)
+            .cloned()
+            .unwrap_or_default();
+        let mut arg_values: Vec<Option<Value>> = vec![None; params.len()];
+        for (i, param) in params.iter().enumerate() {
+            if param.is_variadic {
+                arg_values[i] = Some(self.new_packed_args(&param.ty)?);
+            } else if param.is_kw_variadic {
+                arg_values[i] = Some(self.new_packed_kwargs(&param.ty)?);
+            }
+        }
         let mut ref_writebacks: Vec<(usize, String, Option<Value>)> = Vec::new();
 
-        for (i, arg) in prepared_args.iter().enumerate() {
-            let mode = param_modes.get(i).copied().unwrap_or(ParamMode::Borrow);
+        for arg in prepared_args.iter() {
+            let target_index = arg.target_index();
+            let mode = param_modes
+                .get(target_index)
+                .copied()
+                .unwrap_or(ParamMode::Borrow);
 
             match mode {
-                ParamMode::Borrow => {
-                    // 直接传值
-                    let val = self.compile_prepared_arg(arg)?;
-                    let target_ty = self
-                        .func_params
-                        .get(&func_name)
-                        .and_then(|params| params.get(i))
-                        .map(|param| param.ty.clone());
-                    let val = if let (Some(target_ty), PreparedArg::Expr(expr)) = (target_ty, arg) {
-                        let actual_ty = self.normalize_bolide_type(&self.infer_expr_type(expr));
-                        self.prepare_value_for_storage(val, &actual_ty, &target_ty)?
-                    } else {
-                        val
-                    };
-                    arg_values.push(val);
-                }
+                ParamMode::Borrow => match arg {
+                    PreparedArg::Expr { expr, .. } => {
+                        let val = self.compile_expr(expr)?;
+                        let target_ty = params.get(target_index).map(|param| param.ty.clone());
+                        let val = if let Some(target_ty) = target_ty {
+                            let actual_ty = self.normalize_bolide_type(&self.infer_expr_type(expr));
+                            let mut val =
+                                self.prepare_value_for_storage(val, &actual_ty, &target_ty)?;
+                            let callee_expects_closure = self
+                                .funcsig_closure_param_indices
+                                .get(&func_name)
+                                .map(|indices| indices.contains(&target_index))
+                                .unwrap_or(false);
+                            if callee_expects_closure
+                                && matches!(
+                                    self.funcsig_expr_source(expr),
+                                    FuncSigReturnSource::Raw
+                                )
+                            {
+                                if let BolideType::FuncSig(param_types, ret_type) = target_ty {
+                                    val = self.wrap_raw_funcsig_as_closure(
+                                        val,
+                                        &param_types,
+                                        &ret_type,
+                                    )?;
+                                }
+                            }
+                            val
+                        } else {
+                            val
+                        };
+                        arg_values[target_index] = Some(val);
+                    }
+                    PreparedArg::PackedArgItem { elem_ty, item, .. } => {
+                        let list_ptr = arg_values[target_index].ok_or_else(|| {
+                            "internal error: missing variadic container".to_string()
+                        })?;
+                        self.append_packed_arg_item(list_ptr, elem_ty, item)?;
+                    }
+                    PreparedArg::PackedKwargItem { value_ty, item, .. } => {
+                        let dict_ptr = arg_values[target_index].ok_or_else(|| {
+                            "internal error: missing kwargs container".to_string()
+                        })?;
+                        self.append_packed_kwarg_item(dict_ptr, value_ty, item)?;
+                    }
+                },
                 ParamMode::Owned => {
                     // 传值，然后标记变量为已移动
-                    let expr = match arg {
-                        PreparedArg::Expr(expr) => expr,
-                        _ => {
-                            return Err(
-                                "owned parameter cannot receive packed arguments".to_string()
-                            )
-                        }
-                    };
+                    let expr = arg.expr().ok_or_else(|| {
+                        "owned parameter cannot receive packed arguments".to_string()
+                    })?;
                     let raw_val = self.compile_expr(expr)?;
-                    let target_ty = self
-                        .func_params
-                        .get(&func_name)
-                        .and_then(|params| params.get(i))
-                        .map(|param| param.ty.clone());
+                    let target_ty = params.get(target_index).map(|param| param.ty.clone());
                     let val = if let Some(target_ty) = target_ty {
                         let actual_ty = self.normalize_bolide_type(&self.infer_expr_type(expr));
                         self.prepare_value_for_storage(raw_val, &actual_ty, &target_ty)?
                     } else {
                         raw_val
                     };
-                    arg_values.push(val);
+                    arg_values[target_index] = Some(val);
 
                     // 如果参数是变量，标记为已移动并置空
                     if let Expr::Ident(var_name) = expr {
@@ -11276,12 +12990,9 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                     }
                 }
                 ParamMode::Ref => {
-                    let expr = match arg {
-                        PreparedArg::Expr(expr) => expr,
-                        _ => {
-                            return Err("ref parameter cannot receive packed arguments".to_string())
-                        }
-                    };
+                    let expr = arg.expr().ok_or_else(|| {
+                        "ref parameter cannot receive packed arguments".to_string()
+                    })?;
                     // 传递变量的栈地址
                     if let Expr::Ident(var_name) = expr {
                         if let Some(&var) = self.variables.get(var_name) {
@@ -11300,8 +13011,8 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                                 .ins()
                                 .store(MemFlags::new(), current_val, slot_addr, 0);
 
-                            arg_values.push(slot_addr);
-                            ref_writebacks.push((i, var_name.clone(), None));
+                            arg_values[target_index] = Some(slot_addr);
+                            ref_writebacks.push((target_index, var_name.clone(), None));
 
                             // 注意：函数返回后需要从栈槽读回新值
                             // 这需要在 call 之后处理
@@ -11314,8 +13025,8 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                                 self.builder
                                     .ins()
                                     .load(self.ptr_type, MemFlags::new(), addr, 0);
-                            arg_values.push(addr);
-                            ref_writebacks.push((i, var_name.clone(), Some(old_val)));
+                            arg_values[target_index] = Some(addr);
+                            ref_writebacks.push((target_index, var_name.clone(), Some(old_val)));
                         } else {
                             return Err(format!("Undefined variable for ref: {}", var_name));
                         }
@@ -11326,6 +13037,12 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             }
         }
 
+        let arg_values: Vec<Value> = arg_values
+            .into_iter()
+            .map(|value| {
+                value.ok_or_else(|| "internal error: missing prepared argument".to_string())
+            })
+            .collect::<Result<_, _>>()?;
         let call = self.builder.ins().call(func_ref, &arg_values);
 
         // 检查是否是生命周期函数
@@ -11391,7 +13108,10 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                         self.track_temp_rc_value(result, &ret_ty);
                     }
                     // 函数返回闭包对象：在调用点标记为闭包临时值，供变量吸收
-                    if matches!(ret_ty, BolideType::FuncSig(_, _) | BolideType::Func) {
+                    if matches!(ret_ty, BolideType::FuncSig(_, _) | BolideType::Func)
+                        && !self.direct_call_returns_raw_funcsig(&func_name, args)
+                        && !self.funcsig_return_source_uses_param(&func_name)
+                    {
                         self.closure_temps.push(result);
                     }
                 }
@@ -12502,12 +14222,15 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             let alloc_call = self.builder.ins().call(alloc_ref, &[size_val]);
             let env_ptr = self.builder.inst_results(alloc_call)[0];
 
+            let params = self.func_params.get(func_name).cloned().unwrap_or_default();
+            let arg_values =
+                self.compile_prepared_args_for_params(func_name, &prepared_args, &params, 0)?;
+
             // 将参数存储到 env
             // 对于 RC 类型，需要 clone 后传给子线程（跨线程安全）
-            for (i, arg) in prepared_args.iter().enumerate() {
-                let val = self.compile_prepared_arg(arg)?;
-                let offset = (i * 8) as i32;
-                let bolide_type = &param_types[i];
+            for (target_index, val) in arg_values.into_iter().enumerate() {
+                let offset = (target_index * 8) as i32;
+                let bolide_type = &param_types[target_index];
 
                 // 对 RC 类型进行 clone
                 let val_to_store = if Self::is_rc_type(bolide_type) {
@@ -12688,10 +14411,13 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             let alloc_call = self.builder.ins().call(alloc_ref, &[size_val]);
             let env_ptr = self.builder.inst_results(alloc_call)[0];
 
+            let params = self.func_params.get(func_name).cloned().unwrap_or_default();
+            let arg_values =
+                self.compile_prepared_args_for_params(func_name, &prepared_args, &params, 0)?;
+
             // 存储参数到 env
-            for (i, arg) in prepared_args.iter().enumerate() {
-                let val = self.compile_prepared_arg(arg)?;
-                let offset = (i * 8) as i32;
+            for (target_index, val) in arg_values.into_iter().enumerate() {
+                let offset = (target_index * 8) as i32;
                 self.builder
                     .ins()
                     .store(MemFlags::trusted(), val, env_ptr, offset);
@@ -12804,6 +14530,7 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                 BolideType::Dict(_, _) => 8,
                 BolideType::Dynamic => 9,
                 BolideType::Bytes => 10,
+                BolideType::FuncSig(_, _) => 11,
                 _ => 7, // Ptr / Custom / Tuple / Future
             })
             .collect();
@@ -12837,10 +14564,18 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             .get("@_tuple_set_typed")
             .ok_or("tuple_set_typed not found")?;
         for (i, expr) in exprs.iter().enumerate() {
-            let val = self.compile_expr(expr)?;
+            let mut val = self.compile_expr(expr)?;
             let ty = self.infer_expr_type(expr);
+            val = self.prepare_funcsig_for_container_storage(val, expr, &ty)?;
 
-            let val_to_store = if Self::is_rc_type(&ty) {
+            let val_to_store = if matches!(ty, BolideType::FuncSig(_, _)) {
+                if self.closure_temps.contains(&val) {
+                    self.remove_temp_closure(val);
+                } else {
+                    self.emit_closure_retain(val);
+                }
+                val
+            } else if Self::is_rc_type(&ty) {
                 let is_temp = self.temp_rc_values.iter().any(|(v, _)| *v == val);
                 if is_temp {
                     self.remove_temp_rc_value(val);
@@ -12921,6 +14656,7 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         let elem_is_float = elem_type == 1;
         for expr in items {
             let mut val = self.compile_expr(expr)?;
+            val = self.prepare_funcsig_for_container_storage(val, expr, &elem_ty)?;
             if elem_is_float && self.builder.func.dfg.value_type(val) == types::F64 {
                 val = self.builder.ins().bitcast(types::I64, MemFlags::new(), val);
             }
@@ -13008,7 +14744,8 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                     BolideType::Dict(_, _) => 8,
                     BolideType::Dynamic => 9,
                     BolideType::Bytes => 10,
-                    _ => 0, // fallback integer
+                    BolideType::FuncSig(_, _) => 11,
+                    _ => 7, // Ptr / Custom / Tuple / Future
                 }
             };
             (
@@ -13038,6 +14775,8 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         for (key, val) in entries {
             let mut k_val = self.compile_expr(key)?;
             let mut v_val = self.compile_expr(val)?;
+            k_val = self.prepare_funcsig_for_container_storage(k_val, key, &key_final_ty)?;
+            v_val = self.prepare_funcsig_for_container_storage(v_val, val, &val_final_ty)?;
 
             // 如果目标是 Dynamic，但源不是，进行转换
             if key_type_tag == 9 {
@@ -13309,6 +15048,7 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             BolideType::Dict(_, _) => 8,
             BolideType::Dynamic => 9,
             BolideType::Bytes => 10,
+            BolideType::FuncSig(_, _) => 11,
             _ => 7,
         }
     }
@@ -13380,10 +15120,13 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             let alloc_call = self.builder.ins().call(alloc_ref, &[size_val]);
             let env_ptr = self.builder.inst_results(alloc_call)[0];
 
-            for (i, arg) in prepared_args.iter().enumerate() {
-                let val = self.compile_prepared_arg(arg)?;
-                let offset = (i * 8) as i32;
-                let bolide_type = &param_types[i];
+            let params = self.func_params.get(func_name).cloned().unwrap_or_default();
+            let arg_values =
+                self.compile_prepared_args_for_params(func_name, &prepared_args, &params, 0)?;
+
+            for (target_index, val) in arg_values.into_iter().enumerate() {
+                let offset = (target_index * 8) as i32;
+                let bolide_type = &param_types[target_index];
                 let val_to_store = if Self::is_rc_type(bolide_type) {
                     if let Some(clone_func) = Self::get_clone_func_name(bolide_type) {
                         if let Some(clone_ref) = self.func_refs.get(clone_func) {
@@ -14123,7 +15866,8 @@ impl<'a, 'b> CompileContext<'a, 'b> {
 
         let prepared_args = self.prepare_call_args(func_name, args)?;
         let params = self.func_params.get(func_name).cloned().unwrap_or_default();
-        let arg_values = self.compile_prepared_args_for_params(&prepared_args, &params)?;
+        let arg_values =
+            self.compile_prepared_args_for_params(func_name, &prepared_args, &params, 0)?;
 
         // 调用函数
         let call = self.builder.ins().call(func_ref, &arg_values);
@@ -14242,8 +15986,12 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         };
         let empty_params = Vec::new();
         let user_params = user_params.as_ref().unwrap_or(&empty_params);
-        let user_arg_values =
-            self.compile_prepared_args_for_params(&prepared_args, &user_params)?;
+        let user_arg_values = self.compile_prepared_args_for_params(
+            &full_method_name,
+            &prepared_args,
+            &user_params,
+            1,
+        )?;
         let ret_ty_opt = self
             .func_return_types
             .get(&full_method_name)
@@ -14251,10 +15999,17 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             .flatten();
 
         if is_super_call {
-            let result = self.emit_class_method_call(&full_method_name, self_val, &user_arg_values)?;
+            let result =
+                self.emit_class_method_call(&full_method_name, self_val, &user_arg_values)?;
             if let Some(ref ret_ty) = ret_ty_opt {
                 if Self::is_rc_type(ret_ty) {
                     self.track_temp_rc_value(result, ret_ty);
+                }
+                if matches!(ret_ty, BolideType::FuncSig(_, _) | BolideType::Func)
+                    && !self.method_call_returns_raw_funcsig(&full_method_name, base, args)
+                    && !self.funcsig_return_source_uses_param(&full_method_name)
+                {
+                    self.closure_temps.push(result);
                 }
             }
             return Ok(result);
@@ -14275,10 +16030,17 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         dispatch_classes.sort_by_key(|(tag, _)| *tag);
 
         if dispatch_classes.is_empty() {
-            let result = self.emit_class_method_call(&full_method_name, self_val, &user_arg_values)?;
+            let result =
+                self.emit_class_method_call(&full_method_name, self_val, &user_arg_values)?;
             if let Some(ref ret_ty) = ret_ty_opt {
                 if Self::is_rc_type(ret_ty) {
                     self.track_temp_rc_value(result, ret_ty);
+                }
+                if matches!(ret_ty, BolideType::FuncSig(_, _) | BolideType::Func)
+                    && !self.method_call_returns_raw_funcsig(&full_method_name, base, args)
+                    && !self.funcsig_return_source_uses_param(&full_method_name)
+                {
+                    self.closure_temps.push(result);
                 }
             }
             return Ok(result);
@@ -14301,7 +16063,10 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         for (index, (tag, class_name)) in dispatch_classes.into_iter().enumerate() {
             self.builder.switch_to_block(compare_blocks[index]);
             let match_block = self.builder.create_block();
-            let next_block = compare_blocks.get(index + 1).copied().unwrap_or(fallback_block);
+            let next_block = compare_blocks
+                .get(index + 1)
+                .copied()
+                .unwrap_or(fallback_block);
             let tag_val = self.builder.ins().iconst(types::I64, tag);
             let cond = self
                 .builder
@@ -14323,7 +16088,8 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         }
 
         self.builder.switch_to_block(fallback_block);
-        let fallback = self.emit_class_method_call(&full_method_name, self_val, &user_arg_values)?;
+        let fallback =
+            self.emit_class_method_call(&full_method_name, self_val, &user_arg_values)?;
         self.builder.ins().jump(result_block, &[fallback]);
         self.builder.seal_block(fallback_block);
 
@@ -14333,6 +16099,12 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         if let Some(ref ret_ty) = ret_ty_opt {
             if Self::is_rc_type(ret_ty) {
                 self.track_temp_rc_value(result, ret_ty);
+            }
+            if matches!(ret_ty, BolideType::FuncSig(_, _) | BolideType::Func)
+                && !self.method_call_returns_raw_funcsig(&full_method_name, base, args)
+                && !self.funcsig_return_source_uses_param(&full_method_name)
+            {
+                self.closure_temps.push(result);
             }
         }
         Ok(result)
@@ -14540,6 +16312,7 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             BolideType::Dict(_, _) => 8,
             BolideType::Dynamic => 9,
             BolideType::Bytes => 10,
+            BolideType::FuncSig(_, _) => 11,
             _ => 7, // Ptr / Custom / Tuple / Future
         }
     }

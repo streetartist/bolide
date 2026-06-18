@@ -1,0 +1,52 @@
+// Escaped closures should survive pass-through and container fetches with state intact.
+
+fn make_counter(start: int) -> func(int) -> int {
+    let value: int = start;
+    return fn(delta: int) -> int {
+        value = value + delta;
+        return value;
+    };
+}
+
+fn id_counter(f: func(int) -> int) -> func(int) -> int {
+    return f;
+}
+
+fn relay_counter(f: func(int) -> int) -> func(int) -> int {
+    let g = id_counter(f);
+    return g;
+}
+
+class CounterBox {
+    f: func(int) -> int;
+
+    fn get() -> func(int) -> int {
+        return self.f;
+    }
+}
+
+fn check(name: str, got: int, want: int) {
+    if got == want {
+        print("ok " + name);
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want));
+    }
+}
+
+let a = make_counter(10);
+let b = relay_counter(a);
+check("relay escaped closure first", b(1), 11);
+check("relay escaped closure second", a(2), 13);
+
+let counters: list<func(int) -> int> = [make_counter(100), b];
+let c = counters[0];
+check("list escaped closure first", c(5), 105);
+check("list escaped closure second", counters[0](5), 110);
+check("list keeps relayed closure state", counters[1](7), 20);
+
+let box = CounterBox(make_counter(1000));
+let boxed = box.get();
+check("field escaped closure first", boxed(3), 1003);
+check("field escaped closure second", box.get()(4), 1007);
+
+print("closure escape chain done");

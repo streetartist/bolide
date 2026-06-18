@@ -1,0 +1,27 @@
+// ref parameters should still bind the right slot when named arguments are reordered.
+
+let order_log: int = 0;
+
+fn touch(d: int) -> int {
+    order_log = order_log * 10 + d;
+    return d;
+}
+
+fn write_pair(a: int, ref target: int, b: int) {
+    target = a * 100 + b;
+}
+
+fn check(name: str, got: int, want: int) {
+    if got == want {
+        print("ok " + name);
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want));
+    }
+}
+
+let value: int = 0;
+write_pair(b=touch(3), a=touch(1), target=value);
+check("ref named target", value, 103);
+check("ref named eval order", order_log, 31);
+
+print("ref named eval done");

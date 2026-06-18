@@ -129,6 +129,7 @@ pub extern "C" fn bolide_tuple_free(ptr: *mut BolideTuple) {
                     8 => ElementType::Dict,
                     9 => ElementType::Dynamic,
                     10 => ElementType::Bytes,
+                    11 => ElementType::Closure,
                     _ => {
                         // 基本类型（Int/Float/Bool）不需释放
                         continue;
@@ -394,6 +395,7 @@ fn retain_raw_static(elem_type: ElementType, raw: i64) {
             use crate::BolideBytes;
             crate::bolide_bytes_retain(ptr as *mut BolideBytes);
         }
+        Closure => crate::bolide_closure_retain(ptr),
         _ => {} // Int/Float/Bool/Ptr 不需要 retain
     }
 }
@@ -433,6 +435,7 @@ fn release_raw_static(elem_type: ElementType, raw: i64) {
             use crate::BolideBytes;
             crate::bolide_bytes_release(ptr as *mut BolideBytes);
         }
+        Closure => crate::bolide_closure_release(ptr),
         _ => {} // Int/Float/Bool/Ptr 不需要释放
     }
 }

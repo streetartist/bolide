@@ -5,7 +5,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use bolide_compiler::{AotCompiler, JitCompiler};
-use bolide_parser::parse_source;
+use bolide_parser::{parse_source_with_diagnostics, ParseDiagnostic, Program};
+use miette::{LabeledSpan, MietteDiagnostic, NamedSource, Report};
 
 mod pkg_cmd;
 
@@ -307,12 +308,377 @@ fn load_dependency_manifest(
     Ok(Some(manifest))
 }
 
+fn parse_file_source(file: &Path, source: &str) -> miette::Result<Program> {
+    parse_source_with_diagnostics(source).map_err(|e| parse_error_report(file, source, e))
+}
+
+fn parse_error_report(file: &Path, source: &str, error: ParseDiagnostic) -> Report {
+    let label = error
+        .span
+        .map(|(offset, len)| {
+            source_label(
+                source,
+                offset,
+                len,
+                error.label.as_deref().unwrap_or("here"),
+            )
+        })
+        .or_else(|| {
+            locate_message_token(source, &error.message)
+                .map(|(offset, len, label)| source_label(source, offset, len, &label))
+        });
+
+    diagnostic_report(
+        file,
+        source,
+        "bolide::parse",
+        format!("Parse error: {}", strip_phase_prefix(&error.message)),
+        label.into_iter().collect(),
+        error.help.as_deref(),
+    )
+}
+
+fn compile_error_report(file: &Path, source: &str, message: String) -> Report {
+    let clean = strip_phase_prefix(&message);
+    let labels = locate_compile_error(source, clean)
+        .map(|(offset, len, label)| vec![source_label(source, offset, len, &label)])
+        .unwrap_or_default();
+
+    diagnostic_report(
+        file,
+        source,
+        "bolide::compile",
+        format!("Compile error: {}", clean),
+        labels,
+        help_for_compile_error(clean).as_deref(),
+    )
+}
+
+fn diagnostic_report(
+    file: &Path,
+    source: &str,
+    code: &str,
+    message: String,
+    labels: Vec<LabeledSpan>,
+    help: Option<&str>,
+) -> Report {
+    let mut diagnostic = MietteDiagnostic::new(message).with_code(code);
+    if !labels.is_empty() {
+        diagnostic = diagnostic.with_labels(labels);
+    }
+    if let Some(help) = help {
+        diagnostic = diagnostic.with_help(help);
+    }
+    Report::from(diagnostic).with_source_code(NamedSource::new(
+        file.display().to_string(),
+        source.to_string(),
+    ))
+}
+
+fn source_label(source: &str, offset: usize, len: usize, label: &str) -> LabeledSpan {
+    let offset = offset.min(source.len());
+    let len = len.min(source.len().saturating_sub(offset));
+    LabeledSpan::new_primary_with_span(Some(label.to_string()), (offset, len))
+}
+
+fn strip_phase_prefix(message: &str) -> &str {
+    message
+        .strip_prefix("Parse error: ")
+        .or_else(|| message.strip_prefix("Compile error: "))
+        .unwrap_or(message)
+}
+
+fn locate_compile_error(source: &str, message: &str) -> Option<(usize, usize, String)> {
+    if let Some(path) = extract_single_quoted_after(message, "Failed to parse module ") {
+        return find_import_path(source, path)
+            .map(|(offset, len)| (offset, len, "imported module parsed here".to_string()));
+    }
+    if let Some(path) = extract_single_quoted_after(message, "Failed to load module ") {
+        return find_import_path(source, path)
+            .map(|(offset, len)| (offset, len, "imported module loaded here".to_string()));
+    }
+
+    for prefix in [
+        "Undefined variable or function: ",
+        "Undefined variable for ref: ",
+        "Undefined async function: ",
+        "Undefined function: ",
+        "Undefined variable: ",
+        "Undefined channel: ",
+    ] {
+        if let Some(name) = message.strip_prefix(prefix) {
+            let name = trim_error_name(name);
+            return find_identifier(source, name)
+                .map(|(offset, len)| (offset, len, format!("'{}' is not defined", name)));
+        }
+    }
+
+    if let Some(name) = message.strip_prefix("Unknown method: ") {
+        let name = trim_error_name(name);
+        return find_member_name(source, name)
+            .or_else(|| find_identifier(source, name))
+            .map(|(offset, len)| (offset, len, format!("unknown method '{}'", name)));
+    }
+
+    if message.starts_with("Method '") && message.contains("' not found in class ") {
+        if let Some(name) = extract_single_quoted(message) {
+            return find_member_name(source, name)
+                .or_else(|| find_identifier(source, name))
+                .map(|(offset, len)| (offset, len, format!("unknown method '{}'", name)));
+        }
+    }
+
+    if let Some(name) = message.strip_prefix("Unknown method return type: ") {
+        let method = trim_error_name(name).rsplit('.').next().unwrap_or(name);
+        return find_member_name(source, method)
+            .or_else(|| find_identifier(source, method))
+            .map(|(offset, len)| {
+                (
+                    offset,
+                    len,
+                    format!("return type for method '{}' is unknown", method),
+                )
+            });
+    }
+
+    if let Some((callee, arg)) = extract_missing_required_argument(message) {
+        if let Some((offset, len)) = find_call_site(source, callee) {
+            return Some((
+                offset,
+                len,
+                format!("call is missing required argument '{}'", arg),
+            ));
+        }
+        if let Some((offset, len)) = find_identifier(source, arg) {
+            return Some((offset, len, format!("required argument '{}'", arg)));
+        }
+    }
+
+    locate_message_token(source, message)
+}
+
+fn locate_message_token(source: &str, message: &str) -> Option<(usize, usize, String)> {
+    if let Some(name) = extract_single_quoted(message) {
+        if let Some(span) = find_identifier(source, name) {
+            return Some((span.0, span.1, format!("related name '{}'", name)));
+        }
+        if let Some(offset) = source.find(name) {
+            return Some((offset, name.len(), format!("related text '{}'", name)));
+        }
+    }
+    None
+}
+
+fn help_for_compile_error(message: &str) -> Option<String> {
+    if message.starts_with("Undefined variable or function: ")
+        || message.starts_with("Undefined variable: ")
+    {
+        Some("Define the name before using it, or check for a spelling/import mistake.".to_string())
+    } else if message.starts_with("Undefined function: ")
+        || message.starts_with("Undefined async function: ")
+    {
+        Some(
+            "Define the function with 'fn', import it, or check that the call target is correct."
+                .to_string(),
+        )
+    } else if message.starts_with("Undefined channel: ") {
+        Some(
+            "Create the channel before send/receive, and make sure the same name is in scope."
+                .to_string(),
+        )
+    } else if message.starts_with("Unknown method: ")
+        || (message.starts_with("Method '") && message.contains("' not found in class "))
+    {
+        Some("Check the receiver type and the method name. Methods must be declared inside the class.".to_string())
+    } else if message.contains(" missing required argument ") {
+        Some("Pass the missing argument positionally or with a named argument.".to_string())
+    } else if message.contains("Type mismatch") || message.contains("type mismatch") {
+        Some("Compare the declared type with the value being assigned or returned.".to_string())
+    } else if message.starts_with("Failed to parse module ") {
+        Some("The imported file has a syntax error. Run that file directly to see its exact source location.".to_string())
+    } else if message.starts_with("Failed to load module ") {
+        Some("Check the import path relative to the current file or package manifest.".to_string())
+    } else {
+        None
+    }
+}
+
+fn repl_parse_error(source: &str, error: ParseDiagnostic) -> String {
+    let clean = strip_phase_prefix(&error.message);
+    let loc = error
+        .span
+        .map(|(offset, len)| {
+            (
+                offset,
+                len,
+                error.label.unwrap_or_else(|| "here".to_string()),
+            )
+        })
+        .or_else(|| locate_message_token(source, clean));
+    inline_diagnostic("Parse error", source, clean, loc, error.help.as_deref())
+}
+
+fn repl_compile_error(source: &str, message: String) -> String {
+    let clean = strip_phase_prefix(&message);
+    let loc = locate_compile_error(source, clean);
+    let help = help_for_compile_error(clean);
+    inline_diagnostic("Compile error", source, clean, loc, help.as_deref())
+}
+
+fn inline_diagnostic(
+    phase: &str,
+    source: &str,
+    message: &str,
+    loc: Option<(usize, usize, String)>,
+    help: Option<&str>,
+) -> String {
+    let mut out = format!("{}: {}", phase, message);
+    if let Some((offset, len, label)) = loc {
+        let (line_no, col_no, line, col_chars) = source_line_at(source, offset);
+        out.push_str(&format!("\n  --> <repl>:{}:{}", line_no, col_no));
+        out.push_str(&format!("\n{:>4} | {}", line_no, line));
+        let start = offset.min(source.len());
+        let end = start.saturating_add(len).min(source.len());
+        let caret_count = source[start..end].chars().count().max(1);
+        out.push_str(&format!(
+            "\n     | {}{} {}",
+            " ".repeat(col_chars),
+            "^".repeat(caret_count),
+            label
+        ));
+    }
+    if let Some(help) = help {
+        out.push_str(&format!("\n  help: {}", help));
+    }
+    out
+}
+
+fn source_line_at(source: &str, offset: usize) -> (usize, usize, &str, usize) {
+    let offset = offset.min(source.len());
+    let line_start = source[..offset].rfind('\n').map(|idx| idx + 1).unwrap_or(0);
+    let line_end = source[offset..]
+        .find('\n')
+        .map(|idx| offset + idx)
+        .unwrap_or(source.len());
+    let line_no = source[..line_start].bytes().filter(|b| *b == b'\n').count() + 1;
+    let col_chars = source[line_start..offset].chars().count();
+    (
+        line_no,
+        col_chars + 1,
+        &source[line_start..line_end],
+        col_chars,
+    )
+}
+
+fn extract_single_quoted(message: &str) -> Option<&str> {
+    let start = message.find('\'')? + 1;
+    let end = message[start..].find('\'')? + start;
+    Some(&message[start..end])
+}
+
+fn extract_single_quoted_after<'a>(message: &'a str, prefix: &str) -> Option<&'a str> {
+    message.strip_prefix(prefix).and_then(extract_single_quoted)
+}
+
+fn extract_missing_required_argument(message: &str) -> Option<(&str, &str)> {
+    let marker = " missing required argument ";
+    let idx = message.find(marker)?;
+    let callee = trim_error_name(&message[..idx]);
+    let arg = extract_single_quoted(&message[idx + marker.len()..])?;
+    Some((callee, arg))
+}
+
+fn trim_error_name(name: &str) -> &str {
+    name.trim()
+        .trim_matches('`')
+        .trim_matches('"')
+        .trim_matches('\'')
+        .trim_end_matches('.')
+}
+
+fn find_import_path(source: &str, path: &str) -> Option<(usize, usize)> {
+    source
+        .find(path)
+        .map(|offset| (offset, path.len()))
+        .or_else(|| find_identifier(source, path))
+}
+
+fn find_call_site(source: &str, callee: &str) -> Option<(usize, usize)> {
+    let callee = trim_error_name(callee);
+    if callee.is_empty() {
+        return None;
+    }
+    let needle = format!("{}(", callee);
+    for (offset, _) in source.match_indices(&needle) {
+        if !looks_like_function_definition(source, offset) {
+            return Some((offset, callee.len()));
+        }
+    }
+    let short = callee.rsplit('.').next().unwrap_or(callee);
+    find_member_name(source, short).or_else(|| find_identifier(source, short))
+}
+
+fn looks_like_function_definition(source: &str, name_offset: usize) -> bool {
+    let line_start = source[..name_offset]
+        .rfind('\n')
+        .map(|idx| idx + 1)
+        .unwrap_or(0);
+    source[line_start..name_offset]
+        .trim_start()
+        .starts_with("fn ")
+}
+
+fn find_member_name(source: &str, name: &str) -> Option<(usize, usize)> {
+    let needle = format!(".{}", name);
+    source.match_indices(&needle).find_map(|(offset, _)| {
+        let name_offset = offset + 1;
+        let end = name_offset + name.len();
+        if is_identifier_boundary(source, name_offset, end) {
+            Some((name_offset, name.len()))
+        } else {
+            None
+        }
+    })
+}
+
+fn find_identifier(source: &str, ident: &str) -> Option<(usize, usize)> {
+    if ident.is_empty()
+        || !ident
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+    {
+        return None;
+    }
+    source.match_indices(ident).find_map(|(offset, _)| {
+        let end = offset + ident.len();
+        if is_identifier_boundary(source, offset, end) {
+            Some((offset, ident.len()))
+        } else {
+            None
+        }
+    })
+}
+
+fn is_identifier_boundary(source: &str, start: usize, end: usize) -> bool {
+    let before = source[..start]
+        .chars()
+        .next_back()
+        .map(|c| c.is_ascii_alphanumeric() || c == '_')
+        .unwrap_or(false);
+    let after = source[end..]
+        .chars()
+        .next()
+        .map(|c| c.is_ascii_alphanumeric() || c == '_')
+        .unwrap_or(false);
+    !before && !after
+}
+
 fn run_file(file: &PathBuf) -> miette::Result<()> {
     println!("Running: {}", file.display());
     let source =
         fs::read_to_string(file).map_err(|e| miette::miette!("Failed to read file: {}", e))?;
 
-    let ast = parse_source(&source).map_err(|e| miette::miette!("Parse error: {}", e))?;
+    let ast = parse_file_source(file, &source)?;
 
     let mut compiler = JitCompiler::new();
     // import 相对路径基于源文件所在目录解析
@@ -325,7 +691,7 @@ fn run_file(file: &PathBuf) -> miette::Result<()> {
     }
     let main_ptr = compiler
         .compile(&ast)
-        .map_err(|e| miette::miette!("Compile error: {}", e))?;
+        .map_err(|e| compile_error_report(file, &source, e))?;
 
     let main_fn: fn() -> i64 = unsafe { std::mem::transmute(main_ptr) };
     let result = main_fn();
@@ -357,7 +723,7 @@ fn compile_file(file: &PathBuf, output: &PathBuf, header: bool) -> miette::Resul
         fs::read_to_string(file).map_err(|e| miette::miette!("Failed to read file: {}", e))?;
 
     // 解析
-    let ast = parse_source(&source).map_err(|e| miette::miette!("Parse error: {}", e))?;
+    let ast = parse_file_source(file, &source)?;
 
     // AOT 编译
     let mut compiler =
@@ -373,7 +739,7 @@ fn compile_file(file: &PathBuf, output: &PathBuf, header: bool) -> miette::Resul
 
     let result = compiler
         .compile(&ast)
-        .map_err(|e| miette::miette!("Compile error: {}", e))?;
+        .map_err(|e| compile_error_report(file, &source, e))?;
 
     // 打印外部库信息
     if !result.extern_libs.is_empty() {
@@ -412,7 +778,7 @@ fn compile_lib(file: &PathBuf, output: &PathBuf, header: bool) -> miette::Result
 
     let source =
         fs::read_to_string(file).map_err(|e| miette::miette!("Failed to read file: {}", e))?;
-    let ast = parse_source(&source).map_err(|e| miette::miette!("Parse error: {}", e))?;
+    let ast = parse_file_source(file, &source)?;
 
     let mut compiler =
         AotCompiler::new().map_err(|e| miette::miette!("Compiler init error: {}", e))?;
@@ -426,7 +792,7 @@ fn compile_lib(file: &PathBuf, output: &PathBuf, header: bool) -> miette::Result
 
     let result = compiler
         .compile(&ast)
-        .map_err(|e| miette::miette!("Compile error: {}", e))?;
+        .map_err(|e| compile_error_report(file, &source, e))?;
 
     if header {
         write_header_if_present(&result, output);
@@ -805,49 +1171,52 @@ fn eval_input(state: &mut ReplState, input: &str) -> Result<String, String> {
         InputType::FuncDef => {
             // 验证函数定义是否有效
             let code = state.build_program(None);
-            let ast = parse_source(&code).map_err(|e| {
+            let ast = parse_source_with_diagnostics(&code).map_err(|e| {
                 state.functions.pop();
-                e.to_string()
+                repl_parse_error(&code, e)
             })?;
             let mut compiler = JitCompiler::new();
             compiler.compile(&ast).map_err(|e| {
                 state.functions.pop();
-                e.to_string()
+                repl_compile_error(&code, e)
             })?;
             Ok("Function defined.".to_string())
         }
         InputType::ClassDef => {
             let code = state.build_program(None);
-            let ast = parse_source(&code).map_err(|e| {
+            let ast = parse_source_with_diagnostics(&code).map_err(|e| {
                 state.functions.pop();
-                e.to_string()
+                repl_parse_error(&code, e)
             })?;
             let mut compiler = JitCompiler::new();
             compiler.compile(&ast).map_err(|e| {
                 state.functions.pop();
-                e.to_string()
+                repl_compile_error(&code, e)
             })?;
             Ok("Class defined.".to_string())
         }
         InputType::VarDecl => {
             // 验证变量声明是否有效
             let code = state.build_program(None);
-            let ast = parse_source(&code).map_err(|e| {
+            let ast = parse_source_with_diagnostics(&code).map_err(|e| {
                 state.globals.pop();
-                e.to_string()
+                repl_parse_error(&code, e)
             })?;
             let mut compiler = JitCompiler::new();
             compiler.compile(&ast).map_err(|e| {
                 state.globals.pop();
-                e.to_string()
+                repl_compile_error(&code, e)
             })?;
             Ok("Variable declared.".to_string())
         }
         InputType::Expr => {
             let code = state.build_program(Some(input));
-            let ast = parse_source(&code).map_err(|e| e.to_string())?;
+            let ast =
+                parse_source_with_diagnostics(&code).map_err(|e| repl_parse_error(&code, e))?;
             let mut compiler = JitCompiler::new();
-            let main_ptr = compiler.compile(&ast).map_err(|e| e.to_string())?;
+            let main_ptr = compiler
+                .compile(&ast)
+                .map_err(|e| repl_compile_error(&code, e))?;
             let main_fn: fn() -> i64 = unsafe { std::mem::transmute(main_ptr) };
             let result = main_fn();
             // 只有非零结果才显示（print等语句返回0）
@@ -857,5 +1226,52 @@ fn eval_input(state: &mut ReplState, input: &str) -> Result<String, String> {
                 Ok(String::new())
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod diagnostics_tests {
+    use super::*;
+
+    #[test]
+    fn missing_required_argument_points_to_call_site() {
+        let source = r#"fn add(a: int, b: int) -> int {
+    return a + b;
+}
+
+let x = add(1);
+"#;
+        let (offset, len, label) =
+            locate_compile_error(source, "add missing required argument 'b'").unwrap();
+        assert_eq!(&source[offset..offset + len], "add");
+        assert!(label.contains("missing required argument 'b'"));
+        assert!(source[..offset].contains("let x = "));
+    }
+
+    #[test]
+    fn method_not_found_points_to_member_name() {
+        let source = r#"class Box {
+    value: int;
+}
+
+let b = Box(1);
+b.nope();
+"#;
+        let (offset, len, label) = locate_compile_error(
+            source,
+            "Method 'nope' not found in class 'Box' or its parents",
+        )
+        .unwrap();
+        assert_eq!(&source[offset..offset + len], "nope");
+        assert_eq!(label, "unknown method 'nope'");
+    }
+
+    #[test]
+    fn undefined_name_points_to_identifier() {
+        let source = "let x = missing_name + 1;\n";
+        let (offset, len, label) =
+            locate_compile_error(source, "Undefined variable or function: missing_name").unwrap();
+        assert_eq!(&source[offset..offset + len], "missing_name");
+        assert_eq!(label, "'missing_name' is not defined");
     }
 }
