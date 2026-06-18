@@ -1,6 +1,6 @@
 # Bolide Semantic Test Findings
 
-Date: 2026-06-17
+Date: 2026-06-18
 
 This note records the semantic regression tests added under `tests/test_semantic_*.bl`
 and the semantic issues found while running them.
@@ -47,13 +47,9 @@ for semantic mismatches.
   the comprehension finished iterating.
 - `dynamic + dynamic`, followed by `int(...)`, returned a pointer-like large
   number instead of the expected numeric result.
-
-### Remaining Larger Design Issue
-
-- Base-class methods appear to call base implementations directly instead of
-  dynamically dispatching through overridden `self` methods. Fixing this needs
-  object layout/runtime support for class identity or method tables; the current
-  object header only stores reference counts and data size.
+- Base-class methods now dispatch through overridden `self` methods using a
+  runtime class tag stored in the object header, while `super` keeps static
+  parent dispatch.
 
 ## Passing Coverage
 
@@ -68,3 +64,4 @@ for semantic mismatches.
 - Basic slice-copy behavior for list slices.
 - List/dict assignment-copy behavior.
 - Numeric conversion basics for `int`, `bigint`, and `decimal`.
+- Dynamic base-method dispatch through inherited overrides and `super`.

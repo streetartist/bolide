@@ -19,6 +19,7 @@ pub struct ObjectHeader {
     pub weak_count: AtomicU32,
     pub data_size: u32, // 数据部分大小
     _padding: u32,
+    pub class_tag: i64,
 }
 
 const HEADER_SIZE: usize = std::mem::size_of::<ObjectHeader>();
@@ -59,6 +60,7 @@ pub extern "C" fn object_alloc(size: usize) -> *mut u8 {
         (*header).weak_count = AtomicU32::new(1); // 隐式 +1
         (*header).data_size = size as u32;
         (*header)._padding = 0;
+        (*header).class_tag = 0;
 
         // 返回数据部分的指针
         ptr.add(HEADER_SIZE)
@@ -190,6 +192,30 @@ pub extern "C" fn object_weak_clone(data_ptr: *mut u8) -> *mut u8 {
     data_ptr
 }
 
+/// 设置对象的类标签
+#[no_mangle]
+pub extern "C" fn object_set_class_tag(data_ptr: *mut u8, class_tag: i64) {
+    if data_ptr.is_null() {
+        return;
+    }
+    unsafe {
+        let header = header_of(data_ptr);
+        (*header).class_tag = class_tag;
+    }
+}
+
+/// 读取对象的类标签
+#[no_mangle]
+pub extern "C" fn object_class_tag(data_ptr: *mut u8) -> i64 {
+    if data_ptr.is_null() {
+        return 0;
+    }
+    unsafe {
+        let header = header_of(data_ptr);
+        (*header).class_tag
+    }
+}
+
 /// 克隆对象（增加引用计数）
 #[no_mangle]
 pub extern "C" fn object_clone(data_ptr: *mut u8) -> *mut u8 {
@@ -205,7 +231,7 @@ mod tests {
 
     #[test]
     fn test_object_header_size() {
-        assert_eq!(std::mem::size_of::<ObjectHeader>(), 16);
+        assert_eq!(std::mem::size_of::<ObjectHeader>(), 24);
         assert_eq!(HEADER_SIZE % 8, 0);
     }
 }

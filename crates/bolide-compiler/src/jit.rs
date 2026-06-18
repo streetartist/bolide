@@ -540,6 +540,14 @@ impl JitCompiler {
             bolide_runtime::object_retain as *const u8,
         );
         builder.symbol(
+            "@_object_set_class_tag",
+            bolide_runtime::object_set_class_tag as *const u8,
+        );
+        builder.symbol(
+            "@_object_class_tag",
+            bolide_runtime::object_class_tag as *const u8,
+        );
+        builder.symbol(
             "@_object_release",
             bolide_runtime::object_release as *const u8,
         );
@@ -5012,6 +5020,26 @@ impl JitCompiler {
             .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_object_release".to_string(), id);
 
+        // object_set_class_tag(ptr, i64)
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(ptr));
+        sig.params.push(AbiParam::new(types::I64));
+        let id = self
+            .module
+            .declare_function("@_object_set_class_tag", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
+        self.functions.insert("@_object_set_class_tag".to_string(), id);
+
+        // object_class_tag(ptr) -> i64
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(ptr));
+        sig.returns.push(AbiParam::new(types::I64));
+        let id = self
+            .module
+            .declare_function("@_object_class_tag", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
+        self.functions.insert("@_object_class_tag".to_string(), id);
+
         // object_retain(ptr)
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
@@ -6126,6 +6154,18 @@ impl JitCompiler {
         let size_val = builder.ins().iconst(types::I64, class_info.size as i64);
         let call = builder.ins().call(object_alloc_ref, &[size_val]);
         let obj_ptr = builder.inst_results(call)[0];
+
+        let class_tag = *self
+            .class_tags
+            .get(class_name)
+            .ok_or_else(|| format!("Class tag not found: {}", class_name))?;
+        let set_tag_id = *self
+            .functions
+            .get("@_object_set_class_tag")
+            .ok_or("object_set_class_tag not found")?;
+        let set_tag_ref = self.module.declare_func_in_func(set_tag_id, builder.func);
+        let tag_val = builder.ins().iconst(types::I64, class_tag);
+        builder.ins().call(set_tag_ref, &[obj_ptr, tag_val]);
 
         // 使用传入的参数初始化字段，缺参时填零值
         for (i, field) in class_info.fields.iter().enumerate() {
@@ -14039,6 +14079,29 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         }
     }
 
+    fn emit_class_method_call(
+        &mut self,
+        full_method_name: &str,
+        self_val: Value,
+        arg_values: &[Value],
+    ) -> Result<Value, String> {
+        let func_ref = *self
+            .func_refs
+            .get(full_method_name)
+            .ok_or_else(|| format!("Method '{}' not found", full_method_name))?;
+        let mut call_args = Vec::with_capacity(arg_values.len() + 1);
+        call_args.push(self_val);
+        call_args.extend_from_slice(arg_values);
+        let call = self.builder.ins().call(func_ref, &call_args);
+        let results = self.builder.inst_results(call);
+        let result = if results.is_empty() {
+            self.builder.ins().iconst(types::I64, 0)
+        } else {
+            results[0]
+        };
+        Ok(result)
+    }
+
     /// 编译方法调用 (obj.method(args))
     fn compile_method_call(
         &mut self,
@@ -14100,25 +14163,17 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             return self.compile_dict_method_call(dict_ptr, method_name, args);
         }
 
+        let is_super_call = matches!(base, Expr::Ident(name) if name == "super");
         let class_name = match class_name {
             BolideType::Custom(name) => name,
             _ => return Err(format!("Method call on non-class type: {:?}", class_name)),
         };
 
         // 查找方法（支持继承链）
+        let self_val = self.compile_expr(base)?;
         let full_method_name = self.find_method(&class_name, method_name)?;
 
-        // 获取方法引用
-        let func_ref = *self
-            .func_refs
-            .get(&full_method_name)
-            .ok_or_else(|| format!("Method '{}' not found", full_method_name))?;
-
-        // 编译 self 参数（对象指针）
-        let self_val = self.compile_expr(base)?;
-
         // 编译其他参数
-        let mut arg_values = vec![self_val];
         let user_params = self
             .func_params
             .get(&full_method_name)
@@ -14132,17 +14187,98 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         let user_params = user_params.as_ref().unwrap_or(&empty_params);
         let user_arg_values =
             self.compile_prepared_args_for_params(&prepared_args, &user_params)?;
-        arg_values.extend(user_arg_values);
+        let ret_ty_opt = self
+            .func_return_types
+            .get(&full_method_name)
+            .cloned()
+            .flatten();
 
-        // 调用方法
-        let call = self.builder.ins().call(func_ref, &arg_values);
-        let results = self.builder.inst_results(call);
-
-        if results.is_empty() {
-            Ok(self.builder.ins().iconst(types::I64, 0))
-        } else {
-            Ok(results[0])
+        if is_super_call {
+            let result = self.emit_class_method_call(&full_method_name, self_val, &user_arg_values)?;
+            if let Some(ref ret_ty) = ret_ty_opt {
+                if Self::is_rc_type(ret_ty) {
+                    self.track_temp_rc_value(result, ret_ty);
+                }
+            }
+            return Ok(result);
         }
+
+        let class_tag_ref = *self
+            .func_refs
+            .get("@_object_class_tag")
+            .ok_or("object_class_tag not found")?;
+        let class_tag_call = self.builder.ins().call(class_tag_ref, &[self_val]);
+        let class_tag_val = self.builder.inst_results(class_tag_call)[0];
+
+        let mut dispatch_classes: Vec<(i64, String)> = self
+            .class_tags
+            .iter()
+            .map(|(name, tag)| (*tag, name.clone()))
+            .collect();
+        dispatch_classes.sort_by_key(|(tag, _)| *tag);
+
+        if dispatch_classes.is_empty() {
+            let result = self.emit_class_method_call(&full_method_name, self_val, &user_arg_values)?;
+            if let Some(ref ret_ty) = ret_ty_opt {
+                if Self::is_rc_type(ret_ty) {
+                    self.track_temp_rc_value(result, ret_ty);
+                }
+            }
+            return Ok(result);
+        }
+
+        let result_type = ret_ty_opt
+            .as_ref()
+            .map(|ty| self.bolide_type_to_cranelift(ty))
+            .unwrap_or(types::I64);
+        let result_block = self.builder.create_block();
+        self.builder.append_block_param(result_block, result_type);
+
+        let compare_blocks: Vec<Block> = (0..dispatch_classes.len())
+            .map(|_| self.builder.create_block())
+            .collect();
+        let fallback_block = self.builder.create_block();
+
+        self.builder.ins().jump(compare_blocks[0], &[]);
+
+        for (index, (tag, class_name)) in dispatch_classes.into_iter().enumerate() {
+            self.builder.switch_to_block(compare_blocks[index]);
+            let match_block = self.builder.create_block();
+            let next_block = compare_blocks.get(index + 1).copied().unwrap_or(fallback_block);
+            let tag_val = self.builder.ins().iconst(types::I64, tag);
+            let cond = self
+                .builder
+                .ins()
+                .icmp(IntCC::Equal, class_tag_val, tag_val);
+            self.builder
+                .ins()
+                .brif(cond, match_block, &[], next_block, &[]);
+
+            self.builder.seal_block(compare_blocks[index]);
+
+            self.builder.switch_to_block(match_block);
+            let dispatch_name = self
+                .find_method(&class_name, method_name)
+                .unwrap_or_else(|_| full_method_name.clone());
+            let result = self.emit_class_method_call(&dispatch_name, self_val, &user_arg_values)?;
+            self.builder.ins().jump(result_block, &[result]);
+            self.builder.seal_block(match_block);
+        }
+
+        self.builder.switch_to_block(fallback_block);
+        let fallback = self.emit_class_method_call(&full_method_name, self_val, &user_arg_values)?;
+        self.builder.ins().jump(result_block, &[fallback]);
+        self.builder.seal_block(fallback_block);
+
+        self.builder.switch_to_block(result_block);
+        self.builder.seal_block(result_block);
+        let result = self.builder.block_params(result_block)[0];
+        if let Some(ref ret_ty) = ret_ty_opt {
+            if Self::is_rc_type(ret_ty) {
+                self.track_temp_rc_value(result, ret_ty);
+            }
+        }
+        Ok(result)
     }
 
     /// 编译字符串方法调用

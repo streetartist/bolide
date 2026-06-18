@@ -2670,6 +2670,13 @@ impl AotCompiler {
             ("@_object_alloc", "object_alloc", vec![i64t], Some(p)),
             ("@_object_release", "object_release", vec![p], None),
             ("@_object_retain", "object_retain", vec![p], None),
+            (
+                "@_object_set_class_tag",
+                "object_set_class_tag",
+                vec![p, i64t],
+                None,
+            ),
+            ("@_object_class_tag", "object_class_tag", vec![p], Some(i64t)),
             ("@_object_clone", "object_clone", vec![p], Some(p)),
             ("@_object_weak_retain", "object_weak_retain", vec![p], None),
             (
@@ -3626,6 +3633,18 @@ impl AotCompiler {
         let size = builder.ins().iconst(types::I64, class_info.size as i64);
         let call = builder.ins().call(alloc_ref, &[size]);
         let obj_ptr = builder.inst_results(call)[0];
+
+        let class_tag = *self
+            .class_tags
+            .get(class_name)
+            .ok_or_else(|| format!("Class tag not found: {}", class_name))?;
+        let set_tag = *self
+            .functions
+            .get("@_object_set_class_tag")
+            .ok_or("object_set_class_tag not found")?;
+        let set_tag_ref = self.module.declare_func_in_func(set_tag, builder.func);
+        let tag_val = builder.ins().iconst(types::I64, class_tag);
+        builder.ins().call(set_tag_ref, &[obj_ptr, tag_val]);
 
         // 设置字段值
         for (i, field) in class_info.fields.iter().enumerate() {
@@ -5985,6 +6004,28 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         Ok(obj_ptr)
     }
 
+    fn emit_class_method_call(
+        &mut self,
+        full_method_name: &str,
+        self_val: Value,
+        arg_values: &[Value],
+    ) -> Result<Value, String> {
+        let func_ref = *self
+            .func_refs
+            .get(full_method_name)
+            .ok_or_else(|| format!("Method '{}' not found", full_method_name))?;
+        let mut arg_vals = Vec::with_capacity(arg_values.len() + 1);
+        arg_vals.push(self_val);
+        arg_vals.extend_from_slice(arg_values);
+        let call = self.builder.ins().call(func_ref, &arg_vals);
+        let results = self.builder.inst_results(call);
+        Ok(if results.is_empty() {
+            self.builder.ins().iconst(types::I64, 0)
+        } else {
+            results[0]
+        })
+    }
+
     /// 编译方法调用
     fn compile_method_call(
         &mut self,
@@ -6016,46 +6057,114 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
 
         // 处理类方法（沿继承链查找）
         if let Some(BolideType::Custom(class_name)) = base_type {
+            let is_super_call = matches!(base, Expr::Ident(name) if name == "super");
             let base_val = self.compile_expr(base)?;
             let method_full_name = self
                 .find_class_method(&class_name, method_name)
                 .unwrap_or_else(|| format!("{}_{}", class_name, method_name));
+            let prepared_args = if let Some(params) = self.func_params.get(&method_full_name) {
+                let user_params = params.get(1..).unwrap_or(&[]);
+                self.normalize_args_for_params(&method_full_name, user_params, args)?
+            } else {
+                self.prepare_plain_args(&method_full_name, args)?
+            };
+            let user_params = self
+                .func_params
+                .get(&method_full_name)
+                .map(|params| params.get(1..).unwrap_or(&[]).to_vec())
+                .unwrap_or_default();
+            let user_arg_vals = self.compile_prepared_args_for_params(&prepared_args, &user_params)?;
+            let ret_ty_opt = self
+                .func_return_types
+                .get(&method_full_name)
+                .cloned()
+                .flatten();
 
-            if let Some(&func_ref) = self.func_refs.get(&method_full_name) {
-                // self 与方法参数均为借用：不转移所有权，临时值在语句末释放
-                let mut arg_vals = vec![base_val]; // self 作为第一个参数
-                let prepared_args = if let Some(params) = self.func_params.get(&method_full_name) {
-                    let user_params = params.get(1..).unwrap_or(&[]);
-                    self.normalize_args_for_params(&method_full_name, user_params, args)?
-                } else {
-                    self.prepare_plain_args(&method_full_name, args)?
-                };
-                let user_params = self
-                    .func_params
-                    .get(&method_full_name)
-                    .map(|params| params.get(1..).unwrap_or(&[]).to_vec())
-                    .unwrap_or_default();
-                let user_arg_vals =
-                    self.compile_prepared_args_for_params(&prepared_args, &user_params)?;
-                arg_vals.extend(user_arg_vals);
-                let call = self.builder.ins().call(func_ref, &arg_vals);
-                let results = self.builder.inst_results(call);
-                if results.is_empty() {
-                    return Ok(self.builder.ins().iconst(types::I64, 0));
-                }
-                let result = results[0];
-                let ret_ty_opt = self
-                    .func_return_types
-                    .get(&method_full_name)
-                    .cloned()
-                    .flatten();
-                if let Some(ret_ty) = ret_ty_opt {
-                    if Self::is_rc_type(&ret_ty) {
-                        self.track_temp_rc_value(result, &ret_ty);
+            if is_super_call {
+                let result = self.emit_class_method_call(&method_full_name, base_val, &user_arg_vals)?;
+                if let Some(ref ret_ty) = ret_ty_opt {
+                    if Self::is_rc_type(ret_ty) {
+                        self.track_temp_rc_value(result, ret_ty);
                     }
                 }
                 return Ok(result);
             }
+
+            let class_tag_ref = *self
+                .func_refs
+                .get("@_object_class_tag")
+                .ok_or("object_class_tag not found")?;
+            let class_tag_call = self.builder.ins().call(class_tag_ref, &[base_val]);
+            let class_tag_val = self.builder.inst_results(class_tag_call)[0];
+
+            let mut dispatch_classes: Vec<(i64, String)> = self
+                .class_tags
+                .iter()
+                .map(|(name, tag)| (*tag, name.clone()))
+                .collect();
+            dispatch_classes.sort_by_key(|(tag, _)| *tag);
+
+            if dispatch_classes.is_empty() {
+                let result = self.emit_class_method_call(&method_full_name, base_val, &user_arg_vals)?;
+                if let Some(ref ret_ty) = ret_ty_opt {
+                    if Self::is_rc_type(ret_ty) {
+                        self.track_temp_rc_value(result, ret_ty);
+                    }
+                }
+                return Ok(result);
+            }
+
+            let result_type = ret_ty_opt
+                .as_ref()
+                .map(|ty| self.bolide_type_to_cranelift(ty))
+                .unwrap_or(types::I64);
+            let result_block = self.builder.create_block();
+            self.builder.append_block_param(result_block, result_type);
+            let compare_blocks: Vec<Block> = (0..dispatch_classes.len())
+                .map(|_| self.builder.create_block())
+                .collect();
+            let fallback_block = self.builder.create_block();
+
+            self.builder.ins().jump(compare_blocks[0], &[]);
+
+            for (index, (tag, class_name)) in dispatch_classes.into_iter().enumerate() {
+                self.builder.switch_to_block(compare_blocks[index]);
+                let match_block = self.builder.create_block();
+                let next_block = compare_blocks.get(index + 1).copied().unwrap_or(fallback_block);
+                let tag_val = self.builder.ins().iconst(types::I64, tag);
+                let cond = self
+                    .builder
+                    .ins()
+                    .icmp(IntCC::Equal, class_tag_val, tag_val);
+                self.builder
+                    .ins()
+                    .brif(cond, match_block, &[], next_block, &[]);
+
+                self.builder.seal_block(compare_blocks[index]);
+
+                self.builder.switch_to_block(match_block);
+                let dispatch_name = self
+                    .find_class_method(&class_name, method_name)
+                    .unwrap_or_else(|| method_full_name.clone());
+                let result = self.emit_class_method_call(&dispatch_name, base_val, &user_arg_vals)?;
+                self.builder.ins().jump(result_block, &[result]);
+                self.builder.seal_block(match_block);
+            }
+
+            self.builder.switch_to_block(fallback_block);
+            let fallback = self.emit_class_method_call(&method_full_name, base_val, &user_arg_vals)?;
+            self.builder.ins().jump(result_block, &[fallback]);
+            self.builder.seal_block(fallback_block);
+
+            self.builder.switch_to_block(result_block);
+            self.builder.seal_block(result_block);
+            let result = self.builder.block_params(result_block)[0];
+            if let Some(ref ret_ty) = ret_ty_opt {
+                if Self::is_rc_type(ret_ty) {
+                    self.track_temp_rc_value(result, ret_ty);
+                }
+            }
+            return Ok(result);
         }
 
         Err(format!("Unknown method: {}", method_name))
