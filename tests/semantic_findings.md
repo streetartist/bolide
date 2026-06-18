@@ -27,6 +27,9 @@ for semantic mismatches.
 - `test_semantic_container_alias_slice.bl`: list/dict assignment-copy and slice behavior.
 - `test_semantic_match_nested.bl`: nested ADT match and pattern binding scope.
 - `test_semantic_try_finally.bl`: `try` / `catch` / `finally` execution order.
+- `test_semantic_branch_cleanup.bl`: `if` / `else` arm-local scope cleanup.
+- `test_semantic_catch_shadow.bl`: `catch` binding shadowing and outer-name preservation.
+- `test_semantic_finally_controlflow.bl`: `finally` on `break` / `continue` / `return`.
 - `test_semantic_comprehension_capture.bl`: list comprehensions with captures/shadowing.
 - `test_semantic_numeric_mixed.bl`: numeric conversions and dynamic arithmetic.
 
@@ -42,6 +45,7 @@ for semantic mismatches.
   same name.
 - List-comprehension iteration variables overwrote existing outer variables.
 - `match` pattern bindings overwrote outer variables with the same name.
+- `catch` bindings and branch-local names are now covered with targeted regression tests.
 - Closures did not preserve mutable captured local state across calls.
 - A temporary list used as a list-comprehension iterator could be released before
   the comprehension finished iterating.
@@ -61,6 +65,8 @@ for semantic mismatches.
 - Named arguments, `*list` spread arguments, and `**dict` kwargs.
 - Nested ADT recursion for non-shadowing cases.
 - `try` / `catch` / `finally` execution order.
+- `if` / `else` arm-local cleanup and `catch` shadowing.
+- `finally` execution on `break`, `continue`, and `return`.
 - Basic slice-copy behavior for list slices.
 - List/dict assignment-copy behavior.
 - Numeric conversion basics for `int`, `bigint`, and `decimal`.

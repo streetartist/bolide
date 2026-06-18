@@ -76,6 +76,21 @@ struct AdtInfo {
 }
 
 #[derive(Clone)]
+struct BindingSnapshot {
+    name: String,
+    variable: Option<Variable>,
+    var_type: Option<BolideType>,
+    scope_depth: Option<usize>,
+    borrowed: Option<(String, usize)>,
+    weak: bool,
+    moved: bool,
+    closure_var: bool,
+    closure_param_var: bool,
+    spawn_func: Option<String>,
+    lifetime_source: Option<String>,
+}
+
+#[derive(Clone)]
 enum PreparedArg {
     Expr(Expr),
     PackedArgs {
@@ -4203,10 +4218,14 @@ struct AotCompileContext<'a, 'b> {
     rc_variables: Vec<(Variable, BolideType)>,
     /// Temporary RC values from expressions (to be released at statement end)
     temp_rc_values: Vec<(Value, BolideType)>,
-    /// 循环块栈：(continue 目标块, break 目标块, 循环作用域基索引)
-    loop_stack: Vec<(Block, Block, usize)>,
+    /// 循环块栈：(continue 目标块, break 目标块, 循环作用域基索引, 入栈时 finally 深度)
+    loop_stack: Vec<(Block, Block, usize, usize)>,
     /// catch 落点栈：每个 try 块的 catch_block，用于编译 throw（同函数内直接跳转）
     catch_stack: Vec<Block>,
+    /// 当前激活的 finally 语句栈（外层到内层）。
+    finally_stack: Vec<Vec<Statement>>,
+    /// 控制流退出时可见的 finally 深度上限；用于避免在 finally 中重复执行自身。
+    finally_visibility_limit: Option<usize>,
     /// weak/unowned 引用变量集合（访问时需要检查对象是否存活）
     weak_variables: HashSet<String>,
     /// spawn/async 句柄变量 -> 目标函数名（join 时据此推断返回类型后缀）
@@ -4251,6 +4270,8 @@ struct AotCompileContext<'a, 'b> {
     closure_vars: HashSet<String>,
     /// 函数类型参数名（按借用处理，作用域结束不释放）
     closure_param_vars: HashSet<String>,
+    /// 每个词法作用域内被遮蔽的名称，用于离开作用域时恢复外层绑定。
+    scope_bindings: Vec<Vec<BindingSnapshot>>,
 }
 
 impl<'a, 'b> AotCompileContext<'a, 'b> {
@@ -4293,6 +4314,8 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             temp_rc_values: Vec::new(),
             loop_stack: Vec::new(),
             catch_stack: Vec::new(),
+            finally_stack: Vec::new(),
+            finally_visibility_limit: None,
             weak_variables: HashSet::new(),
             spawn_func_map: HashMap::new(),
             current_func,
@@ -4315,6 +4338,7 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             closure_temps: Vec::new(),
             closure_vars: HashSet::new(),
             closure_param_vars: HashSet::new(),
+            scope_bindings: Vec::new(),
         }
     }
 
@@ -4392,10 +4416,11 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
 
     fn enter_scope(&mut self) -> usize {
         self.scope_depth += 1;
+        self.scope_bindings.push(Vec::new());
         self.rc_variables.len()
     }
 
-    fn leave_scope(&mut self, start_index: usize) -> Result<(), String> {
+    fn restore_scope_state(&mut self) -> Result<(), String> {
         // 生命周期检查：当前作用域离开时，检查是否有外层借用变量
         // 依赖于本作用域内声明的变量（悬空借用）。
         let current_depth = self.scope_depth;
@@ -4422,6 +4447,98 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             self.scope_depth -= 1;
         }
 
+        if let Some(mut snapshots) = self.scope_bindings.pop() {
+            while let Some(snapshot) = snapshots.pop() {
+                let BindingSnapshot {
+                    name,
+                    variable,
+                    var_type,
+                    scope_depth,
+                    borrowed,
+                    weak,
+                    moved,
+                    closure_var,
+                    closure_param_var,
+                    spawn_func,
+                    lifetime_source,
+                } = snapshot;
+
+                match variable {
+                    Some(var) => {
+                        self.variables.insert(name.clone(), var);
+                    }
+                    None => {
+                        self.variables.remove(&name);
+                    }
+                }
+                match var_type {
+                    Some(ty) => {
+                        self.var_types.insert(name.clone(), ty);
+                    }
+                    None => {
+                        self.var_types.remove(&name);
+                    }
+                }
+                match scope_depth {
+                    Some(depth) => {
+                        self.var_scope_depth.insert(name.clone(), depth);
+                    }
+                    None => {
+                        self.var_scope_depth.remove(&name);
+                    }
+                }
+                match borrowed {
+                    Some(info) => {
+                        self.borrowed_vars.insert(name.clone(), info);
+                    }
+                    None => {
+                        self.borrowed_vars.remove(&name);
+                    }
+                }
+                if weak {
+                    self.weak_variables.insert(name.clone());
+                } else {
+                    self.weak_variables.remove(&name);
+                }
+                if moved {
+                    self.moved_variables.insert(name.clone());
+                } else {
+                    self.moved_variables.remove(&name);
+                }
+                if closure_var {
+                    self.closure_vars.insert(name.clone());
+                } else {
+                    self.closure_vars.remove(&name);
+                }
+                if closure_param_var {
+                    self.closure_param_vars.insert(name.clone());
+                } else {
+                    self.closure_param_vars.remove(&name);
+                }
+                match spawn_func {
+                    Some(func) => {
+                        self.spawn_func_map.insert(name.clone(), func);
+                    }
+                    None => {
+                        self.spawn_func_map.remove(&name);
+                    }
+                }
+                match lifetime_source {
+                    Some(source) => {
+                        self.var_lifetime_source.insert(name.clone(), source);
+                    }
+                    None => {
+                        self.var_lifetime_source.remove(&name);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn leave_scope(&mut self, start_index: usize) -> Result<(), String> {
+        self.restore_scope_state()?;
+
         // Release vars declared in this scope (stack-like)
         for i in (start_index..self.rc_variables.len()).rev() {
             let (var, ty) = self.rc_variables[i].clone();
@@ -4429,6 +4546,12 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             self.emit_release(val, &ty);
         }
         // Truncate
+        self.rc_variables.truncate(start_index);
+        Ok(())
+    }
+
+    fn abandon_scope(&mut self, start_index: usize) -> Result<(), String> {
+        self.restore_scope_state()?;
         self.rc_variables.truncate(start_index);
         Ok(())
     }
@@ -4441,6 +4564,65 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             let val = self.builder.use_var(var);
             self.emit_release(val, &ty);
         }
+    }
+
+    fn snapshot_binding_for_scope(&mut self, name: &str) {
+        let Some(scope) = self.scope_bindings.last_mut() else {
+            return;
+        };
+        if scope.iter().any(|snapshot| snapshot.name == name) {
+            return;
+        }
+        scope.push(BindingSnapshot {
+            name: name.to_string(),
+            variable: self.variables.get(name).copied(),
+            var_type: self.var_types.get(name).cloned(),
+            scope_depth: self.var_scope_depth.get(name).copied(),
+            borrowed: self.borrowed_vars.get(name).cloned(),
+            weak: self.weak_variables.contains(name),
+            moved: self.moved_variables.contains(name),
+            closure_var: self.closure_vars.contains(name),
+            closure_param_var: self.closure_param_vars.contains(name),
+            spawn_func: self.spawn_func_map.get(name).cloned(),
+            lifetime_source: self.var_lifetime_source.get(name).cloned(),
+        });
+    }
+
+    fn current_finally_depth(&self) -> usize {
+        self.finally_visibility_limit
+            .unwrap_or(self.finally_stack.len())
+            .min(self.finally_stack.len())
+    }
+
+    fn push_active_finally(&mut self, finally_body: &Option<Vec<Statement>>) -> Option<usize> {
+        match finally_body {
+            Some(body) if !body.is_empty() => {
+                self.finally_stack.push(body.clone());
+                Some(self.finally_stack.len() - 1)
+            }
+            _ => None,
+        }
+    }
+
+    fn pop_active_finally(&mut self, finally_depth: Option<usize>) {
+        if finally_depth.is_some() {
+            self.finally_stack.pop();
+        }
+    }
+
+    fn emit_active_finallys_from(&mut self, depth: usize) -> Result<(), String> {
+        let active_len = self.current_finally_depth();
+        let finalies: Vec<(usize, Vec<Statement>)> = (depth..active_len)
+            .rev()
+            .map(|idx| (idx, self.finally_stack[idx].clone()))
+            .collect();
+        for (idx, body) in finalies {
+            let old_limit = self.finally_visibility_limit;
+            self.finally_visibility_limit = Some(idx);
+            self.emit_finally(&Some(body))?;
+            self.finally_visibility_limit = old_limit;
+        }
+        Ok(())
     }
 
     // ==================== 生命周期 / 借用检查（与 JIT 对齐） ====================
@@ -4565,6 +4747,7 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
     }
 
     fn declare_variable(&mut self, name: &str, ty: types::Type) -> Variable {
+        self.snapshot_binding_for_scope(name);
         let var = Variable::new(self.var_counter);
         self.var_counter += 1;
         self.builder.declare_var(var, ty);
@@ -9889,21 +10072,23 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
                 false
             }
             Statement::Break => {
-                let (_, break_block, scope_base) =
+                let (_, break_block, scope_base, finally_depth) =
                     *self.loop_stack.last().ok_or("'break' outside of a loop")?;
                 // 跳出前释放临时值与循环作用域内已声明的 RC 变量
                 self.release_temp_rc_values();
                 self.emit_scope_releases_from(scope_base);
+                self.emit_active_finallys_from(finally_depth)?;
                 self.builder.ins().jump(break_block, &[]);
                 true
             }
             Statement::Continue => {
-                let (continue_block, _, scope_base) = *self
+                let (continue_block, _, scope_base, finally_depth) = *self
                     .loop_stack
                     .last()
                     .ok_or("'continue' outside of a loop")?;
                 self.release_temp_rc_values();
                 self.emit_scope_releases_from(scope_base);
+                self.emit_active_finallys_from(finally_depth)?;
                 self.builder.ins().jump(continue_block, &[]);
                 true
             }
@@ -9983,6 +10168,7 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
 
         // 1. Try body
         self.catch_stack.push(catch_block);
+        let try_finally_depth = self.push_active_finally(&finally_body);
         let mut try_diverted = false;
         for s in &try_body {
             if try_diverted {
@@ -9990,6 +10176,7 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             }
             try_diverted = self.compile_stmt(s)?;
         }
+        self.pop_active_finally(try_finally_depth);
         self.catch_stack.pop();
         if !try_diverted {
             self.emit_finally(&finally_body)?;
@@ -10037,9 +10224,12 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
 
             self.builder.switch_to_block(body_block);
             self.builder.seal_block(body_block);
+            let catch_scope = self.enter_scope();
             let catch_var = self.declare_variable(&clause.var, ptr_type);
             self.builder.def_var(catch_var, ex_ptr);
             self.var_types.insert(clause.var.clone(), clause.ty.clone());
+            self.record_var_scope(&clause.var);
+            let catch_finally_depth = self.push_active_finally(&finally_body);
 
             let mut clause_diverted = false;
             for s in &clause.body {
@@ -10048,6 +10238,8 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
                 }
                 clause_diverted = self.compile_stmt(s)?;
             }
+            self.pop_active_finally(catch_finally_depth);
+            self.leave_scope(catch_scope)?;
             if !clause_diverted {
                 self.emit_finally(&finally_body)?;
                 self.builder.ins().jump(after_try, &[]);
@@ -10837,13 +11029,29 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             .or(inferred_bolide_ty.clone())
             .unwrap_or(BolideType::Int);
         let ty = self.bolide_type_to_cranelift(&bolide_ty);
+        let init_value = if let Some(ref value) = decl.value {
+            // 空列表字面量需用类型标注确定元素类型
+            let raw_val = if matches!(value, Expr::List(items) if items.is_empty())
+                && matches!(bolide_ty, BolideType::List(_))
+            {
+                self.compile_list_with_hint(&[], Some(&bolide_ty))?
+            } else {
+                self.compile_expr(value)?
+            };
+            let raw_ty = self
+                .infer_expr_type(value)
+                .map(|ty| self.normalize_bolide_type(&ty))
+                .unwrap_or(BolideType::Dynamic);
+            Some((value, self.prepare_value_for_storage(raw_val, &raw_ty, &bolide_ty)?))
+        } else {
+            None
+        };
+
         let var = self.declare_variable(&decl.name, ty);
 
-        // Store the type in var_types
-        if let Some(ref t) = declared_bolide_ty {
-            self.var_types.insert(decl.name.clone(), t.clone());
-        } else if let Some(ref value) = decl.value {
-            // 检查是否是异步函数调用，异步函数调用返回 Future 而非内部类型
+        let stored_var_ty = if let Some(ref t) = declared_bolide_ty {
+            t.clone()
+        } else if let Some((value, _)) = init_value.as_ref() {
             let is_async_call = match value {
                 Expr::Call(callee, _) => {
                     if let Expr::Ident(name) = callee.as_ref() {
@@ -10855,14 +11063,18 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
                 _ => false,
             };
             if is_async_call {
-                self.var_types.insert(decl.name.clone(), BolideType::Future);
-            } else if let Some(inferred_ty) = inferred_bolide_ty {
-                self.var_types.insert(decl.name.clone(), inferred_ty);
+                BolideType::Future
+            } else {
+                inferred_bolide_ty.clone().unwrap_or_else(|| bolide_ty.clone())
             }
-        }
+        } else {
+            bolide_ty.clone()
+        };
+        self.var_types
+            .insert(decl.name.clone(), stored_var_ty.clone());
 
-        // 记录 spawn / async 调用的句柄变量 -> 函数名映射，供 join 推断返回类型
-        if let Some(ref value) = decl.value {
+        if let Some((value, val)) = init_value {
+            // 记录 spawn / async 调用的句柄变量 -> 函数名映射，供 join 推断返回类型
             match value {
                 Expr::Spawn(func_name, _) => {
                     self.spawn_func_map
@@ -10878,24 +11090,8 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
                 }
                 _ => {}
             }
-        }
 
-        if let Some(ref value) = decl.value {
-            // 空列表字面量需用类型标注确定元素类型
-            let raw_val = if matches!(value, Expr::List(items) if items.is_empty())
-                && matches!(bolide_ty, BolideType::List(_))
-            {
-                self.compile_list_with_hint(&[], Some(&bolide_ty))?
-            } else {
-                self.compile_expr(value)?
-            };
-            let raw_ty = self
-                .infer_expr_type(value)
-                .map(|ty| self.normalize_bolide_type(&ty))
-                .unwrap_or(BolideType::Dynamic);
-            let val = self.prepare_value_for_storage(raw_val, &raw_ty, &bolide_ty)?;
-
-            let declared_ty = self.var_types.get(&decl.name).cloned();
+            let declared_ty = Some(stored_var_ty.clone());
             let is_weak_decl = declared_ty
                 .as_ref()
                 .map(|t| Self::is_weak_ref_type(t))
@@ -11312,6 +11508,7 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
 
     /// 编译返回语句
     fn compile_return(&mut self, expr: Option<&Expr>) -> Result<(), String> {
+        self.emit_active_finallys_from(0)?;
         if let Some(e) = expr {
             // 生命周期模式：验证返回值来源
             if self.uses_lifetime_mode() {
@@ -11449,7 +11646,9 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
                 break;
             }
         }
-        if !then_returned {
+        if then_returned {
+            self.abandon_scope(scope_idx)?;
+        } else {
             self.leave_scope(scope_idx)?;
             self.builder.ins().jump(merge_block, &[]);
         }
@@ -11469,7 +11668,9 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
                 }
             }
         }
-        if !else_returned {
+        if else_returned {
+            self.abandon_scope(scope_idx_else)?;
+        } else {
             self.leave_scope(scope_idx_else)?;
             self.builder.ins().jump(merge_block, &[]);
         }
@@ -11507,7 +11708,12 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
 
         let scope_idx = self.enter_scope();
         // while: continue → 重新检查条件（header）；break → exit
-        self.loop_stack.push((header_block, exit_block, scope_idx));
+        self.loop_stack.push((
+            header_block,
+            exit_block,
+            scope_idx,
+            self.current_finally_depth(),
+        ));
         let mut body_returned = false;
         for stmt in &while_stmt.body {
             if self.compile_stmt(stmt)? {
@@ -11517,12 +11723,11 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         }
         self.loop_stack.pop();
 
-        if !body_returned {
+        if body_returned {
+            self.abandon_scope(scope_idx)?;
+        } else {
             self.leave_scope(scope_idx)?;
             self.builder.ins().jump(header_block, &[]);
-        } else {
-            // 提前跳出路径已自行释放作用域变量，这里只清理编译期记录
-            self.rc_variables.truncate(scope_idx);
         }
 
         // 现在所有 header_block 的前驱都已添加，可以 seal 了
@@ -11631,7 +11836,12 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         self.builder.seal_block(body_block);
 
         let scope_idx = self.enter_scope();
-        self.loop_stack.push((latch_block, exit_block, scope_idx));
+        self.loop_stack.push((
+            latch_block,
+            exit_block,
+            scope_idx,
+            self.current_finally_depth(),
+        ));
         let mut body_returned = false;
         for stmt in &for_stmt.body {
             if self.compile_stmt(stmt)? {
@@ -11641,11 +11851,11 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         }
         self.loop_stack.pop();
 
-        if !body_returned {
+        if body_returned {
+            self.abandon_scope(scope_idx)?;
+        } else {
             self.leave_scope(scope_idx)?;
             self.builder.ins().jump(latch_block, &[]);
-        } else {
-            self.rc_variables.truncate(scope_idx);
         }
 
         // latch: 递增索引后回到 header（continue 跳转到此处以保证步进）
@@ -11737,7 +11947,12 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         };
         self.builder.def_var(loop_var, elem);
 
-        self.loop_stack.push((latch_block, exit_block, scope_idx));
+        self.loop_stack.push((
+            latch_block,
+            exit_block,
+            scope_idx,
+            self.current_finally_depth(),
+        ));
         let mut body_returned = false;
         for stmt in &for_stmt.body {
             if self.compile_stmt(stmt)? {
@@ -11747,11 +11962,11 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         }
         self.loop_stack.pop();
 
-        if !body_returned {
+        if body_returned {
+            self.abandon_scope(scope_idx)?;
+        } else {
             self.leave_scope(scope_idx)?;
             self.builder.ins().jump(latch_block, &[]);
-        } else {
-            self.rc_variables.truncate(scope_idx);
         }
 
         // latch: 递增索引后回到 header（continue 跳转到此处）
@@ -11845,7 +12060,12 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             self.define_variable(&vars[1], val_val, val_type.clone())?;
 
             let scope_idx = self.enter_scope();
-            self.loop_stack.push((latch_block, exit_block, scope_idx));
+            self.loop_stack.push((
+                latch_block,
+                exit_block,
+                scope_idx,
+                self.current_finally_depth(),
+            ));
             let mut body_returned = false;
             for stmt in &for_stmt.body {
                 if body_returned {
@@ -11855,11 +12075,11 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             }
             self.loop_stack.pop();
 
-            if !body_returned {
+            if body_returned {
+                self.abandon_scope(scope_idx)?;
+            } else {
                 self.leave_scope(scope_idx)?;
                 self.builder.ins().jump(latch_block, &[]);
-            } else {
-                self.rc_variables.truncate(scope_idx);
             }
 
             // Latch: idx += 1 → header
@@ -11952,7 +12172,12 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         };
         self.builder.def_var(loop_var, elem);
 
-        self.loop_stack.push((latch_block, exit_block, scope_idx));
+        self.loop_stack.push((
+            latch_block,
+            exit_block,
+            scope_idx,
+            self.current_finally_depth(),
+        ));
         let mut body_returned = false;
         for stmt in body {
             if self.compile_stmt(stmt)? {
@@ -11962,11 +12187,11 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         }
         self.loop_stack.pop();
 
-        if !body_returned {
+        if body_returned {
+            self.abandon_scope(scope_idx)?;
+        } else {
             self.leave_scope(scope_idx)?;
             self.builder.ins().jump(latch_block, &[]);
-        } else {
-            self.rc_variables.truncate(scope_idx);
         }
 
         self.builder.switch_to_block(latch_block);

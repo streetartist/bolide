@@ -6396,10 +6396,14 @@ struct CompileContext<'a, 'b> {
     borrowed_vars: HashMap<String, (String, usize)>,
     /// weak 引用变量集合（访问时需要检查是否为 nil）
     weak_variables: HashSet<String>,
-    /// 循环块栈：(continue 目标块, break 目标块)，用于编译 break/continue
-    loop_stack: Vec<(Block, Block)>,
+    /// 循环块栈：(continue 目标块, break 目标块, 入栈时 finally 深度)，用于编译 break/continue
+    loop_stack: Vec<(Block, Block, usize)>,
     /// catch 落点栈：每个 try 块的 catch_block，用于编译 throw（同函数内直接跳转）
     catch_stack: Vec<Block>,
+    /// 当前激活的 finally 语句栈（外层到内层）。
+    finally_stack: Vec<Vec<Statement>>,
+    /// 控制流退出时可见的 finally 深度上限；用于避免在 finally 中重复执行自身。
+    finally_visibility_limit: Option<usize>,
     /// 本函数内创建的闭包，待外层函数编译完成后由顶层编译器统一编译
     pending_closures: Vec<ClosureJob>,
     /// 闭包局部计数（与 current_func_name 组合成唯一 lifted 名）
@@ -6478,6 +6482,8 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             weak_variables: HashSet::new(),
             loop_stack: Vec::new(),
             catch_stack: Vec::new(),
+            finally_stack: Vec::new(),
+            finally_visibility_limit: None,
             pending_closures: Vec::new(),
             closure_local_counter: 0,
             closure_temps: Vec::new(),
@@ -7361,6 +7367,43 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         self.temp_rc_values.retain(|(v, _)| *v != val);
     }
 
+    fn current_finally_depth(&self) -> usize {
+        self.finally_visibility_limit
+            .unwrap_or(self.finally_stack.len())
+            .min(self.finally_stack.len())
+    }
+
+    fn push_active_finally(&mut self, finally_body: &Option<Vec<Statement>>) -> Option<usize> {
+        match finally_body {
+            Some(body) if !body.is_empty() => {
+                self.finally_stack.push(body.clone());
+                Some(self.finally_stack.len() - 1)
+            }
+            _ => None,
+        }
+    }
+
+    fn pop_active_finally(&mut self, finally_depth: Option<usize>) {
+        if finally_depth.is_some() {
+            self.finally_stack.pop();
+        }
+    }
+
+    fn emit_active_finallys_from(&mut self, depth: usize) -> Result<(), String> {
+        let active_len = self.current_finally_depth();
+        let finalies: Vec<(usize, Vec<Statement>)> = (depth..active_len)
+            .rev()
+            .map(|idx| (idx, self.finally_stack[idx].clone()))
+            .collect();
+        for (idx, body) in finalies {
+            let old_limit = self.finally_visibility_limit;
+            self.finally_visibility_limit = Some(idx);
+            self.emit_finally(&Some(body))?;
+            self.finally_visibility_limit = old_limit;
+        }
+        Ok(())
+    }
+
     /// 声明变量
     fn declare_variable(&mut self, name: &str, ty: types::Type) -> Variable {
         self.snapshot_binding_for_scope(name);
@@ -7422,19 +7465,21 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                 Ok(false)
             }
             Statement::Break => {
-                let (_, break_block) =
+                let (_, break_block, finally_depth) =
                     *self.loop_stack.last().ok_or("'break' outside of a loop")?;
                 // 跳出前释放当前语句产生的临时 RC 值
                 self.release_temp_rc_values();
+                self.emit_active_finallys_from(finally_depth)?;
                 self.builder.ins().jump(break_block, &[]);
                 Ok(true)
             }
             Statement::Continue => {
-                let (continue_block, _) = *self
+                let (continue_block, _, finally_depth) = *self
                     .loop_stack
                     .last()
                     .ok_or("'continue' outside of a loop")?;
                 self.release_temp_rc_values();
+                self.emit_active_finallys_from(finally_depth)?;
                 self.builder.ins().jump(continue_block, &[]);
                 Ok(true)
             }
@@ -7514,6 +7559,7 @@ impl<'a, 'b> CompileContext<'a, 'b> {
 
         // 1. Try body —— catch_block 压栈，内部 throw 跳到这里
         self.catch_stack.push(catch_block);
+        let try_finally_depth = self.push_active_finally(&finally_body);
         let mut try_diverted = false;
         for s in &try_body {
             if try_diverted {
@@ -7521,6 +7567,7 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             }
             try_diverted = self.compile_stmt(s)?;
         }
+        self.pop_active_finally(try_finally_depth);
         self.catch_stack.pop();
         if !try_diverted {
             self.emit_finally(&finally_body)?;
@@ -7572,9 +7619,12 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             // body_block：绑定 typed 异常变量并执行 catch body
             self.builder.switch_to_block(body_block);
             self.builder.seal_block(body_block);
+            self.enter_scope();
             let catch_var = self.declare_variable(&clause.var, ptr_type);
             self.builder.def_var(catch_var, ex_ptr);
             self.var_types.insert(clause.var.clone(), clause.ty.clone());
+            self.record_var_scope(&clause.var);
+            let catch_finally_depth = self.push_active_finally(&finally_body);
 
             let mut clause_diverted = false;
             for s in &clause.body {
@@ -7583,6 +7633,8 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                 }
                 clause_diverted = self.compile_stmt(s)?;
             }
+            self.pop_active_finally(catch_finally_depth);
+            self.leave_scope()?;
             if !clause_diverted {
                 self.emit_finally(&finally_body)?;
                 self.builder.ins().jump(after_try, &[]);
@@ -8613,6 +8665,7 @@ impl<'a, 'b> CompileContext<'a, 'b> {
 
     /// 编译 return 语句
     fn compile_return(&mut self, expr: Option<&Expr>) -> Result<(), String> {
+        self.emit_active_finallys_from(0)?;
         if let Some(e) = expr {
             // 生命周期模式：验证返回值来源
             if self.uses_lifetime_mode() {
@@ -8976,7 +9029,8 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         self.builder.seal_block(body_block);
         self.enter_scope(); // 进入循环体作用域
                             // while: continue → 重新检查条件（header）；break → exit
-        self.loop_stack.push((header_block, exit_block));
+        self.loop_stack
+            .push((header_block, exit_block, self.current_finally_depth()));
         let mut terminated = false;
         for stmt in &while_stmt.body {
             if terminated {
@@ -9148,7 +9202,8 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         self.builder.switch_to_block(body_block);
         self.builder.seal_block(body_block);
         self.enter_scope();
-        self.loop_stack.push((latch_block, exit_block));
+        self.loop_stack
+            .push((latch_block, exit_block, self.current_finally_depth()));
         let mut terminated = false;
         for stmt in body {
             if terminated {
@@ -9325,7 +9380,8 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         }
 
         self.enter_scope();
-        self.loop_stack.push((latch_block, exit_block));
+        self.loop_stack
+            .push((latch_block, exit_block, self.current_finally_depth()));
         let mut terminated = false;
         for stmt in body {
             if terminated {
@@ -9470,7 +9526,8 @@ impl<'a, 'b> CompileContext<'a, 'b> {
 
             // Compile body
             self.enter_scope();
-            self.loop_stack.push((latch_block, exit_block));
+            self.loop_stack
+                .push((latch_block, exit_block, self.current_finally_depth()));
             let mut terminated = false;
             for stmt in body {
                 if terminated {

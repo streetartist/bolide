@@ -1,0 +1,28 @@
+// Branch-local bindings should not leak, and outer names must survive both arms.
+
+fn check(name: str, got: int, want: int) {
+    if got == want {
+        print("ok " + name);
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want));
+    }
+}
+
+fn branch_shadow(flag: bool) -> int {
+    let y: int = 10;
+    if flag {
+        let y: int = 20;
+        check("if arm shadow", y, 20);
+    } else {
+        let y: int = 30;
+        check("else arm shadow", y, 30);
+    }
+    return y;
+}
+
+let x: int = 1;
+check("if branch result", branch_shadow(true), 10);
+check("else branch result", branch_shadow(false), 10);
+check("outer after branch", x, 1);
+
+print("branch cleanup done");

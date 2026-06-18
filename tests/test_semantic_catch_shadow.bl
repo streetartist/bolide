@@ -1,0 +1,30 @@
+// Catch bindings should shadow outer names without mutating them.
+
+fn check(name: str, got: int, want: int) {
+    if got == want {
+        print("ok " + name);
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want));
+    }
+}
+
+let err: int = 7;
+
+try {
+    throw 42;
+} catch (err: int) {
+    check("catch shadow value", err, 42);
+}
+
+check("outer after catch", err, 7);
+
+try {
+    throw 11;
+} catch (e: int) {
+    let e: int = e + 1;
+    check("inner catch shadow", e, 12);
+}
+
+check("outer still intact", err, 7);
+
+print("catch shadow done");

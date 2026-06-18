@@ -1,0 +1,70 @@
+// finally must run on continue, break, and return.
+
+let continue_finally: int = 0;
+let break_finally: int = 0;
+let return_finally: int = 0;
+
+fn check(name: str, got: int, want: int) {
+    if got == want {
+        print("ok " + name);
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want));
+    }
+}
+
+fn continue_case() -> int {
+    let total: int = 0;
+    let i: int = 0;
+    while i < 4 {
+        i = i + 1;
+        try {
+            if i == 2 {
+                continue;
+            }
+            total = total + i;
+        } catch (e: int) {
+            print("FAIL unexpected catch in continue_case");
+        } finally {
+            continue_finally = continue_finally + 1;
+        }
+    }
+    return total;
+}
+
+fn break_case() -> int {
+    let i: int = 0;
+    while i < 5 {
+        try {
+            if i == 3 {
+                break;
+            }
+        } catch (e: int) {
+            print("FAIL unexpected catch in break_case");
+        } finally {
+            break_finally = break_finally + 1;
+        }
+        i = i + 1;
+    }
+    return i;
+}
+
+fn return_case() -> int {
+    try {
+        return 99;
+    } catch (e: int) {
+        print("FAIL unexpected catch in return_case");
+    } finally {
+        return_finally = return_finally + 1;
+    }
+}
+
+check("continue case result", continue_case(), 8);
+check("continue case finally", continue_finally, 4);
+
+check("break case result", break_case(), 3);
+check("break case finally", break_finally, 4);
+
+check("return case result", return_case(), 99);
+check("return case finally", return_finally, 1);
+
+print("finally controlflow done");
