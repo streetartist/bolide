@@ -5,7 +5,7 @@ async fn side_effect() -> int {
     return 7;
 }
 
-let f: future = side_effect();
+let f = side_effect();
 print("after-call");
 let value: int = await f;
 print(value);

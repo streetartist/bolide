@@ -9,7 +9,7 @@ async fn async_bigint() -> bigint {
     return temp;
 }
 
-let f1: future = async_bigint();
+let f1 = async_bigint();
 bigint_debug_stats();  // spawn 后检查
 
 let r1: bigint = await f1;

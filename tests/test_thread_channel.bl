@@ -3,29 +3,29 @@
 let ch: channel<int> = channel();
 
 fn producer(c: channel<int>, n: int) -> int {
-    c <- n;
+    c.send(n);
     return n;
 }
 
 // 启动多个生产者线程
-let t1: future = spawn producer(ch, 100);
-let t2: future = spawn producer(ch, 200);
-let t3: future = spawn producer(ch, 300);
+let t1 = spawn producer(ch, 100);
+let t2 = spawn producer(ch, 200);
+let t3 = spawn producer(ch, 300);
 
 // 接收数据
 print(1);
-let v1: int = <- ch;
+let v1: int = ch.recv();
 print(v1);
 
-let v2: int = <- ch;
+let v2: int = ch.recv();
 print(v2);
 
-let v3: int = <- ch;
+let v3: int = ch.recv();
 print(v3);
 
 // 等待线程结束
-join(t1);
-join(t2);
-join(t3);
+await t1;
+await t2;
+await t3;
 
 print(999);

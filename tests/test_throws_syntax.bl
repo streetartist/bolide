@@ -1,0 +1,17 @@
+fn checked_value() throws Error -> int {
+    return 7;
+}
+
+async fn async_value() throws Error -> int {
+    return checked_value();
+}
+
+fn work() -> int {
+    return 5;
+}
+
+let f: Future<int> = async_value();
+let t: Task<int> = spawn thread work();
+
+print(await f);
+print(await t);

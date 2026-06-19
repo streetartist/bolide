@@ -1,15 +1,15 @@
-// 多线程测试 - 线程池 + future 类型
+// 多线程测试 - 线程池 + Task<T> + await
 
 fn worker() -> int {
     return 42;
 }
 
-// 线程池中 spawn 也返回 future
+// 线程池中 spawn 返回 Task<T>，await 会在池内同步
 pool(4) {
-    let h1: future = spawn worker();
-    let h2: future = spawn worker();
-    let r1: int = join(h1);
-    let r2: int = join(h2);
+    let h1: Task<int> = spawn worker();
+    let h2: Task<int> = spawn worker();
+    let r1: int = await h1;
+    let r2: int = await h2;
     print(r1);
     print(r2);
 }

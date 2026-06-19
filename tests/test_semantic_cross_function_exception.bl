@@ -1,0 +1,66 @@
+// Exceptions should propagate across function calls to the nearest caller catch.
+
+class InnerError: Error {}
+
+let log_value: int = 0;
+
+fn mark(d: int) {
+    log_value = log_value * 10 + d;
+}
+
+fn fail_inner() {
+    mark(1);
+    throw InnerError("boom");
+    mark(9);
+}
+
+fn fail_middle() {
+    mark(2);
+    fail_inner();
+    mark(9);
+}
+
+fn fail_with_finally() {
+    try {
+        mark(5);
+        fail_inner();
+        mark(9);
+    } catch (e: InnerError) {
+        mark(6);
+        throw e;
+    } finally {
+        mark(7);
+    }
+}
+
+fn check(name: str, got: int, want: int) {
+    if got == want {
+        print("ok " + name);
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want));
+    }
+}
+
+try {
+    fail_middle();
+    mark(9);
+} catch (e: InnerError) {
+    mark(3);
+    check("cross function catch type", e.message.len(), 4);
+}
+
+check("cross function propagation order", log_value, 213);
+
+log_value = 0;
+
+try {
+    fail_with_finally();
+    mark(9);
+} catch (e: InnerError) {
+    mark(8);
+    check("cross function finally catch", e.message.len(), 4);
+}
+
+check("cross function finally order", log_value, 51678);
+
+print("cross function exception done");

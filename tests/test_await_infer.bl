@@ -21,7 +21,7 @@ print(strs[1]);   // world
 let r = await fetch_s();
 print(r);         // hello
 
-// 两步式：future 变量后 await
+// 两步式：Future 变量后 await
 let f = fetch_s2();
 let r2 = await f;
 print(r2);        // world

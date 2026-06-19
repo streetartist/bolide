@@ -14,9 +14,9 @@ fn main_test() {
     print(a);
 
     let handle = spawn worker(a);
-    let result: bigint = join(handle);
+    let result: bigint = await handle;
 
-    print("After join:");
+    print("After await:");
     print(result);
 
     print("Original a:");

@@ -36,7 +36,7 @@ fn main_test() {
     // Multi-thread
     let c: bigint = 300B;
     let h = spawn thread_worker(c);
-    let r: bigint = join(h);
+    let r: bigint = await h;
     print(r);
 
     bigint_debug_stats();

@@ -11,7 +11,7 @@
 //!   catch (e: T) 的类型过滤由编译器在编译期展开为标签比较的 OR 链
 //!   (含 T 的所有已知子类),因此 runtime 只需存取 value + tag。
 //!
-//! 当前限制:仅支持同函数内的 try/catch(catch 与 throw 在同一编译函数)。
+//! 跨函数传播由编译器在调用点检查 pending exception 并执行早返回/跳转。
 
 use std::cell::Cell;
 use std::os::raw::c_void;
@@ -36,6 +36,7 @@ pub extern "C" fn bolide_exception_get() -> *mut c_void {
     EXCEPTION_VALUE.with(|ex| {
         let v = ex.get();
         ex.set(std::ptr::null_mut());
+        EXCEPTION_TAG.with(|t| t.set(0));
         v
     })
 }
@@ -44,6 +45,12 @@ pub extern "C" fn bolide_exception_get() -> *mut c_void {
 #[no_mangle]
 pub extern "C" fn bolide_exception_tag() -> i64 {
     EXCEPTION_TAG.with(|t| t.get())
+}
+
+/// 是否存在待处理异常。调用方用它判断被调函数是否早返回传播了异常。
+#[no_mangle]
+pub extern "C" fn bolide_exception_pending() -> i64 {
+    EXCEPTION_VALUE.with(|ex| (!ex.get().is_null()) as i64)
 }
 
 /// 未捕获异常:打印并退出(throw 在无 catch 落点时调用)

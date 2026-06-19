@@ -17,17 +17,17 @@ fn check(name: str, got: int, want: int) {
 try {
     try {
         mark(1);
-        throw 7;
+        throw Error("7");
         mark(9);
-    } catch (e: int) {
+    } catch (e: Error) {
         mark(2);
         throw e;
     } finally {
         mark(3);
     }
-} catch (e: int) {
+} catch (e: Error) {
     mark(4);
-    check("outer catch value", e, 7);
+    check("outer catch value", e.message.len(), 1);
 } finally {
     mark(5);
 }

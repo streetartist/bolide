@@ -1,11 +1,11 @@
 print("=== test 1: basic try/catch ===");
 try {
     print("in try body");
-    throw 99;
+    throw Error("99");
     print("after throw (should not print)");
-} catch (e: int) {
+} catch (e: Error) {
     print("caught exception:");
-    print(e);
+    print(e.message);
 }
 print("after try/catch");
 
@@ -14,13 +14,13 @@ print("=== test 2: nested try/catch ===");
 try {
     try {
         print("inner try");
-        throw 42;
-    } catch (e: int) {
+        throw Error("42");
+    } catch (e: Error) {
         print("inner catch:");
-        print(e);
+        print(e.message);
     }
     print("after inner try");
-} catch (e: int) {
+} catch (e: Error) {
     print("outer catch (should not reach)");
 }
 print("after nested try/catch");
@@ -30,15 +30,15 @@ print("=== test 3: rethrow propagates ===");
 try {
     try {
         print("inner try");
-        throw 77;
-    } catch (e: int) {
+        throw Error("77");
+    } catch (e: Error) {
         print("inner catch, rethrowing:");
-        print(e);
+        print(e.message);
         throw e;
     }
-} catch (e: int) {
+} catch (e: Error) {
     print("outer catch:");
-    print(e);
+    print(e.message);
 }
 print("after propagate test");
 
@@ -46,7 +46,7 @@ print("");
 print("=== test 4: no throw ===");
 try {
     print("try with no throw");
-} catch (e: int) {
+} catch (e: Error) {
     print("should not reach");
 }
 print("after no-throw test");

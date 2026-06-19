@@ -22,20 +22,20 @@ async fn compute_float() -> float {
 
 print("=== 1. Basic Async/Await ===");
 
-// 调用 async 函数返回 future
-let f1: future = simple_task();
+// 调用 async 函数返回 Future
+let f1 = simple_task();
 
 // await 等待结果
 let result1: int = await f1;
 print(result1);  // 42
 
 // 带参数的 async 函数
-let f2: future = compute_async(21);
+let f2 = compute_async(21);
 let result2: int = await f2;
 print(result2);  // 42
 
 // 返回 float 的 async 函数
-let f3: future = compute_float();
+let f3 = compute_float();
 let result3: float = await f3;
 print(result3);  // 3.14159
 
@@ -58,26 +58,26 @@ fn float_worker(x: float) -> float {
     return x * 2.5;
 }
 
-print("=== 2. Spawn & Join ===");
+print("=== 2. Spawn & Await ===");
 
-// spawn 启动新线程，返回 future
-let t1: future = spawn heavy_compute(10);
-let t2: future = spawn heavy_compute(20);
+// spawn 启动新任务，返回 Task
+let t1 = spawn heavy_compute(10);
+let t2 = spawn heavy_compute(20);
 
-// join 等待线程结果
-let r1: int = join(t1);
-let r2: int = join(t2);
+// await 等待任务结果
+let r1: int = await t1;
+let r2: int = await t2;
 print(r1);  // 110 (10*10 + 10)
 print(r2);  // 420 (20*20 + 20)
 
 // spawn 返回字符串
-let t3: future = spawn string_worker();
-let s: str = join(t3);
+let t3 = spawn string_worker();
+let s: str = await t3;
 print(s);  // Hello from thread!
 
 // spawn 带浮点数参数
-let t4: future = spawn float_worker(4.0);
-let f: float = join(t4);
+let t4 = spawn float_worker(4.0);
+let f: float = await t4;
 print(f);  // 10.0
 
 // ============================================================
@@ -100,14 +100,14 @@ fn task_c() -> int {
 print("=== 3. Multiple Concurrent Tasks ===");
 
 // 同时启动多个任务
-let h1: future = spawn task_a();
-let h2: future = spawn task_b();
-let h3: future = spawn task_c();
+let h1 = spawn task_a();
+let h2 = spawn task_b();
+let h3 = spawn task_c();
 
 // 等待所有任务完成
-let v1: int = join(h1);
-let v2: int = join(h2);
-let v3: int = join(h3);
+let v1: int = await h1;
+let v2: int = await h2;
+let v3: int = await h3;
 
 print(v1);  // 100
 print(v2);  // 200
@@ -191,21 +191,21 @@ print("=== 6. Channel Communication ===");
 let ch: channel<int> = channel();
 
 // 发送数据到通道
-ch <- 42;
+ch.send(42);
 
 // 从通道接收数据
-let received: int = <- ch;
+let received: int = ch.recv();
 print(received);  // 42
 
 // 多值通信
 let ch2: channel<int> = channel();
-ch2 <- 100;
-ch2 <- 200;
-ch2 <- 300;
+ch2.send(100);
+ch2.send(200);
+ch2.send(300);
 
-print(<- ch2);  // 100
-print(<- ch2);  // 200
-print(<- ch2);  // 300
+print(ch2.recv());  // 100
+print(ch2.recv());  // 200
+print(ch2.recv());  // 300
 
 // ============================================================
 // 7. 线程间通道通信
@@ -213,7 +213,7 @@ print(<- ch2);  // 300
 // ============================================================
 
 fn producer(c: channel<int>, value: int) -> int {
-    c <- value;
+    c.send(value);
     return value;
 }
 
@@ -222,23 +222,23 @@ print("=== 7. Thread Channel Communication ===");
 let comm_ch: channel<int> = channel();
 
 // 在多个线程中发送数据
-let p1: future = spawn producer(comm_ch, 111);
-let p2: future = spawn producer(comm_ch, 222);
-let p3: future = spawn producer(comm_ch, 333);
+let p1 = spawn producer(comm_ch, 111);
+let p2 = spawn producer(comm_ch, 222);
+let p3 = spawn producer(comm_ch, 333);
 
 // 主线程接收数据
-let msg1: int = <- comm_ch;
-let msg2: int = <- comm_ch;
-let msg3: int = <- comm_ch;
+let msg1: int = comm_ch.recv();
+let msg2: int = comm_ch.recv();
+let msg3: int = comm_ch.recv();
 
 print(msg1);
 print(msg2);
 print(msg3);
 
 // 等待生产者线程结束
-join(p1);
-join(p2);
-join(p3);
+await p1;
+await p2;
+await p3;
 
 // ============================================================
 // 8. 线程池
@@ -253,15 +253,15 @@ print("=== 8. Thread Pool ===");
 
 // pool(n) 创建有 n 个工作线程的线程池
 pool(4) {
-    let w1: future = spawn pool_worker(1);
-    let w2: future = spawn pool_worker(2);
-    let w3: future = spawn pool_worker(3);
-    let w4: future = spawn pool_worker(4);
+    let w1 = spawn pool_worker(1);
+    let w2 = spawn pool_worker(2);
+    let w3 = spawn pool_worker(3);
+    let w4 = spawn pool_worker(4);
     
-    print(join(w1));  // 10
-    print(join(w2));  // 20
-    print(join(w3));  // 30
-    print(join(w4));  // 40
+    print(await w1);  // 10
+    print(await w2);  // 20
+    print(await w3);  // 30
+    print(await w4);  // 40
 }
 
 // ============================================================
@@ -278,11 +278,11 @@ print("=== 9. BigInt with Threads ===");
 let big1: bigint = 1000000B;
 let big2: bigint = 2000000B;
 
-let bh1: future = spawn bigint_compute(big1);
-let bh2: future = spawn bigint_compute(big2);
+let bh1 = spawn bigint_compute(big1);
+let bh2 = spawn bigint_compute(big2);
 
-let br1: bigint = join(bh1);
-let br2: bigint = join(bh2);
+let br1: bigint = await bh1;
+let br2: bigint = await bh2;
 
 print(br1);  // 1000000000001
 print(br2);  // 4000000000001
@@ -297,14 +297,14 @@ async fn inner_task(n: int) -> int {
 }
 
 async fn outer_task(n: int) -> int {
-    let f: future = inner_task(n);
+    let f = inner_task(n);
     let result: int = await f;
     return result * 2;
 }
 
 print("=== 10. Nested Async ===");
 
-let nested: future = outer_task(10);
+let nested = outer_task(10);
 let nested_result: int = await nested;
 print(nested_result);  // 22 = (10 + 1) * 2
 
@@ -314,13 +314,13 @@ print(nested_result);  // 22 = (10 + 1) * 2
 // ============================================================
 
 fn parallel_sum(a: int, b: int, c: int) -> int {
-    let f1: future = spawn heavy_compute(a);
-    let f2: future = spawn heavy_compute(b);
-    let f3: future = spawn heavy_compute(c);
+    let f1 = spawn heavy_compute(a);
+    let f2 = spawn heavy_compute(b);
+    let f3 = spawn heavy_compute(c);
     
-    let r1: int = join(f1);
-    let r2: int = join(f2);
-    let r3: int = join(f3);
+    let r1: int = await f1;
+    let r2: int = await f2;
+    let r3: int = await f3;
     
     return r1 + r2 + r3;
 }
@@ -355,31 +355,31 @@ let input2: int = 20;
 let input3: int = 30;
 
 // Stage 1: 并发处理
-let s1_1: future = spawn stage1(input1);
-let s1_2: future = spawn stage1(input2);
-let s1_3: future = spawn stage1(input3);
+let s1_1 = spawn stage1(input1);
+let s1_2 = spawn stage1(input2);
+let s1_3 = spawn stage1(input3);
 
-let mid1: int = join(s1_1);  // 20
-let mid2: int = join(s1_2);  // 40
-let mid3: int = join(s1_3);  // 60
+let mid1: int = await s1_1;  // 20
+let mid2: int = await s1_2;  // 40
+let mid3: int = await s1_3;  // 60
 
 // Stage 2: 并发处理
-let s2_1: future = spawn stage2(mid1);
-let s2_2: future = spawn stage2(mid2);
-let s2_3: future = spawn stage2(mid3);
+let s2_1 = spawn stage2(mid1);
+let s2_2 = spawn stage2(mid2);
+let s2_3 = spawn stage2(mid3);
 
-let mid2_1: int = join(s2_1);  // 120
-let mid2_2: int = join(s2_2);  // 140
-let mid2_3: int = join(s2_3);  // 160
+let mid2_1: int = await s2_1;  // 120
+let mid2_2: int = await s2_2;  // 140
+let mid2_3: int = await s2_3;  // 160
 
 // Stage 3: 最终处理
-let s3_1: future = spawn stage3(mid2_1);
-let s3_2: future = spawn stage3(mid2_2);
-let s3_3: future = spawn stage3(mid2_3);
+let s3_1 = spawn stage3(mid2_1);
+let s3_2 = spawn stage3(mid2_2);
+let s3_3 = spawn stage3(mid2_3);
 
-print(join(s3_1));  // 60
-print(join(s3_2));  // 70
-print(join(s3_3));  // 80
+print(await s3_1);  // 60
+print(await s3_2);  // 70
+print(await s3_3);  // 80
 
 // ============================================================
 // 完成

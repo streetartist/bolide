@@ -22,7 +22,7 @@ fn continue_case() -> int {
                 continue;
             }
             total = total + i;
-        } catch (e: int) {
+        } catch (e: Error) {
             print("FAIL unexpected catch in continue_case");
         } finally {
             continue_finally = continue_finally + 1;
@@ -38,7 +38,7 @@ fn break_case() -> int {
             if i == 3 {
                 break;
             }
-        } catch (e: int) {
+        } catch (e: Error) {
             print("FAIL unexpected catch in break_case");
         } finally {
             break_finally = break_finally + 1;
@@ -51,7 +51,7 @@ fn break_case() -> int {
 fn return_case() -> int {
     try {
         return 99;
-    } catch (e: int) {
+    } catch (e: Error) {
         print("FAIL unexpected catch in return_case");
     } finally {
         return_finally = return_finally + 1;

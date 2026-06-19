@@ -364,8 +364,8 @@ async fn async_square(n: int) -> int {
 }
 
 // 启动异步任务
-let future1: future = async_double(21);
-let future2: future = async_square(10);
+let future1 = async_double(21);
+let future2 = async_square(10);
 
 // 等待结果
 let async_r1: int = await future1;
@@ -377,11 +377,11 @@ print("async_square(10) =");
 print(async_r2);
 
 // ============================================================
-// 11. 线程并发: spawn/join / Thread Concurrency
+// 11. 线程并发: spawn/await / Thread Concurrency
 // ============================================================
 
 print("");
-print("▶ 11. 线程并发 spawn/join");
+print("▶ 11. 线程并发 spawn/await");
 print("─────────────────────────────────────");
 
 fn heavy_compute(x: int) -> int {
@@ -389,14 +389,14 @@ fn heavy_compute(x: int) -> int {
 }
 
 // 启动多个线程
-let thread1: future = spawn heavy_compute(10);
-let thread2: future = spawn heavy_compute(20);
-let thread3: future = spawn heavy_compute(30);
+let thread1 = spawn heavy_compute(10);
+let thread2 = spawn heavy_compute(20);
+let thread3 = spawn heavy_compute(30);
 
 // 等待所有线程完成
-let tr1: int = join(thread1);
-let tr2: int = join(thread2);
-let tr3: int = join(thread3);
+let tr1: int = await thread1;
+let tr2: int = await thread2;
+let tr3: int = await thread3;
 
 print("heavy_compute(10) =");
 print(tr1);
@@ -478,12 +478,12 @@ print("────────────────────────�
 let ch: channel<int> = channel();
 
 // 发送数据
-ch <- 42;
-ch <- 100;
+ch.send(42);
+ch.send(100);
 
 // 接收数据
-let msg1: int = <- ch;
-let msg2: int = <- ch;
+let msg1: int = ch.recv();
+let msg2: int = ch.recv();
 
 print("Channel received:");
 print(msg1);
@@ -503,19 +503,19 @@ fn pool_task(id: int) -> int {
 
 // 创建4个工作线程的线程池
 pool(4) {
-    let w1: future = spawn pool_task(1);
-    let w2: future = spawn pool_task(2);
-    let w3: future = spawn pool_task(3);
-    let w4: future = spawn pool_task(4);
+    let w1 = spawn pool_task(1);
+    let w2 = spawn pool_task(2);
+    let w3 = spawn pool_task(3);
+    let w4 = spawn pool_task(4);
     
     print("Pool task 1:");
-    print(join(w1));
+    print(await w1);
     print("Pool task 2:");
-    print(join(w2));
+    print(await w2);
     print("Pool task 3:");
-    print(join(w3));
+    print(await w3);
     print("Pool task 4:");
-    print(join(w4));
+    print(await w4);
 }
 
 // ============================================================
@@ -527,21 +527,21 @@ print("▶ 16. 线程间通道通信");
 print("─────────────────────────────────────");
 
 fn sender(ch: channel<int>, value: int) -> int {
-    ch <- value;
+    ch.send(value);
     return value;
 }
 
 let comm_channel: channel<int> = channel();
 
 // 在多个线程中发送数据
-let sender1: future = spawn sender(comm_channel, 111);
-let sender2: future = spawn sender(comm_channel, 222);
-let sender3: future = spawn sender(comm_channel, 333);
+let sender1 = spawn sender(comm_channel, 111);
+let sender2 = spawn sender(comm_channel, 222);
+let sender3 = spawn sender(comm_channel, 333);
 
 // 主线程接收
-let recv1: int = <- comm_channel;
-let recv2: int = <- comm_channel;
-let recv3: int = <- comm_channel;
+let recv1: int = comm_channel.recv();
+let recv2: int = comm_channel.recv();
+let recv3: int = comm_channel.recv();
 
 print("Received from threads:");
 print(recv1);
@@ -549,9 +549,9 @@ print(recv2);
 print(recv3);
 
 // 等待发送线程完成
-join(sender1);
-join(sender2);
-join(sender3);
+await sender1;
+await sender2;
+await sender3;
 
 // ============================================================
 // 17. BigInt 大数计算 / BigInt Arithmetic
@@ -605,13 +605,13 @@ fn thread_bigint_square(x: bigint) -> bigint {
 let big_a: bigint = 123456789B;
 let big_b: bigint = 987654321B;
 
-let bigint_t1: future = spawn thread_bigint_square(big_a);
-let bigint_t2: future = spawn thread_bigint_square(big_b);
+let bigint_t1 = spawn thread_bigint_square(big_a);
+let bigint_t2 = spawn thread_bigint_square(big_b);
 
 print("123456789^2 =");
-print(join(bigint_t1));
+print(await bigint_t1);
 print("987654321^2 =");
-print(join(bigint_t2));
+print(await bigint_t2);
 
 // ============================================================
 // 19. 嵌套异步调用 / Nested Async
@@ -626,12 +626,12 @@ async fn inner_async(n: int) -> int {
 }
 
 async fn outer_async(n: int) -> int {
-    let f: future = inner_async(n);
+    let f = inner_async(n);
     let result: int = await f;
     return result * 2;
 }
 
-let nested_future: future = outer_async(5);
+let nested_future = outer_async(5);
 let nested_result: int = await nested_future;
 print("outer_async(5) = (5+10)*2 =");
 print(nested_result);
@@ -659,20 +659,20 @@ fn pipeline_stage3(x: int) -> int {
 let input: int = 50;
 
 // Stage 1
-let s1: future = spawn pipeline_stage1(input);
-let mid1: int = join(s1);
+let s1 = spawn pipeline_stage1(input);
+let mid1: int = await s1;
 print("Stage 1 (x*2):");
 print(mid1);
 
 // Stage 2
-let s2: future = spawn pipeline_stage2(mid1);
-let mid2: int = join(s2);
+let s2 = spawn pipeline_stage2(mid1);
+let mid2: int = await s2;
 print("Stage 2 (+100):");
 print(mid2);
 
 // Stage 3
-let s3: future = spawn pipeline_stage3(mid2);
-let final_result: int = join(s3);
+let s3 = spawn pipeline_stage3(mid2);
+let final_result: int = await s3;
 print("Stage 3 (/2):");
 print(final_result);
 

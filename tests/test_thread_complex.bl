@@ -20,8 +20,8 @@ fn main_test() {
     bigint_debug_stats();
 
     // 等待结果
-    let r1: bigint = join(h1);
-    let r2: bigint = join(h2);
+    let r1: bigint = await h1;
+    let r2: bigint = await h2;
 
     print("Results:");
     print(r1);

@@ -347,11 +347,6 @@ impl Monomorphizer {
                 self.rewrite_expr(&mut new_expr, var_types, subst);
                 Ok(Statement::Expr(new_expr))
             }
-            Statement::Send(send) => {
-                let mut new_send = send.clone();
-                self.rewrite_expr(&mut new_send.value, var_types, subst);
-                Ok(Statement::Send(new_send))
-            }
             Statement::FuncDef(func) if func.type_params.is_empty() => {
                 let mut func = func.clone();
                 self.process_function(&mut func, subst)?;
@@ -473,6 +468,20 @@ impl Monomorphizer {
             Expr::SpawnAll(exprs) => {
                 for e in exprs {
                     self.rewrite_expr(e, var_types, subst);
+                }
+            }
+            Expr::Spawn(_, args) | Expr::SpawnThread(_, args) => {
+                for arg in args {
+                    self.rewrite_expr(arg, var_types, subst);
+                }
+            }
+            Expr::Propagate(inner) | Expr::Raise(inner) => {
+                self.rewrite_expr(inner, var_types, subst);
+            }
+            Expr::TryExpr(body) => {
+                let mut inner_types = var_types.clone();
+                for stmt in body {
+                    let _ = self.rewrite_stmt(stmt, &mut inner_types, subst);
                 }
             }
             // 其余表达式没有子表达式。
@@ -655,8 +664,27 @@ impl Monomorphizer {
             Expr::Slice(base, _, _, _) => self.infer_expr_type(base, var_types),
             Expr::Await(_) => Type::Int,
             Expr::SpawnAll(_) => Type::Tuple(vec![]),
-            Expr::Spawn(_, _) => Type::Future,
-            Expr::Recv(_) => Type::Int,
+            Expr::Spawn(_, _) | Expr::SpawnThread(_, _) => Type::Future,
+            Expr::Propagate(inner) | Expr::Raise(inner) => match self
+                .infer_expr_type(inner, var_types)
+            {
+                Type::Adt(name, args) if name == "Result" && !args.is_empty() => args[0].clone(),
+                Type::Adt(name, args) if name == "Option" && !args.is_empty() => args[0].clone(),
+                _ => Type::Int,
+            },
+            Expr::TryExpr(body) => {
+                let ok_ty = body
+                    .last()
+                    .and_then(|stmt| match stmt {
+                        Statement::Expr(expr) => Some(self.infer_expr_type(expr, var_types)),
+                        _ => None,
+                    })
+                    .unwrap_or(Type::Int);
+                Type::Adt(
+                    "Result".to_string(),
+                    vec![ok_ty, Type::Custom("Error".to_string())],
+                )
+            }
             _ => Type::Int,
         }
     }
@@ -760,7 +788,6 @@ impl Monomorphizer {
             "bool" => Some(Type::Bool),
             "print" | "println" | "bigint_debug_stats" | "tuple_debug_stats" => Some(Type::Int),
             "input" => Some(Type::Str),
-            "join" => Some(Type::Int),
             "channel" => {
                 let elem = args.first().map(|_| Type::Int).unwrap_or(Type::Int);
                 Some(Type::Channel(Box::new(elem)))

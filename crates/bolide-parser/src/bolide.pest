@@ -16,6 +16,8 @@ kw_as    = @{ "as" ~ !id_char }
 kw_from  = @{ "from" ~ !id_char }
 kw_await  = @{ "await"  ~ !id_char }
 kw_spawn  = @{ "spawn"  ~ !id_char }
+kw_thread = @{ "thread" ~ !id_char }
+kw_throws = @{ "throws" ~ !id_char }
 
 // 程序入口
 program = { SOI ~ (statement)* ~ EOI }
@@ -38,7 +40,6 @@ statement = {
     await_scope_stmt |
     spawn_select_stmt |
     select_stmt |
-    send_stmt |
     return_stmt |
     import_stmt |
     var_decl |
@@ -80,11 +81,12 @@ extern_typedef = { "type" ~ ident ~ "=" ~ c_type ~ ";" }
 // 函数定义（支持 async）
 // 生命周期注解: fn foo(ref x: bigint) -> str from x
 func_def = {
-    export_keyword? ~ async_keyword? ~ "fn" ~ ident ~ generic_param_list? ~ "(" ~ param_list? ~ ")" ~ ("->" ~ type_expr)? ~ lifetime_clause? ~ block
+    export_keyword? ~ async_keyword? ~ "fn" ~ ident ~ generic_param_list? ~ "(" ~ param_list? ~ ")" ~ throws_clause? ~ ("->" ~ type_expr)? ~ lifetime_clause? ~ block
 }
 async_keyword = { "async" }
 export_keyword = { "export" }
 generic_param_list = { "<" ~ ident ~ ("," ~ ident)* ~ ","? ~ ">" }
+throws_clause = { kw_throws ~ type_expr ~ ("," ~ type_expr)* ~ ","? }
 param_list = { param ~ ("," ~ param)* ~ ","? }
 param = { kw_variadic_param | variadic_param | normal_param }
 normal_param = { param_mode? ~ ident ~ ":" ~ type_expr ~ ("=" ~ expr)? }
@@ -143,14 +145,12 @@ spawn_select_bind = { ident ~ "=" ~ expr ~ "=>" ~ block }
 spawn_select_expr = { expr ~ "=>" ~ block }
 
 // channel select 语句
+// 接收分支采用方法风格: v = ch.recv() => { ... }
 select_stmt = { "select" ~ "{" ~ select_branch+ ~ "}" }
 select_branch = { select_recv | select_timeout | select_default }
-select_recv = { ident ~ "<-" ~ ident ~ "=>" ~ block }
+select_recv = { ident ~ "=" ~ ident ~ "." ~ "recv" ~ "(" ~ ")" ~ "=>" ~ block }
 select_timeout = { "timeout" ~ "(" ~ expr ~ ")" ~ "=>" ~ block }
 select_default = { "default" ~ "=>" ~ block }
-
-// 通道发送语句: ch <- val;
-send_stmt = { ident ~ "<-" ~ expr ~ ";" }
 
 return_stmt = { "return" ~ expr? ~ ";" }
 var_decl = { "let" ~ ident ~ (":" ~ type_expr)? ~ ("=" ~ expr)? ~ ";" }
@@ -177,7 +177,7 @@ cmp_expr = { add_expr ~ (cmp_op ~ add_expr)? }
 add_expr = { mul_expr ~ (add_op ~ mul_expr)* }
 mul_expr = { unary_expr ~ (mul_op ~ unary_expr)* }
 unary_expr = { unary_op? ~ postfix_expr }
-postfix_expr = { primary ~ (call_args | index | member)* }
+postfix_expr = { primary ~ (call_args | index | member | propagate_op | raise_op)* }
 
 cmp_op = { "==" | "!=" | "<=" | ">=" | "<" | ">" }
 shift_op = { "<<" | ">>" }
@@ -202,15 +202,17 @@ slice_start = { expr? }
 slice_end = { expr? }
 slice_step = { expr? }
 member = { "." ~ ident }
+propagate_op = { "?" }
+raise_op = { "!" ~ !"=" }
 
 // 基本表达式
 primary = {
     tuple_literal |
     "(" ~ expr ~ ")" |
+    try_expr |
     spawn_all_expr |
     await_expr |
     spawn_expr |
-    recv_expr |
     closure_expr |
     dict_literal |
     list_literal |
@@ -225,6 +227,9 @@ primary = {
     super_lit |
     ident
 }
+
+// try 表达式: try { stmt* }，最后一个表达式语句作为 Ok 值；无表达式则 Ok(0)
+try_expr = { "try" ~ block }
 
 // 闭包表达式: fn(params) -> ret { body }
 closure_expr = { "fn" ~ "(" ~ param_list? ~ ")" ~ ("->" ~ type_expr)? ~ block }
@@ -242,11 +247,10 @@ self_lit = @{ "self" ~ !id_char }
 // super 字面量（父类方法/字段访问）
 super_lit = @{ "super" ~ !id_char }
 
-// spawn 表达式: spawn func(args)
-spawn_expr = { kw_spawn ~ ident ~ call_args }
-
-// 接收表达式: <- ch
-recv_expr = { "<-" ~ ident }
+// spawn 表达式: spawn func(args) / spawn thread func(args)
+spawn_expr = { spawn_thread_expr | spawn_func_expr }
+spawn_thread_expr = { kw_spawn ~ kw_thread ~ ident ~ call_args }
+spawn_func_expr = { kw_spawn ~ ident ~ call_args }
 
 // 字面量
 list_literal = { "[" ~ (list_comprehension | list_items)? ~ "]" }
@@ -300,7 +304,7 @@ keyword = {
     "true" | "false" | "none" | "and" | "or" | "not" |
     "spawn" | "pool" | "self" | "super" | "select" | "timeout" | "default" |
     "async" | "await" | "scope" | "extern" | "struct" | "type" | "export" |
-    "from" | "owned" | "ref" | "weak" | "unowned" | "enum" | "union" | "match") ~ !(ASCII_ALPHANUMERIC | "_")
+    "from" | "throws" | "owned" | "ref" | "weak" | "unowned" | "enum" | "union" | "match") ~ !(ASCII_ALPHANUMERIC | "_")
 }
 
 // C 类型系统

@@ -6,9 +6,9 @@ async fn background_task(id: int) -> int {
 
 // await scope 确保所有任务在 scope 结束前完成
 await scope {
-    let f1: future = background_task(1);
-    let f2: future = background_task(2);
-    let f3: future = background_task(3);
+    let f1 = background_task(1);
+    let f2 = background_task(2);
+    let f3 = background_task(3);
     // 不显式 await，scope 结束时自动等待
 }
 

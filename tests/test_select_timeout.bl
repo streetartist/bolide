@@ -6,7 +6,7 @@ print(1);
 
 // 测试 timeout（100ms 后超时）
 select {
-    x <- ch => { print(x); }
+    x = ch.recv() => { print(x); }
     timeout(100) => { print(999); }
 }
 

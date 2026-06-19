@@ -1,0 +1,2315 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Bolide 从入门到精通</title>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;500;700&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<style>
+/* ===================== 基础 ===================== */
+* { box-sizing: border-box; }
+html { -webkit-font-smoothing: antialiased; }
+body {
+  margin: 0; padding: 0;
+  font-family: "Noto Serif SC", Georgia, serif;
+  font-size: 10.8pt; line-height: 1.62; color: #24292e;
+  text-align: justify; text-align-last: left;
+}
+body { string-set: doctitle ""; }
+
+/* ===================== 页面 ===================== */
+@page {
+  size: A4; margin: 2.3cm 2cm 2cm 2cm;
+  @top-center { content: string(doctitle); font-family: "Noto Sans SC", sans-serif; font-size: 8pt; color: #8a949e; }
+  @bottom-center { content: counter(page); font-family: "JetBrains Mono", monospace; font-size: 8.5pt; color: #6a737d; }
+}
+@page :first { margin: 0; @top-center { content: none; } @bottom-center { content: none; } }
+@page cover { margin: 0; @top-center { content: none; } @bottom-center { content: none; } }
+@page front { @top-center { content: none; } @bottom-center { content: none; } }
+.cover { page: cover; }
+.frontmatter { page: front; }
+h1 { string-set: doctitle content(); }
+
+/* ===================== 封面 ===================== */
+.cover {
+  width: 210mm; height: 297mm; margin: 0; position: relative; overflow: hidden;
+  page-break-after: always;
+  background: radial-gradient(120% 90% at 78% 18%, #1b2a52 0%, #111a33 45%, #0a0f1f 100%);
+  color: #fff; font-family: "Noto Sans SC", sans-serif;
+}
+/* 点阵网格 */
+.cover .dots {
+  position: absolute; inset: 0; z-index: 0; opacity: 0.5;
+  background-image: radial-gradient(rgba(150,180,255,0.35) 1px, transparent 1.4px);
+  background-size: 22px 22px;
+  -webkit-mask-image: linear-gradient(125deg, rgba(0,0,0,0.9) 0%, rgba(0,0,0,0.15) 60%, transparent 100%);
+          mask-image: linear-gradient(125deg, rgba(0,0,0,0.9) 0%, rgba(0,0,0,0.15) 60%, transparent 100%);
+}
+/* 火流星：一条对角光带 + 头部光点 */
+.cover .bolide {
+  position: absolute; top: -6%; right: -8%; width: 150%; height: 4px; z-index: 1;
+  transform: rotate(34deg); transform-origin: right top;
+  background: linear-gradient(90deg, transparent 0%, rgba(120,160,255,0.0) 30%, rgba(150,190,255,0.55) 78%, rgba(220,235,255,0.95) 100%);
+  filter: blur(0.4px);
+}
+.cover .bolide::after {
+  content: ""; position: absolute; right: -10px; top: -7px; width: 18px; height: 18px; border-radius: 50%;
+  background: radial-gradient(circle, #ffffff 0%, #bcd2ff 40%, rgba(120,160,255,0) 72%);
+  box-shadow: 0 0 26px 10px rgba(150,190,255,0.55);
+}
+.cover .ring {
+  position: absolute; z-index: 0; border-radius: 50%; border: 1px solid rgba(140,170,255,0.18);
+}
+.cover .ring.r1 { width: 520px; height: 520px; left: -190px; bottom: -190px; }
+.cover .ring.r2 { width: 340px; height: 340px; left: -100px; bottom: -100px; border-color: rgba(140,170,255,0.12); }
+.cover .corner-tag {
+  position: absolute; top: 30mm; left: 22mm; z-index: 2;
+  font-family: "JetBrains Mono", monospace; font-size: 10pt; letter-spacing: 3px;
+  color: #8fb0ff; text-transform: uppercase;
+}
+.cover .corner-tag .bar { display: inline-block; width: 34px; height: 2px; background: #8fb0ff; vertical-align: middle; margin-right: 10px; }
+.cover-content { position: absolute; left: 22mm; top: 50%; transform: translateY(-50%); z-index: 2; width: 168mm; }
+.cover-title { font-size: 50pt; font-weight: 700; line-height: 1.08; margin: 0 0 6mm 0; letter-spacing: 1px; }
+.cover-title .accent { color: #9cc0ff; }
+.cover-sub { font-size: 16pt; font-weight: 400; color: #c5d2ee; margin: 0 0 4mm 0; }
+.cover-rule { width: 64px; height: 3px; background: linear-gradient(90deg,#9cc0ff,#4a6fd0); margin: 8mm 0; border-radius: 2px; }
+.cover-tags { font-family: "JetBrains Mono", monospace; font-size: 9.5pt; color: #8ea3cc; line-height: 2.1; }
+.cover-tags span { display: inline-block; border: 1px solid rgba(140,170,255,0.28); border-radius: 2px; padding: 1px 9px; margin: 0 6px 6px 0; color: #b9c8ea; }
+.cover-foot {
+  position: absolute; left: 22mm; bottom: 22mm; z-index: 2;
+  font-family: "JetBrains Mono", monospace; font-size: 10pt; color: #9fb0d4;
+}
+.cover-foot .v { color: #fff; font-weight: 500; }
+
+/* ===================== 版权 / 信息页 ===================== */
+.info { padding: 34mm 4mm 0 4mm; }
+.info h2 { font-size: 15pt; border-left: 4px solid #1b2a52; padding-left: 10px; margin: 0 0 10mm 0; }
+.info table { width: 100%; border-collapse: collapse; font-size: 10pt; }
+.info td { padding: 5px 8px; border-bottom: 1px solid #ececec; }
+.info td:first-child { color: #6a737d; width: 28%; font-family: "Noto Sans SC"; }
+.info .note { margin-top: 12mm; font-size: 9.5pt; color: #6a737d; line-height: 1.8; }
+
+/* ===================== 目录 ===================== */
+.toc-page { page: front; padding-top: 8mm; }
+.toc-page h2 { font-size: 20pt; font-weight: 700; margin: 0 0 8mm 0; letter-spacing: 2px; }
+.toc-page h2 .en { font-family: "JetBrains Mono"; font-size: 11pt; color: #8a949e; font-weight: 400; margin-left: 10px; }
+ul.toc { list-style: none; padding: 0; margin: 0; }
+ul.toc li { margin: 0; padding: 0; }
+ul.toc a {
+  display: flex; align-items: baseline; text-decoration: none; color: #24292e;
+  padding: 3.4mm 0; border-bottom: 1px dotted #d8dde3; font-size: 11pt;
+}
+ul.toc a .num { font-family: "JetBrains Mono", monospace; color: #4a6fd0; font-weight: 500; width: 30px; flex: none; }
+ul.toc a .t { flex: 1; }
+ul.toc a::after { content: target-counter(attr(href url), page); font-family: "JetBrains Mono", monospace; color: #6a737d; font-size: 9.5pt; }
+ul.toc a .lead { flex: 1; border-bottom: 1px dotted transparent; }
+
+/* ===================== 正文 ===================== */
+.chapter { page-break-before: always; }
+h1 {
+  font-family: "Noto Sans SC", sans-serif; font-size: 21pt; font-weight: 700; color: #16213d;
+  margin: 0 0 2mm 0; line-height: 1.2;
+}
+h1 .ch-no {
+  display: block; font-family: "JetBrains Mono", monospace; font-size: 10.5pt; font-weight: 500;
+  letter-spacing: 4px; color: #4a6fd0; margin-bottom: 3mm; text-transform: uppercase;
+}
+.h1-rule { height: 3px; width: 100%; background: linear-gradient(90deg,#16213d 0%, #16213d 12%, #e6e9ef 12%); margin: 4mm 0 7mm 0; }
+h2 {
+  font-family: "Noto Sans SC", sans-serif; font-size: 14.5pt; font-weight: 600; color: #1b2a52;
+  margin: 9mm 0 3mm 0; padding-left: 10px; border-left: 4px solid #4a6fd0;
+  page-break-after: avoid;
+}
+h3 {
+  font-family: "Noto Sans SC", sans-serif; font-size: 12pt; font-weight: 600; color: #2a3a5c;
+  margin: 6mm 0 2mm 0; page-break-after: avoid;
+}
+p { margin: 0 0 2.6mm 0; }
+.lead { color: #44505e; font-size: 11pt; }
+
+/* 列表 */
+ul, ol { margin: 0 0 3mm 0; padding-left: 6mm; }
+li { margin: 0.8mm 0; }
+
+/* 行内代码 */
+code {
+  font-family: "JetBrains Mono", monospace; font-size: 0.86em;
+  background: #eef1f5; color: #b5295c; padding: 1px 5px; border-radius: 3px; word-break: break-word;
+}
+/* 代码块 */
+pre {
+  font-family: "JetBrains Mono", monospace; background: #f6f8fa; border: 1px solid #e3e7ec;
+  border-radius: 4px; padding: 9px 12px; margin: 3mm 0; font-size: 9.2pt; line-height: 1.5;
+  overflow-x: auto; white-space: pre-wrap; word-wrap: break-word; max-width: 100%;
+  page-break-inside: avoid; position: relative;
+}
+pre code { background: none; color: #2c333a; padding: 0; border-radius: 0; font-size: 1em; word-break: normal; }
+pre.lang::before {
+  content: attr(data-lang); position: absolute; top: 0; right: 0;
+  font-size: 7pt; letter-spacing: 1px; color: #9aa4af; background: #eceff3;
+  padding: 1px 7px; border-bottom-left-radius: 4px; text-transform: uppercase;
+}
+/* 语法高亮配色（浅色） */
+.c-kw { color: #0033b3; font-weight: 600; }
+.c-ty { color: #0e7490; }
+.c-li { color: #7c3aed; }
+.c-st { color: #1a7f37; }
+.c-nu { color: #b35900; }
+.c-cm { color: #8a949e; font-style: italic; }
+.c-fn { color: #6f42c1; }
+
+/* 表格：三线表 */
+table { width: 100%; border-collapse: collapse; margin: 3mm 0; font-size: 9.8pt; max-width: 100%; }
+caption { caption-side: top; text-align: left; font-size: 9pt; color: #6a737d; margin-bottom: 1.5mm; }
+caption::before { content: attr(data-label) "  "; font-weight: 700; color: #1b2a52; }
+thead th {
+  font-family: "Noto Sans SC", sans-serif; font-weight: 600; text-align: left; color: #16213d;
+  border-top: 2px solid #16213d; border-bottom: 1.2px solid #16213d; padding: 5px 8px; background: #fbfcfe;
+}
+tbody td { padding: 4.5px 8px; border-bottom: 1px solid #e8ebef; vertical-align: top; }
+tbody tr:last-child td { border-bottom: 2px solid #16213d; }
+tr { page-break-inside: avoid; }
+
+/* 提示框（左边框，符合 LaTeX 风格） */
+.callout {
+  border-left: 3px solid #4a6fd0; background: #f4f7fc; padding: 4mm 5mm; margin: 4mm 0;
+  page-break-inside: avoid; font-size: 10pt;
+}
+.callout .ct { font-family: "Noto Sans SC"; font-weight: 600; color: #1b2a52; display: block; margin-bottom: 1.5mm; }
+.callout.warn { border-left-color: #c2410c; background: #fdf5f0; }
+.callout.warn .ct { color: #9a3412; }
+.callout.tip { border-left-color: #15803d; background: #f1faf3; }
+.callout.tip .ct { color: #15803d; }
+
+/* 学习目标 / 小结 */
+.objectives, .summary {
+  border: 1px solid #dfe4ea; border-left: 3px solid #16213d; background: #fafbfc;
+  padding: 4mm 6mm; margin: 5mm 0; page-break-inside: avoid;
+}
+.objectives .bt, .summary .bt {
+  font-family: "Noto Sans SC"; font-weight: 700; color: #16213d; font-size: 10.5pt;
+  display: block; margin-bottom: 2mm; letter-spacing: 1px;
+}
+.objectives ul, .summary ul { margin: 0; padding-left: 5mm; }
+.objectives li, .summary li { font-size: 9.8pt; color: #3a4554; }
+
+/* Mermaid 容器 */
+.mermaid { text-align: center; margin: 4mm 0; max-width: 100%; }
+figure { margin: 4mm 0; text-align: center; page-break-inside: avoid; max-width: 100%; }
+figcaption { font-size: 9pt; color: #6a737d; margin-top: 1.5mm; }
+figcaption::before { content: attr(data-label) "  "; font-weight: 700; color: #1b2a52; }
+
+/* 结语 */
+.epilogue { page-break-before: always; }
+
+a { color: #24292e; word-break: break-all; }
+.katex-display { overflow-x: auto; }
+hr.soft { border: none; border-top: 1px solid #e8ebef; margin: 6mm 0; }
+</style>
+</head>
+<body>
+
+<!-- ============ 封面 ============ -->
+<div class="cover">
+  <div class="dots"></div>
+  <div class="bolide"></div>
+  <div class="ring r1"></div>
+  <div class="ring r2"></div>
+  <div class="corner-tag"><span class="bar"></span>The Bolide Programming Language</div>
+  <div class="cover-content">
+    <h1 class="cover-title">Bolide<br><span class="accent">从入门到精通</span></h1>
+    <p class="cover-sub">基于 Cranelift 的 JIT / AOT 编译型语言 · 系统教程</p>
+    <div class="cover-rule"></div>
+    <div class="cover-tags">
+      <span>原生性能</span><span>Python 风格语法</span><span>ARC 内存模型</span>
+      <span>并发 / async</span><span>FFI</span><span>AOT 发布</span>
+    </div>
+  </div>
+  <div class="cover-foot">version <span class="v">0.13.1</span> &nbsp;·&nbsp; zero → mastery</div>
+</div>
+
+<!-- ============ 信息页 ============ -->
+<div class="frontmatter info">
+  <h2>关于本书</h2>
+  <table>
+    <tr><td>书名</td><td>Bolide 从入门到精通</td></tr>
+    <tr><td>副标题</td><td>从第一个程序到 AOT 原生发布的完整学习路径</td></tr>
+    <tr><td>版本基准</td><td>Bolide 0.13.1</td></tr>
+    <tr><td>编译后端</td><td>Cranelift（JIT 与 AOT 双模式）</td></tr>
+    <tr><td>文件扩展名</td><td>.bl</td></tr>
+    <tr><td>覆盖主题</td><td>语法 · 类型系统 · 内存模型 · 并发 · FFI · 标准库 · 工程实践</td></tr>
+    <tr><td>适合读者</td><td>第一次接触 Bolide 的开发者，以及希望系统掌握其工程能力的进阶读者</td></tr>
+    <tr><td>项目地址</td><td>github.com/streetartist/bolide</td></tr>
+  </table>
+  <div class="note">
+    <p>本书不是 API 清单，而是一条学习路径：从写出第一个程序开始，逐步走向类型系统、内存模型、并发、AOT 发布和与 C 互操作。</p>
+    <p>建议阅读顺序：第 1–4 章掌握安装、运行、基础语法和控制流；第 5–9 章掌握函数、一等函数、闭包、集合、类、模块和错误处理；第 10–13 章理解类型系统、内存管理、并发与异步；第 14–18 章学习 FFI、AOT 发布、Web/GUI 标准库、调试诊断、测试与性能优化；第 19–20 章完成综合项目并查阅语法速查。</p>
+  </div>
+</div>
+
+<!-- ============ 目录 ============ -->
+<div class="toc-page frontmatter">
+  <h2>目录 <span class="en">Contents</span></h2>
+  <ul class="toc">
+    <li><a href="#ch1"><span class="num">01</span><span class="t">认识 Bolide</span></a></li>
+    <li><a href="#ch2"><span class="num">02</span><span class="t">安装、运行与项目结构</span></a></li>
+    <li><a href="#ch3"><span class="num">03</span><span class="t">第一个程序</span></a></li>
+    <li><a href="#ch4"><span class="num">04</span><span class="t">基础语法：变量、类型、表达式</span></a></li>
+    <li><a href="#ch5"><span class="num">05</span><span class="t">控制流、作用域与求值顺序</span></a></li>
+    <li><a href="#ch6"><span class="num">06</span><span class="t">函数、参数与泛型</span></a></li>
+    <li><a href="#ch7"><span class="num">07</span><span class="t">一等函数、闭包与高阶编程</span></a></li>
+    <li><a href="#ch8"><span class="num">08</span><span class="t">字符串、列表、字典、元组与切片</span></a></li>
+    <li><a href="#ch9"><span class="num">09</span><span class="t">类、对象与面向对象</span></a></li>
+    <li><a href="#ch10"><span class="num">10</span><span class="t">枚举、模式匹配与错误处理</span></a></li>
+    <li><a href="#ch11"><span class="num">11</span><span class="t">模块系统与包管理器</span></a></li>
+    <li><a href="#ch12"><span class="num">12</span><span class="t">类型系统与类型推断</span></a></li>
+    <li><a href="#ch13"><span class="num">13</span><span class="t">内存管理：ARC、生命周期、weak、unowned</span></a></li>
+    <li><a href="#ch14"><span class="num">14</span><span class="t">并发、线程、通道与 async/await</span></a></li>
+    <li><a href="#ch15"><span class="num">15</span><span class="t">FFI 与 AOT 发布</span></a></li>
+    <li><a href="#ch16"><span class="num">16</span><span class="t">Web、模板、数据库与 GUI 标准库</span></a></li>
+    <li><a href="#ch17"><span class="num">17</span><span class="t">报错诊断、调试与测试</span></a></li>
+    <li><a href="#ch18"><span class="num">18</span><span class="t">性能优化与工程实践</span></a></li>
+    <li><a href="#ch19"><span class="num">19</span><span class="t">综合项目：命令行任务管理器</span></a></li>
+    <li><a href="#ch20"><span class="num">20</span><span class="t">附录：常用语法速查</span></a></li>
+    <li><a href="#epi"><span class="num">—</span><span class="t">结语</span></a></li>
+  </ul>
+</div>
+
+<!-- ============ 第 1 章 ============ -->
+<section class="chapter">
+<h1 id="ch1"><span class="ch-no">Chapter 01</span>认识 Bolide</h1>
+<div class="h1-rule"></div>
+
+<p class="lead">Bolide 的核心目标是把脚本语言的表达效率和原生编译语言的部署体验结合起来。</p>
+
+<div class="objectives">
+<span class="bt">学习目标</span>
+<ul>
+<li>理解 Bolide 的定位：高层表达力 + 原生性能</li>
+<li>区分 JIT 与 AOT 两种运行方式及其适用阶段</li>
+<li>能写出并运行一个最小程序</li>
+</ul>
+</div>
+
+<p>它有两种运行方式：</p>
+<ul>
+<li><strong>JIT</strong>：<code>bolide run main.bl</code>，适合开发、调试、快速试验。</li>
+<li><strong>AOT</strong>：<code>bolide compile main.bl -o main</code>，适合发布独立可执行文件。</li>
+</ul>
+
+<figure>
+<div class="mermaid">
+flowchart LR
+    S["源码 main.bl"] --> P["解析 / 类型检查"]
+    P --> C["Cranelift 代码生成"]
+    C -->|bolide run| J["JIT 即时执行"]
+    C -->|bolide compile| A["AOT 原生可执行文件"]
+</div>
+<figcaption data-label="图 1-1">同一份源码经 Cranelift 后端走向 JIT 或 AOT 两条路径</figcaption>
+</figure>
+
+<p>Bolide 适合这些场景：</p>
+<ul>
+<li>写性能足够好的命令行工具。</li>
+<li>写需要原生部署的服务端程序。</li>
+<li>写需要 C 互操作的系统边界代码。</li>
+<li>写带 GUI 的小工具。</li>
+<li>用高级语法组织中大型业务逻辑。</li>
+</ul>
+
+<p>Bolide 文件通常使用 <code>.bl</code> 扩展名。</p>
+
+<h2>1.1 它在语言光谱中的位置</h2>
+<p>把 Bolide 和两类常见语言放在一起，能更快建立直觉：它借用了脚本语言的书写方式，却走原生编译的部署路线。</p>
+<table>
+<caption data-label="表 1-1">Bolide 与常见语言的定位对照（基于本书所述特性）</caption>
+<thead><tr><th>维度</th><th>Python 风格脚本</th><th>系统级编译语言</th><th>Bolide</th></tr></thead>
+<tbody>
+<tr><td>书写风格</td><td>简洁、高层</td><td>偏底层、显式</td><td>简洁、高层（切片、具名参数、闭包）</td></tr>
+<tr><td>运行模型</td><td>解释执行</td><td>原生编译</td><td>JIT 开发 + AOT 发布</td></tr>
+<tr><td>类型系统</td><td>多为动态</td><td>静态</td><td>静态 + 类型推断，保留 <code>dynamic</code></td></tr>
+<tr><td>内存管理</td><td>GC</td><td>手动 / 所有权</td><td>ARC + 所有权 / 生命周期注解</td></tr>
+<tr><td>部署形态</td><td>需运行时</td><td>独立可执行</td><td>AOT 单文件可执行</td></tr>
+</tbody>
+</table>
+
+<h2>1.2 第一个最小程序</h2>
+<p>一个最小程序：</p>
+<pre class="lang" data-lang="bolide"><code>print("hello Bolide");</code></pre>
+
+<p>JIT 运行：</p>
+<pre class="lang nohl" data-lang="bash"><code>bolide run hello.bl</code></pre>
+
+<p>AOT 编译：</p>
+<pre class="lang nohl" data-lang="bash"><code>bolide compile hello.bl -o hello</code></pre>
+
+<div class="summary">
+<span class="bt">本章小结</span>
+<ul>
+<li>Bolide 用一套语法、两种运行模式覆盖「快速开发」与「原生发布」。</li>
+<li>开发期用 <code>bolide run</code>（JIT），发布期用 <code>bolide compile</code>（AOT）。</li>
+<li>它的设计取舍是：尽量保留高层表达力，同时不放弃原生性能与部署体验。</li>
+</ul>
+</div>
+</section>
+
+<!-- ============ 第 2 章 ============ -->
+<section class="chapter">
+<h1 id="ch2"><span class="ch-no">Chapter 02</span>安装、运行与项目结构</h1>
+<div class="h1-rule"></div>
+
+<div class="objectives">
+<span class="bt">学习目标</span>
+<ul>
+<li>从源码构建 Bolide，并运行示例</li>
+<li>区分单文件项目与包结构项目</li>
+<li>掌握 <code>run</code> / <code>compile</code> / <code>new</code> / <code>add</code> / <code>install</code> 等常用命令</li>
+</ul>
+</div>
+
+<p>从源码构建：</p>
+<pre class="lang nohl" data-lang="bash"><code>git clone https://github.com/streetartist/bolide.git
+cd bolide
+cargo build --release</code></pre>
+
+<p>运行示例：</p>
+<pre class="lang nohl" data-lang="bash"><code>cargo run --release -- run examples/hello.bl</code></pre>
+
+<p>发布包通常提供 <code>bolide</code> 或 <code>bolide.exe</code>。下载后可以直接运行：</p>
+<pre class="lang nohl" data-lang="bash"><code>bolide run your_program.bl</code></pre>
+
+<p>一个简单项目可以只有一个文件：</p>
+<pre class="lang nohl" data-lang="text"><code>hello.bl</code></pre>
+
+<p>稍复杂的项目建议使用包结构：</p>
+<pre class="lang nohl" data-lang="text"><code>my_app/
+  bolide.toml
+  src/
+    main.bl
+    util.bl</code></pre>
+
+<p><code>bolide.toml</code> 描述包名和依赖。<code>bolide run</code> 和 <code>bolide compile</code> 会自动向上查找 <code>bolide.toml</code>，解析依赖并注入编译器。</p>
+
+<h2>2.1 常用命令</h2>
+<pre class="lang nohl" data-lang="bash"><code>bolide run src/main.bl
+bolide compile src/main.bl -o app
+bolide compile src/lib.bl --lib --header
+bolide new my_app
+bolide add dep-name@1.0.0
+bolide install</code></pre>
+
+<table>
+<caption data-label="表 2-1">命令速查</caption>
+<thead><tr><th>命令</th><th>作用</th><th>典型阶段</th></tr></thead>
+<tbody>
+<tr><td><code>bolide run</code></td><td>JIT 直接运行源码</td><td>开发 / 调试</td></tr>
+<tr><td><code>bolide compile -o</code></td><td>AOT 编译为可执行文件</td><td>发布</td></tr>
+<tr><td><code>bolide compile --lib --header</code></td><td>编译静态库并生成 C 头文件</td><td>对外提供库</td></tr>
+<tr><td><code>bolide new</code></td><td>创建包结构项目</td><td>项目初始化</td></tr>
+<tr><td><code>bolide add</code> / <code>install</code></td><td>添加 / 安装依赖</td><td>依赖管理</td></tr>
+</tbody>
+</table>
+
+<div class="summary">
+<span class="bt">本章小结</span>
+<ul>
+<li>小脚本一个 <code>.bl</code> 即可；中型以上用 <code>bolide.toml</code> + <code>src/</code> 包结构。</li>
+<li>构建工具会自动向上查找 <code>bolide.toml</code> 并解析依赖。</li>
+</ul>
+</div>
+</section>
+
+<!-- ============ 第 3 章 ============ -->
+<section class="chapter">
+<h1 id="ch3"><span class="ch-no">Chapter 03</span>第一个程序</h1>
+<div class="h1-rule"></div>
+
+<div class="objectives">
+<span class="bt">学习目标</span>
+<ul>
+<li>用 <code>let</code> 定义变量，理解类型注解可省略的场景</li>
+<li>读取用户输入并做类型转换</li>
+</ul>
+</div>
+
+<p>创建 <code>hello.bl</code>：</p>
+<pre class="lang" data-lang="bolide"><code>let name: str = "Bolide";
+print("hello " + name);</code></pre>
+
+<p>运行：</p>
+<pre class="lang nohl" data-lang="bash"><code>bolide run hello.bl</code></pre>
+
+<p>Bolide 使用 <code>let</code> 定义变量。类型注解可以写，也可以在很多场景下省略：</p>
+<pre class="lang" data-lang="bolide"><code>let a: int = 10;
+let b = 20;
+print(a + b);</code></pre>
+
+<p>读取用户输入，可带提示或不带：</p>
+<pre class="lang" data-lang="bolide"><code>let name: str = input("name: "); // 带提示
+let content: str = input();       // 无提示
+print("hello " + name);</code></pre>
+
+<p><code>input()</code> 返回字符串。需要数字时显式转换：</p>
+<pre class="lang" data-lang="bolide"><code>let raw: str = input("age: ");
+let age: int = int(raw);
+print(age + 1);</code></pre>
+
+<div class="callout warn">
+<span class="ct">常见错误</span>
+<code>input()</code> 永远返回 <code>str</code>。直接对它做算术会出错——务必先用 <code>int(...)</code> 或 <code>float(...)</code> 转换。
+</div>
+
+<div class="summary">
+<span class="bt">本章小结</span>
+<ul>
+<li><code>let</code> 绑定变量，类型注解在能推断时可省略。</li>
+<li>边界数据（如输入）要在进入业务逻辑前显式转换类型。</li>
+</ul>
+</div>
+</section>
+
+<!-- ============ 第 4 章 ============ -->
+<section class="chapter">
+<h1 id="ch4"><span class="ch-no">Chapter 04</span>基础语法：变量、类型、表达式</h1>
+<div class="h1-rule"></div>
+
+<div class="objectives">
+<span class="bt">学习目标</span>
+<ul>
+<li>掌握变量绑定与赋值（含复合赋值）</li>
+<li>认识内建基本类型与字面量后缀</li>
+<li>理解运算符优先级与短路求值</li>
+</ul>
+</div>
+
+<h2>4.1 变量</h2>
+<pre class="lang" data-lang="bolide"><code>let x: int = 42;
+let pi: float = 3.14159;
+let ok: bool = true;
+let name: str = "Ada";</code></pre>
+
+<p>Bolide 的变量绑定使用 <code>let</code>。后续赋值使用 <code>=</code>：</p>
+<pre class="lang" data-lang="bolide"><code>let n: int = 1;
+n = n + 1;
+n += 10;</code></pre>
+
+<h2>4.2 基本类型</h2>
+<p>常用内建类型：</p>
+<table>
+<caption data-label="表 4-1">内建基本类型</caption>
+<thead><tr><th>类型</th><th>含义</th></tr></thead>
+<tbody>
+<tr><td><code>int</code></td><td>64 位整数</td></tr>
+<tr><td><code>float</code></td><td>双精度浮点</td></tr>
+<tr><td><code>bool</code></td><td>布尔值</td></tr>
+<tr><td><code>str</code></td><td>字符串</td></tr>
+<tr><td><code>bigint</code></td><td>任意精度整数</td></tr>
+<tr><td><code>decimal</code></td><td>十进制定点 / 高精度数</td></tr>
+<tr><td><code>dynamic</code></td><td>动态值</td></tr>
+<tr><td><code>none</code></td><td>空值字面量</td></tr>
+</tbody>
+</table>
+
+<p>示例：</p>
+<pre class="lang" data-lang="bolide"><code>let big: bigint = 123456789012345678901234567890b;
+let money: decimal = 19.99d;
+let empty = none;</code></pre>
+
+<div class="callout tip">
+<span class="ct">提示</span>
+字面量后缀 <code>b</code> 表示 <code>bigint</code>、<code>d</code> 表示 <code>decimal</code>，<strong>大小写均可</strong>（<code>999b</code> 与 <code>999B</code> 等价）。涉及金额、精确计算时用 <code>decimal</code> 而非 <code>float</code>，可避免二进制浮点误差。
+</div>
+
+<h2>4.3 数字字面量与字符串转义</h2>
+<p>数字字面量支持下划线分隔，便于阅读大数：</p>
+<pre class="lang" data-lang="bolide"><code>let million: int = 1_000_000;</code></pre>
+
+<p>字符串支持转义序列 <code>\" \\ \n \t \r \0</code>：</p>
+<pre class="lang" data-lang="bolide"><code>let quoted: str = "he said \"hi\"\nsecond line";</code></pre>
+
+<h2>4.4 表达式与运算符</h2>
+<pre class="lang" data-lang="bolide"><code>let a = 10 + 3 * 2;
+let b = (10 + 3) * 2;
+let c = a > b;
+let d = true and not false;
+let e = false or expensive_check();</code></pre>
+
+<p><code>and</code> / <code>or</code> 是短路求值：右侧只在需要时执行。</p>
+
+<h2>4.5 类型转换</h2>
+<p>Bolide 提供完整的类型转换函数。<code>int()</code> 对浮点是<strong>截断</strong>（非四舍五入）：</p>
+<pre class="lang" data-lang="bolide"><code>let a: int = int(3.7);       // float -> int (截断) = 3
+let b: int = int("123");     // str -> int = 123
+let c: int = int(999B);      // bigint -> int
+let d: int = int(45.6D);     // decimal -> int = 45
+
+let e: float = float(100);       // int -> float = 100.0
+let f: float = float("2.718");   // str -> float
+
+let h: str = str(12345);         // int -> str
+let j: str = str(true);          // bool -> str = "true"
+
+let m: bigint = bigint(100);     // int -> bigint
+let n: decimal = decimal(3.14);  // float -> decimal</code></pre>
+
+<table>
+<caption data-label="表 4-2">类型转换函数一览</caption>
+<thead><tr><th>函数</th><th>接受</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td><code>int(x)</code></td><td>float / str / bigint / decimal</td><td>浮点截断取整</td></tr>
+<tr><td><code>float(x)</code></td><td>int / str / decimal</td><td>转双精度浮点</td></tr>
+<tr><td><code>str(x)</code></td><td>任意基本类型</td><td>转字符串表示</td></tr>
+<tr><td><code>bigint(x)</code> / <code>decimal(x)</code></td><td>数值 / 字符串</td><td>转高精度类型</td></tr>
+</tbody>
+</table>
+
+<div class="summary">
+<span class="bt">本章小结</span>
+<ul>
+<li><code>let</code> 绑定 + <code>=</code> / <code>+=</code> 赋值；类型注解按需书写。</li>
+<li>字面量后缀 <code>b</code>/<code>d</code>（大小写均可）区分 <code>bigint</code>/<code>decimal</code>；数字可用 <code>_</code> 分隔；字符串支持 <code>\n \t \" \\</code> 等转义。</li>
+<li><code>and</code>/<code>or</code> 短路求值；<code>int()</code> 对浮点截断而非四舍五入。</li>
+</ul>
+</div>
+</section>
+
+<!-- ============ 第 5 章 ============ -->
+<section class="chapter">
+<h1 id="ch5"><span class="ch-no">Chapter 05</span>控制流、作用域与求值顺序</h1>
+<div class="h1-rule"></div>
+
+<div class="objectives">
+<span class="bt">学习目标</span>
+<ul>
+<li>使用 <code>if/elif/else</code>、<code>while</code>、<code>for</code> 组织控制流</li>
+<li>用 <code>break/continue</code> 精细控制循环</li>
+<li>理解块级作用域与参数求值顺序</li>
+</ul>
+</div>
+
+<h2>5.1 if / elif / else</h2>
+<pre class="lang" data-lang="bolide"><code>let n = int(input("n: "));
+
+if n > 0 {
+    print("positive");
+} elif n < 0 {
+    print("negative");
+} else {
+    print("zero");
+}</code></pre>
+
+<h2>5.2 while</h2>
+<pre class="lang" data-lang="bolide"><code>let i = 0;
+while i < 5 {
+    print(i);
+    i += 1;
+}</code></pre>
+
+<h2>5.3 for 与 range</h2>
+<p><code>range</code> 支持单参、起止、步长，步长可为负：</p>
+<pre class="lang" data-lang="bolide"><code>for i in range(5) { print(i); }         // 0 1 2 3 4
+for i in range(3, 7) { print(i); }      // 3 4 5 6
+for i in range(0, 10, 2) { print(i); }  // 0 2 4 6 8
+for i in range(10, 0, -2) { print(i); } // 10 8 6 4 2（负步长）</code></pre>
+
+<p>遍历列表：</p>
+<pre class="lang" data-lang="bolide"><code>let nums: list&lt;int&gt; = [10, 20, 30];
+for n in nums {
+    print(n);
+}</code></pre>
+
+<p>Python 风格的字典遍历，一次解构出键和值：</p>
+<pre class="lang" data-lang="bolide"><code>let scores = {"Alice": 100, "Bob": 85};
+for k, v in scores {
+    print(k);  // 键
+    print(v);  // 值
+}</code></pre>
+
+<h2>5.4 复合赋值与 break / continue</h2>
+<p>完整的复合赋值运算符：</p>
+<pre class="lang" data-lang="bolide"><code>let n: int = 10;
+n += 5;   // 15
+n -= 3;   // 12
+n *= 2;   // 24
+n /= 4;   // 6
+n %= 4;   // 2</code></pre>
+
+<pre class="lang" data-lang="bolide"><code>for i in range(10) {
+    if i == 3 {
+        continue;
+    }
+    if i == 8 {
+        break;
+    }
+    print(i);
+}</code></pre>
+
+<h2>5.5 作用域</h2>
+<p>块会创建局部作用域。内层变量不会污染外层：</p>
+<pre class="lang" data-lang="bolide"><code>let x = 1;
+
+if true {
+    let x = 2;
+    print(x); // 2
+}
+
+print(x); // 1</code></pre>
+
+<h2>5.6 求值顺序</h2>
+<p>函数参数、具名参数、变长参数和复合表达式按源码顺序求值。依赖副作用时，应把复杂表达式拆成临时变量，让顺序更清晰：</p>
+<pre class="lang" data-lang="bolide"><code>let a = next();
+let b = next();
+print(pair(a, b));</code></pre>
+
+<div class="callout tip">
+<span class="ct">提示</span>
+当表达式里有副作用（如读取流、递增计数器）时，拆成命名的临时变量，既保证顺序，又让代码意图一目了然。
+</div>
+
+<div class="summary">
+<span class="bt">本章小结</span>
+<ul>
+<li>控制流关键字与主流语言一致，块用 <code>{ }</code> 包裹。</li>
+<li><code>range</code> 支持起止与负步长；字典用 <code>for k, v in d</code> 同时取键值。</li>
+<li>复合赋值含 <code>+= -= *= /= %=</code>；每个块是独立作用域。</li>
+</ul>
+</div>
+</section>
+
+<!-- ============ 第 6 章 ============ -->
+<section class="chapter">
+<h1 id="ch6"><span class="ch-no">Chapter 06</span>函数、参数与泛型</h1>
+<div class="h1-rule"></div>
+
+<div class="objectives">
+<span class="bt">学习目标</span>
+<ul>
+<li>定义函数与返回类型</li>
+<li>使用默认参数、具名参数、变长参数</li>
+<li>理解参数模式（借用 / owned / ref）与泛型函数</li>
+</ul>
+</div>
+
+<h2>6.1 定义函数</h2>
+<pre class="lang" data-lang="bolide"><code>fn add(a: int, b: int) -> int {
+    return a + b;
+}
+
+print(add(1, 2));</code></pre>
+
+<p>无返回值函数可以省略返回类型：</p>
+<pre class="lang" data-lang="bolide"><code>fn greet(name: str) {
+    print("hello " + name);
+}</code></pre>
+
+<h2>6.2 默认参数</h2>
+<pre class="lang" data-lang="bolide"><code>fn greet(name: str = "world", punctuation: str = "!") {
+    print("hello " + name + punctuation);
+}
+
+greet();
+greet("Bolide");</code></pre>
+
+<h2>6.3 具名参数</h2>
+<pre class="lang" data-lang="bolide"><code>greet(name="Ada", punctuation=".");
+greet(punctuation="?", name="Bob");</code></pre>
+
+<p>Bolide 同时接受 <code>name=value</code> 和 <code>name: value</code> 风格的具名实参。</p>
+
+<h2>6.4 变长参数</h2>
+<pre class="lang" data-lang="bolide"><code>fn total(base: int = 0, *nums: int) -> int {
+    let sum = base;
+    for n in nums {
+        sum += n;
+    }
+    return sum;
+}
+
+print(total(10, 1, 2, 3));</code></pre>
+
+<p>关键字变长参数，函数体中类型为 <code>dict&lt;str, T&gt;</code>：</p>
+<pre class="lang" data-lang="bolide"><code>fn total(base: int = 10, *nums: int, **opts: int) -> int {
+    let sum: int = base;
+    for n in nums {              // nums 的类型是 list&lt;int&gt;
+        sum += n;
+    }
+    if opts.contains("bonus") {  // opts 的类型是 dict&lt;str, int&gt;
+        sum += opts["bonus"];
+    }
+    return sum;
+}</code></pre>
+
+<p>调用侧可以用 <code>*list_expr</code> 展开列表、<code>**dict_expr</code> 展开字典；未匹配的具名实参会落入 <code>**opts</code>：</p>
+<pre class="lang" data-lang="bolide"><code>let xs: list&lt;int&gt; = [2, 3];
+let kwargs: dict&lt;str, int&gt; = {"bonus": 4};
+
+print(total());                  // 10
+print(total(1, *xs, **kwargs));  // 展开列表与字典
+print(total(base=5, bonus=7));   // 未知具名参数进入 **opts</code></pre>
+
+<div class="callout warn">
+<span class="ct">参数顺序约束</span>
+<code>*args</code> 必须位于普通参数之后，<code>**kwargs</code> 必须是最后一个参数。当函数没有 <code>**kwargs</code> 接收时，传入未知具名参数会<strong>编译报错</strong>。
+</div>
+
+<h2>6.5 参数模式</h2>
+<p>Bolide 支持普通借用、所有权传递和引用修改：</p>
+<pre class="lang" data-lang="bolide"><code>fn take(owned value: list&lt;int&gt;) {
+    print(value);
+}
+
+fn bump(ref n: int) {
+    n += 1;
+}</code></pre>
+
+<table>
+<caption data-label="表 6-1">三种参数模式</caption>
+<thead><tr><th>模式</th><th>语义</th><th>典型用途</th></tr></thead>
+<tbody>
+<tr><td>默认（借用）</td><td>只读访问，不夺走所有权</td><td>大多数函数</td></tr>
+<tr><td><code>owned</code></td><td>把值的所有权交给函数</td><td>消费、转移资源</td></tr>
+<tr><td><code>ref</code></td><td>允许函数修改调用方变量</td><td>原地更新</td></tr>
+</tbody>
+</table>
+
+<h2>6.6 泛型函数</h2>
+<p>函数名后可声明 <code>&lt;T&gt;</code> 或 <code>&lt;T, U&gt;</code> 类型参数。调用点通常无需写类型实参，编译器按实参推断，并在后端编译前<strong>单态化</strong>为具体实例：</p>
+<pre class="lang" data-lang="bolide"><code>fn id&lt;T&gt;(x: T) -> T {
+    return x;
+}
+
+fn pair&lt;T, U&gt;(a: T, b: U) -> (T, U) {
+    return (a, b);
+}
+
+fn wrap&lt;T&gt;(x: T) -> list&lt;T&gt; {
+    return [x];
+}
+
+print(id(42));         // 42
+print(id("hello"));    // hello
+print(pair(10, "x"));  // (10, "x")
+print(wrap(7));        // [7]</code></pre>
+
+<div class="callout warn">
+<span class="ct">当前限制</span>
+泛型支持顶层函数的直接调用与嵌套调用；<strong>泛型方法</strong>、以及把<strong>未实例化的泛型函数作为一等值传递</strong>暂未支持。
+</div>
+
+<div class="summary">
+<span class="bt">本章小结</span>
+<ul>
+<li>参数能力完整：默认值、具名、<code>*args</code>（→<code>list</code>）/<code>**kwargs</code>（→<code>dict</code>），调用侧可 <code>*</code>/<code>**</code> 展开。</li>
+<li><code>owned</code> 转移所有权、<code>ref</code> 原地修改，默认是借用。</li>
+<li>泛型用 <code>&lt;T&gt;</code>/<code>&lt;T, U&gt;</code>，调用点单态化；泛型方法暂不支持。</li>
+</ul>
+</div>
+</section>
+
+<!-- ============ 第 7 章 ============ -->
+<section class="chapter">
+<h1 id="ch7"><span class="ch-no">Chapter 07</span>一等函数、闭包与高阶编程</h1>
+<div class="h1-rule"></div>
+
+<div class="objectives">
+<span class="bt">学习目标</span>
+<ul>
+<li>把函数当作值传递、返回、存储</li>
+<li>用闭包字面量捕获局部变量</li>
+<li>使用 <code>map</code> / <code>filter</code> 表达数据变换</li>
+</ul>
+</div>
+
+<p>函数是值：可以赋给变量、作为参数、作为返回值、放进集合。</p>
+
+<div class="callout tip">
+<span class="ct">命名约定</span>
+<code>fn</code> 只用于函数声明和闭包字面量；<code>func(T...) -> R</code> 是唯一的用户级函数值类型。C 函数指针、<code>*void</code> 等属于 FFI/编译器内部细节，不应暴露成普通业务类型。
+</div>
+
+<pre class="lang" data-lang="bolide"><code>fn add1(x: int) -> int { return x + 1; }
+fn double(x: int) -> int { return x * 2; }
+
+let f = add1;
+print(f(10)); // 11
+
+let g: func(int) -> int = double;
+print(g(10)); // 20</code></pre>
+
+<h2>7.1 函数作为参数</h2>
+<pre class="lang" data-lang="bolide"><code>fn apply(callback: func(int) -> int, x: int) -> int {
+    return callback(x);
+}
+
+print(apply(double, 21)); // 42</code></pre>
+
+<h2>7.2 返回函数</h2>
+<pre class="lang" data-lang="bolide"><code>fn pick(which: int) -> func(int) -> int {
+    if which == 0 {
+        return add1;
+    }
+    return double;
+}
+
+let f = pick(1);
+print(f(7)); // 14
+
+// 返回值可直接链式调用
+print(pick(0)(7)); // 8
+print(pick(1)(7)); // 14
+
+// 函数存入列表，按下标取出再调用
+let fns: list&lt;func(int) -> int&gt; = [add1, double];
+print(fns[0](5)); // 6
+print(fns[1](5)); // 10</code></pre>
+
+<h2>7.3 闭包</h2>
+<p>闭包使用 <code>fn(...) -> T { ... }</code> 字面量，会自动捕获局部变量：</p>
+<pre class="lang" data-lang="bolide"><code>fn make_adder(delta: int) -> func(int) -> int {
+    return fn(x: int) -> int {
+        return x + delta;
+    };
+}
+
+let add10 = make_adder(10);
+print(add10(5)); // 15</code></pre>
+
+<p>闭包适合延迟执行、回调、组合逻辑。</p>
+
+<h2>7.4 map / filter</h2>
+<pre class="lang" data-lang="bolide"><code>fn double(x: int) -> int { return x * 2; }
+fn is_even(x: int) -> bool { return x % 2 == 0; }
+
+let nums: list&lt;int&gt; = [1, 2, 3, 4];
+print(nums.map(double));     // [2, 4, 6, 8]
+print(nums.filter(is_even)); // [2, 4]</code></pre>
+
+<div class="summary">
+<span class="bt">本章小结</span>
+<ul>
+<li>函数是一等值，类型写作 <code>func(参数) -> 返回</code>。</li>
+<li>闭包字面量自动捕获环境，适合回调与逻辑组合。</li>
+<li><code>map</code>/<code>filter</code> 让数据变换更声明式。</li>
+</ul>
+</div>
+</section>
+
+<!-- ============ 第 8 章 ============ -->
+<section class="chapter">
+<h1 id="ch8"><span class="ch-no">Chapter 08</span>字符串、列表、字典、元组与切片</h1>
+<div class="h1-rule"></div>
+
+<div class="objectives">
+<span class="bt">学习目标</span>
+<ul>
+<li>掌握字符串常用方法与拼接</li>
+<li>使用列表、字典、元组组织数据</li>
+<li>用 Python 风格切片截取序列</li>
+</ul>
+</div>
+
+<h2>8.1 字符串</h2>
+<p><code>str</code> 提供丰富的方法，调用风格类似 Python：</p>
+<pre class="lang" data-lang="bolide"><code>let s: str = "Hello, World";
+
+print(s.len());               // 12
+print(s.upper());             // HELLO, WORLD
+print(s.lower());             // hello, world
+print(s.contains("World"));   // 1
+print(s.find("World"));       // 7
+print(s.starts_with("Hell")); // 1
+print(s.ends_with("rld"));    // 1
+print(s.replace("l", "L"));   // HeLLo, WorLd
+print(s.count("l"));          // 3
+
+print("  trim me  ".trim());  // trim me
+print("ab".repeat(3));        // ababab
+print(s.substring(0, 5));     // Hello
+print(s.char_at(1));          // e
+
+let parts: list&lt;str&gt; = "a,b,c".split(",");
+print(parts);                 // ["a", "b", "c"]</code></pre>
+
+<p>常用别名：<code>length()</code>/<code>size()</code>、<code>strip()</code>、<code>index_of()</code>、<code>includes()</code>、<code>substr()</code>。字符串可直接用 <code>+</code> 拼接。</p>
+
+<div class="callout warn">
+<span class="ct">Unicode 注意</span>
+字符串索引和切片按 <strong>Unicode 码点</strong>处理；但 <code>len()</code> 当前返回 <strong>UTF-8 字节长度</strong>。处理多字节字符时需留意这一区别。
+</div>
+
+<h2>8.2 列表</h2>
+<p>列表提供成套的 Python 风格操作：</p>
+<pre class="lang" data-lang="bolide"><code>let nums: list&lt;int&gt; = [3, 1, 4, 1, 5, 9];
+
+nums.push(10);            // 追加
+let x: int = nums.pop();  // 弹出末尾
+print(nums.len());
+
+print(nums[0]);           // 取元素
+nums[0] = 100;            // 设元素
+
+nums.insert(1, 42);                // 索引 1 处插入
+let removed: int = nums.remove(2); // 移除索引 2
+
+print(nums.contains(4));  // 是否包含（0/1）
+print(nums.index_of(4));  // 索引，找不到返回 -1
+print(nums.count(1));     // 出现次数
+
+print(nums.first());      // 第一个
+print(nums.last());       // 最后一个
+print(nums.is_empty());   // 是否为空
+
+nums.reverse();           // 原地反转
+nums.sort();              // 原地排序
+
+let more: list&lt;int&gt; = [100, 200];
+nums.extend(more);        // 扩展
+let copy: list&lt;int&gt; = nums.copy(); // 复制
+nums.clear();             // 清空</code></pre>
+
+<h2>8.3 字典</h2>
+<pre class="lang" data-lang="bolide"><code>// 强类型字典
+let scores: dict&lt;str, int&gt; = {"Alice": 100, "Bob": 90};
+print(scores["Alice"]);   // 100
+
+scores["Charlie"] = 95;        // 插入/更新
+scores.remove("Bob");          // 删除
+print(scores.len());
+print(scores.contains("Alice"));
+print(scores.keys());          // 所有键
+print(scores.values());        // 所有值</code></pre>
+
+<p>键值异构时会自动推导为 <code>dict&lt;dynamic, dynamic&gt;</code> 并装箱：</p>
+<pre class="lang" data-lang="bolide"><code>let profile = {"name": "Bolide", 1: "Version", "active": true};
+print(profile["name"]); // "Bolide"
+print(profile[1]);      // "Version"</code></pre>
+
+<h2>8.4 元组</h2>
+<pre class="lang" data-lang="bolide"><code>let point: (int, int) = (3, 4);
+print(point[0]);
+print(point[1]);</code></pre>
+
+<h2>8.5 切片</h2>
+<p>字符串、列表、元组都支持 <code>seq[start:end:step]</code>；三者均可省略，并支持负索引与负步长：</p>
+<pre class="lang" data-lang="bolide"><code>let text: str = "Hello, World";
+print(text[0:5]);   // Hello
+print(text[7:]);    // World
+print(text[::2]);   // Hlo ol
+print(text[::-1]);  // dlroW ,olleH（反转）
+print(text[-1]);    // d（负索引）
+
+let nums: list&lt;int&gt; = [10, 20, 30, 40, 50];
+print(nums[1:4]);   // [20, 30, 40]
+print(nums[-2:]);   // [40, 50]
+print(nums[::-1]);  // [50, 40, 30, 20, 10]
+
+// 元组切片返回元组
+let t: (int, int, int, int) = (1, 2, 3, 4);
+let mid: (int, int) = t[1:3];
+print(mid);         // (2, 3)</code></pre>
+
+<table>
+<caption data-label="表 8-1">切片语法速记</caption>
+<thead><tr><th>写法</th><th>含义</th></tr></thead>
+<tbody>
+<tr><td><code>seq[1:4]</code></td><td>索引 1 到 3（左闭右开）</td></tr>
+<tr><td><code>seq[:3]</code> / <code>seq[2:]</code></td><td>到索引 2 / 从索引 2 起</td></tr>
+<tr><td><code>seq[::2]</code></td><td>步长为 2</td></tr>
+<tr><td><code>seq[-1]</code> / <code>seq[-2:]</code></td><td>负索引从末尾计</td></tr>
+<tr><td><code>seq[::-1]</code></td><td>反向（步长 -1）</td></tr>
+</tbody>
+</table>
+
+<div class="summary">
+<span class="bt">本章小结</span>
+<ul>
+<li>字符串方法丰富，注意「索引按码点、<code>len()</code> 按字节」。</li>
+<li>列表方法成套：<code>push/pop/insert/remove/sort/reverse/extend/copy</code> 等。</li>
+<li>字典支持强类型与混合类型；切片对三种序列统一适用，支持负索引/负步长。</li>
+</ul>
+</div>
+</section>
+
+<!-- ============ 第 9 章 ============ -->
+<section class="chapter">
+<h1 id="ch9"><span class="ch-no">Chapter 09</span>类、对象与面向对象</h1>
+<div class="h1-rule"></div>
+
+<div class="objectives">
+<span class="bt">学习目标</span>
+<ul>
+<li>定义类、字段与方法</li>
+<li>用默认值或构造参数初始化对象</li>
+<li>通过继承复用与覆写行为</li>
+</ul>
+</div>
+
+<p>类用于组织数据和行为。<strong>方法不需要声明 <code>self</code> 形参</strong>，在方法体内直接用 <code>self</code> 访问字段：</p>
+<pre class="lang" data-lang="bolide"><code>class Point {
+    x: int;
+    y: int;
+
+    fn distance() -> int {
+        return self.x * self.x + self.y * self.y;
+    }
+
+    fn move_by(dx: int, dy: int) {
+        self.x = self.x + dx;
+        self.y = self.y + dy;
+    }
+}
+
+// 用构造函数按字段顺序初始化
+let p: Point = Point(3, 4);
+print(p.distance()); // 25
+
+p.move_by(1, 1);
+print(p.x); // 4
+print(p.y); // 5</code></pre>
+
+<p>字段也可以带默认值：</p>
+<pre class="lang" data-lang="bolide"><code>class Counter {
+    value: int = 0;
+
+    fn inc() {
+        self.value = self.value + 1;
+    }
+
+    fn get() -> int {
+        return self.value;
+    }
+}
+
+let c = Counter();
+c.inc();
+c.inc();
+print(c.get()); // 2</code></pre>
+
+<h2>9.1 继承</h2>
+<p>子类用 <code>class Child: Parent</code> 声明，继承父类字段与方法；构造时按「父类字段 + 子类字段」的顺序传参：</p>
+<pre class="lang" data-lang="bolide"><code>class Animal {
+    age: int;
+    fn get_age() -> int { return self.age; }
+}
+
+class Dog: Animal {
+    name: int;
+    fn bark() -> int { return 100; }
+}
+
+let dog: Dog = Dog(3, 42); // age=3, name=42
+print(dog.get_age());      // 3（继承的方法）
+print(dog.bark());         // 100</code></pre>
+
+<div class="callout tip">
+<span class="ct">设计建议</span>
+对象适合表达拥有状态的实体；纯计算优先用函数。不要为没有状态的逻辑强行包一层类。
+</div>
+
+<div class="summary">
+<span class="bt">本章小结</span>
+<ul>
+<li>类聚合字段与方法，<strong>方法不写 <code>self</code> 形参</strong>，体内用 <code>self.field</code> 访问。</li>
+<li>字段可带默认值；构造函数按字段声明顺序接收实参。</li>
+<li><code>class Child: Parent</code> 继承字段与方法，构造按父字段在前的顺序传参。</li>
+</ul>
+</div>
+</section>
+
+<!-- ============ 第 10 章 ============ -->
+<section class="chapter">
+<h1 id="ch10"><span class="ch-no">Chapter 10</span>枚举、模式匹配与错误处理</h1>
+<div class="h1-rule"></div>
+
+<div class="objectives">
+<span class="bt">学习目标</span>
+<ul>
+<li>用 <code>enum</code> / <code>union</code> 建模代数数据类型</li>
+<li>用 <code>match</code> 做模式匹配</li>
+<li>用 <code>try/catch/finally</code> 与自定义错误类处理异常</li>
+</ul>
+</div>
+
+<h2>10.1 枚举与 union</h2>
+<p>Bolide 支持代数数据类型风格的 <code>enum</code> / <code>union</code>：</p>
+<pre class="lang" data-lang="bolide"><code>enum OptionInt {
+    Some(int),
+    None,
+}</code></pre>
+
+<p>模式匹配：</p>
+<pre class="lang" data-lang="bolide"><code>fn describe(x: OptionInt) -> str {
+    match x {
+        OptionInt.Some(v) => {
+            return "value=" + str(v);
+        },
+        OptionInt.None() => {
+            return "none";
+        },
+    }
+}</code></pre>
+
+<h2>10.2 throw / try / catch / finally</h2>
+<p>异常用于非预期、需要跨层中止的错误。<code>throw</code> 只能抛出 <code>Error</code> 或 <code>Error</code> 子类，<code>catch</code> 也只能按 <code>Error</code> 体系捕获。</p>
+<pre class="lang" data-lang="bolide"><code>try {
+    throw Error("boom");
+} catch (e: Error) {
+    print("caught: " + e.message);
+} finally {
+    print("cleanup");
+}</code></pre>
+
+<p><code>finally</code> 无论是否抛错都会执行，适合释放资源、关闭连接、记录日志。</p>
+
+<p>可选的 <code>throws</code> 注解用于说明函数可能抛出的异常：</p>
+<pre class="lang" data-lang="bolide"><code>fn load_config(path: str) throws Error -> str {
+    throw Error("missing config: " + path);
+}</code></pre>
+
+<h2>10.3 内置 Error 类与自定义错误</h2>
+<p>编译器内置一个 <code>Error</code> 类（单字段 <code>message: str</code>），<strong>无需声明即可直接使用</strong>。自定义子类继承 <code>Error</code> 后，可被基类 <code>catch</code> 统一捕获（子类匹配）：</p>
+<pre class="lang" data-lang="bolide"><code>// 直接抛出/捕获内置 Error
+try {
+    throw Error("boom");
+} catch (e: Error) {
+    print(e.message); // boom
+}
+
+// 自定义子类，被基类 catch 捕获
+class MyError: Error {}
+
+try {
+    throw MyError("custom failure");
+} catch (e: Error) {
+    print(e.message); // custom failure
+}</code></pre>
+
+<p><code>throw</code> 不再接受任意值；基础类型如 <code>int</code>、<code>str</code> 不能直接抛出或捕获。异常会跨函数传播到最近的匹配 <code>catch</code>，<code>finally</code> 在展开过程中仍会执行。</p>
+
+<h2>10.4 跨函数传播与重新抛出</h2>
+<pre class="lang" data-lang="bolide"><code>class ParseError: Error {}
+
+fn parse_config() {
+    throw ParseError("bad syntax");
+}
+
+try {
+    parse_config();
+} catch (e: ParseError) {
+    print("parse failed: " + e.message);
+} catch (e: Error) {
+    print("other error: " + e.message);
+}</code></pre>
+
+<h2>10.5 Option / Result 与 ?</h2>
+<p>值可能缺失时用 <code>Option&lt;T&gt;</code>，可恢复错误用 <code>Result&lt;T, E&gt;</code>：</p>
+<pre class="lang" data-lang="bolide"><code>fn parse_id(raw: str) -> Result&lt;int, Error&gt; {
+    if raw.len() == 0 {
+        return Result.Err(Error("empty id"));
+    }
+    return Result.Ok(int(raw));
+}
+
+fn load_id(raw: str) -> Result&lt;int, Error&gt; {
+    let id: int = parse_id(raw)?;
+    return Result.Ok(id + 1);
+}</code></pre>
+
+<p><code>expr?</code> 会解包 <code>Result.Ok(v)</code> / <code>Option.Some(v)</code>；遇到 <code>Result.Err(e)</code> / <code>Option.None()</code> 时从当前函数早返回。</p>
+
+<h2>10.6 Result 与异常互转</h2>
+<pre class="lang" data-lang="bolide"><code>fn init() {
+    let id: int = parse_id("42")!;
+    print(id);
+}
+
+let result: Result&lt;int, Error&gt; = try {
+    let id: int = parse_id("42")!;
+    id + 10;
+};</code></pre>
+<p><code>expr!</code> 把 <code>Result.Err(e)</code> 升级为异常；<code>try { ... }</code> 表达式把块内异常捕获成 <code>Result&lt;T, Error&gt;</code>。</p>
+
+<div class="callout tip">
+<span class="ct">实践建议</span>
+<ul style="margin:0;">
+<li>缺失值用 <code>Option&lt;T&gt;</code>，可恢复错误用 <code>Result&lt;T, E&gt;</code>。</li>
+<li>跨层异常使用明确的错误类，并继承内置 <code>Error</code>。</li>
+<li>只有非预期错误才用异常，不把 <code>catch</code> 当普通业务分支。</li>
+<li><code>finally</code> 只做清理，不写复杂业务逻辑。</li>
+</ul>
+</div>
+
+<div class="summary">
+<span class="bt">本章小结</span>
+<ul>
+<li><code>enum</code>/<code>union</code> + <code>match</code> 表达「多种形态之一」并强制穷尽处理。</li>
+<li>内置 <code>Error</code>（含 <code>message</code>）开箱即用，子类可被基类 <code>catch</code> 捕获；异常支持跨函数传播。</li>
+<li><code>Result</code> / <code>Option</code> 负责可恢复路径，<code>?</code>、<code>!</code>、<code>try</code> 表达式负责低成本互转。</li>
+<li><code>finally</code> 保证清理。</li>
+</ul>
+</div>
+</section>
+
+<!-- ============ 第 11 章 ============ -->
+<section class="chapter">
+<h1 id="ch11"><span class="ch-no">Chapter 11</span>模块系统与包管理器</h1>
+<div class="h1-rule"></div>
+
+<div class="objectives">
+<span class="bt">学习目标</span>
+<ul>
+<li>用 <code>import</code> 导入文件、模块路径与别名</li>
+<li>初始化包、添加依赖、安装依赖</li>
+<li>建立清晰的工程目录约定</li>
+</ul>
+</div>
+
+<p>导入本地文件：</p>
+<pre class="lang" data-lang="bolide"><code>import "math_utils.bl";</code></pre>
+
+<p>导入模块路径：</p>
+<pre class="lang" data-lang="bolide"><code>import math.utils;</code></pre>
+
+<p>别名：</p>
+<pre class="lang" data-lang="bolide"><code>import "long/path/to/mod.bl" as mod;</code></pre>
+
+<p>包结构：</p>
+<pre class="lang nohl" data-lang="text"><code>my_app/
+  bolide.toml
+  src/
+    main.bl</code></pre>
+
+<p>创建项目：</p>
+<pre class="lang nohl" data-lang="bash"><code>bolide new my_app</code></pre>
+
+<p>添加依赖：</p>
+<pre class="lang nohl" data-lang="bash"><code>bolide add name@1.0.0
+bolide add https://github.com/org/pkg.git --tag v1.0.0
+bolide add ../local_pkg --path</code></pre>
+
+<p>安装依赖：</p>
+<pre class="lang nohl" data-lang="bash"><code>bolide install</code></pre>
+
+<h2>11.1 bolide.toml 与依赖来源</h2>
+<p>依赖可来自 <strong>git 仓库</strong>、<strong>本地路径</strong>或 <strong>registry 索引</strong>三种：</p>
+<pre class="lang nohl" data-lang="toml"><code>[package]
+name = "myapp"          # 必填，作为依赖被引用时的命名空间
+version = "0.1.0"       # 必填
+lib = "src/lib.bl"      # 可选，包入口（默认 src/lib.bl）
+
+[dependencies]
+http  = { git = "https://github.com/bolide-lang/http.git", ref = "v1.2.0" }
+utils = { path = "../utils" }
+db    = { version = "0.3.0", registry = "https://registry.bolide.dev" }</code></pre>
+
+<p><code>bolide install</code> 会解析依赖并生成 <code>bolide.lock</code>。缓存位于 <code>%LOCALAPPDATA%\bolide</code>（Windows）或 <code>~/.cache/bolide</code>（Linux/macOS），可用 <code>BOLIDE_CACHE_DIR</code> 覆盖。依赖以包名作为命名空间使用：</p>
+<pre class="lang" data-lang="bolide"><code>import utils;          // 解析到 utils 包入口
+import utils as u;     // 别名
+import "utils/extra.bl"; // 导入包内其他源文件
+
+print(utils.greet());</code></pre>
+
+<h2>11.2 路径解析与作用域</h2>
+<p>导入路径按确定性顺序解析（不依赖进程工作目录）：绝对路径原样使用 → 相对路径基于<strong>导入方源文件目录</strong> → 包管理器依赖 → <code>BOLIDE_HOME</code> → 可执行文件所在目录。</p>
+<p>关于变量作用域，需要记住一条全局/局部规则：</p>
+<table>
+<caption data-label="表 11-1">全局与局部变量</caption>
+<thead><tr><th>声明位置</th><th>性质</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td>顶层 <code>let</code></td><td>全局变量</td><td>函数内可读取与赋值（GUI 回调依赖这一点）</td></tr>
+<tr><td>函数内 <code>let</code></td><td>局部变量</td><td>同名时遮蔽全局变量</td></tr>
+</tbody>
+</table>
+<p>全局与局部能力一致：都可作 <code>ref</code> 实参、可作通道用于 <code>send</code>/<code>recv</code> 收发与 <code>select</code>、支持全部类型。</p>
+
+<div class="callout tip">
+<span class="ct">工程建议</span>
+<ul style="margin:0;">
+<li>一个文件只放一类概念。</li>
+<li>公共函数放在 <code>src/lib.bl</code> 或 <code>src/*.bl</code>。</li>
+<li>示例程序放 <code>examples/</code>，回归测试放 <code>tests/</code>。</li>
+</ul>
+</div>
+
+<div class="summary">
+<span class="bt">本章小结</span>
+<ul>
+<li><code>import</code> 支持文件、模块路径与 <code>as</code> 别名；符号位于以文件名命名的命名空间，不污染全局。</li>
+<li>依赖来自版本号 / Git / 本地路径，<code>install</code> 生成 <code>bolide.lock</code>。</li>
+<li>顶层 <code>let</code> 是全局变量，函数内可读写；同名时局部遮蔽全局。</li>
+</ul>
+</div>
+</section>
+
+<!-- ============ 第 12 章 ============ -->
+<section class="chapter">
+<h1 id="ch12"><span class="ch-no">Chapter 12</span>类型系统与类型推断</h1>
+<div class="h1-rule"></div>
+
+<div class="objectives">
+<span class="bt">学习目标</span>
+<ul>
+<li>理解「静态类型 + 类型推断」的取舍</li>
+<li>知道何时该显式标注复杂边界类型</li>
+<li>恰当（而非滥用）地使用 <code>dynamic</code></li>
+</ul>
+</div>
+
+<p>Bolide 是静态类型语言，但很多地方可以推断类型。</p>
+<pre class="lang" data-lang="bolide"><code>let x = 1;        // int
+let s = "hello";  // str
+let xs = [1, 2];  // list&lt;int&gt;</code></pre>
+
+<p>复杂边界建议显式标注：</p>
+<pre class="lang" data-lang="bolide"><code>let callbacks: list&lt;func(int) -> int&gt; = [add1, double];
+let table: dict&lt;str, list&lt;int&gt;&gt; = {"a": [1, 2]};</code></pre>
+
+<p>函数签名建议明确写出：</p>
+<pre class="lang" data-lang="bolide"><code>fn score(name: str, values: list&lt;int&gt;) -> int {
+    let total = 0;
+    for v in values {
+        total += v;
+    }
+    return total;
+}</code></pre>
+
+<h2>12.1 类型一览</h2>
+<table>
+<caption data-label="表 12-1">Bolide 类型系统</caption>
+<thead><tr><th>类型</th><th>说明</th><th>示例</th></tr></thead>
+<tbody>
+<tr><td><code>int</code></td><td>64 位整数</td><td><code>let x: int = 42;</code></td></tr>
+<tr><td><code>float</code></td><td>64 位浮点</td><td><code>let pi: float = 3.14;</code></td></tr>
+<tr><td><code>bool</code></td><td>布尔值</td><td><code>let f: bool = true;</code></td></tr>
+<tr><td><code>str</code></td><td>字符串</td><td><code>let s: str = "hi";</code></td></tr>
+<tr><td><code>bigint</code></td><td>任意精度整数</td><td><code>let b: bigint = 999b;</code></td></tr>
+<tr><td><code>decimal</code></td><td>高精度小数</td><td><code>let d: decimal = 3.14d;</code></td></tr>
+<tr><td><code>list&lt;T&gt;</code></td><td>泛型列表</td><td><code>list&lt;int&gt; = [1, 2]</code></td></tr>
+<tr><td><code>dict&lt;K, V&gt;</code></td><td>字典</td><td><code>dict&lt;str, int&gt;</code></td></tr>
+<tr><td><code>tuple</code></td><td>元组</td><td><code>(1, 2, 3)</code></td></tr>
+<tr><td><code>channel&lt;T&gt;</code></td><td>通道</td><td><code>channel&lt;int&gt;</code></td></tr>
+<tr><td><code>Future&lt;T&gt;</code></td><td>冷协程 Future</td><td><code>let f: Future&lt;int&gt; = async_fn();</code></td></tr>
+<tr><td><code>Task&lt;T&gt;</code></td><td>已启动任务句柄</td><td><code>let t: Task&lt;int&gt; = spawn work();</code></td></tr>
+<tr><td><code>func(T...) -> R</code></td><td>函数类型</td><td><code>func(int) -> int</code></td></tr>
+<tr><td><code>dynamic</code></td><td>动态类型</td><td>运行时推导</td></tr>
+</tbody>
+</table>
+
+<h2>12.2 dynamic</h2>
+<p><code>dynamic</code> 适合边界数据、快速原型和异构值：</p>
+<pre class="lang" data-lang="bolide"><code>let x: dynamic = 42;
+print(x);</code></pre>
+
+<div class="callout warn">
+<span class="ct">注意</span>
+不要把 <code>dynamic</code> 当作默认类型。核心业务数据应尽量使用静态类型，把 <code>dynamic</code> 限制在系统边界。
+</div>
+
+<h2>12.3 函数签名类型</h2>
+<pre class="lang" data-lang="bolide"><code>let f: func(int, int) -> int = add;</code></pre>
+
+<p>函数值流转时，显式签名能让错误更早暴露，也能帮助代码阅读。</p>
+
+<div class="summary">
+<span class="bt">本章小结</span>
+<ul>
+<li>局部变量多可推断；公共边界与复杂类型显式标注。</li>
+<li><code>dynamic</code> 是边界工具，不是默认选项。</li>
+<li>显式函数签名让类型错误更早暴露。</li>
+</ul>
+</div>
+</section>
+
+<!-- ============ 第 13 章 ============ -->
+<section class="chapter">
+<h1 id="ch13"><span class="ch-no">Chapter 13</span>内存管理：ARC、生命周期、weak、unowned</h1>
+<div class="h1-rule"></div>
+
+<div class="objectives">
+<span class="bt">学习目标</span>
+<ul>
+<li>理解 ARC 引用计数如何自动管理对象生命周期</li>
+<li>区分 <code>owned</code> 与 <code>ref</code> 的所有权语义</li>
+<li>用 <code>from</code> 生命周期注解、<code>weak</code> / <code>unowned</code> 处理引用关系</li>
+</ul>
+</div>
+
+<p>Bolide 使用 ARC 引用计数管理对象生命周期。普通对象在最后一个强引用离开作用域后释放。</p>
+
+<p>多数代码不需要手动管理内存：</p>
+<pre class="lang" data-lang="bolide"><code>class Node {
+    name: str;
+}
+
+let n = Node("root");
+print(n.name);</code></pre>
+
+<h2>13.1 owned</h2>
+<p><code>owned</code> 表示把值的所有权交给函数：</p>
+<pre class="lang" data-lang="bolide"><code>fn consume(owned xs: list&lt;int&gt;) {
+    print(xs);
+}</code></pre>
+<p>调用后原变量不再拥有该值。</p>
+
+<h2>13.2 ref</h2>
+<p><code>ref</code> 允许函数修改调用方变量：</p>
+<pre class="lang" data-lang="bolide"><code>fn inc(ref n: int) {
+    n += 1;
+}
+
+let x = 1;
+inc(x);
+print(x); // 2</code></pre>
+
+<h2>13.3 生命周期 from</h2>
+<p>返回值依赖参数生命周期时，用 <code>from</code> 注解表达，可跳过 ARC 开销（借用而非增加引用计数）：</p>
+<pre class="lang" data-lang="bolide"><code>fn get_value(ref x: bigint) -> bigint from x {
+    return x;
+}
+
+let a: bigint = 100B;
+let b: bigint = get_value(a); // b 借用 a，不增加引用计数</code></pre>
+
+<p>编译器对借用施加检查，违反时<strong>编译报错</strong>：返回值必须来源于声明的参数；来源离开作用域后借用不可继续存活（悬空检测）；借用存活期间禁止对来源变量重新赋值；借用值<strong>不允许逃逸</strong>（不能存入容器、不能经通道/<code>spawn</code> 跨线程、不能从未声明 <code>from</code> 的函数返回）。</p>
+
+<div class="callout tip">
+<span class="ct">让借用逃逸</span>
+确实需要把借用值存起来时，显式拷贝后再存储，例如 <code>bigint(b)</code>。
+</div>
+
+<h2>13.4 weak 与 unowned</h2>
+<p>弱引用用 <code>weak Type</code> / <code>unowned Type</code> 声明（注意不是 <code>weak&lt;T&gt;</code>），都不增加强引用计数：</p>
+<pre class="lang" data-lang="bolide"><code>let obj: Node = Node(42);
+
+let w: weak Node = obj;     // 不增加强引用计数
+print(w.value);             // 访问前自动检查对象是否存活
+
+let u: unowned Node = obj;  // 语义上假设对象始终存在
+print(u.value);</code></pre>
+
+<p>对象被释放后再访问 <code>weak</code>/<code>unowned</code>，会触发<strong>确定性的运行时错误并中止程序</strong>（带诊断），而不是未定义行为：</p>
+<pre class="lang nohl" data-lang="text"><code>runtime error: weak/unowned reference accessed after object was deallocated</code></pre>
+
+<table>
+<caption data-label="表 13-1">引用方式选择</caption>
+<thead><tr><th>方式</th><th>延长生命周期</th><th>语义意图</th></tr></thead>
+<tbody>
+<tr><td>强引用（默认）</td><td>是</td><td>绝大多数情况</td></tr>
+<tr><td><code>weak Type</code></td><td>否</td><td>对象可能先于引用消亡（如子→父回指）</td></tr>
+<tr><td><code>unowned Type</code></td><td>否</td><td>对象保证活得比引用久</td></tr>
+</tbody>
+</table>
+
+<h2>13.5 并发安全</h2>
+<ul>
+<li>所有引用计数（强 / 弱）均为<strong>原子操作</strong>（与 Swift / Rust Arc 相同内存序），跨线程 retain/release 无数据竞争。</li>
+<li><code>spawn</code> 对传入对象采用 <strong>move 语义</strong>，原变量失效（运行时 MOVED 标记）。</li>
+<li>channel 当前只支持<strong>值类型</strong>传递。</li>
+</ul>
+
+<div class="callout tip">
+<span class="ct">实践建议</span>
+<ul style="margin:0;">
+<li>默认使用普通强引用。</li>
+<li>只有为避免引用环时使用 <code>weak</code>。</li>
+<li><code>unowned</code> 只用于明确的父子生命周期关系。</li>
+<li>复杂对象图先画所有权图，再编码。</li>
+</ul>
+</div>
+
+<div class="summary">
+<span class="bt">本章小结</span>
+<ul>
+<li>ARC 自动释放对象，引用计数为原子操作，跨线程安全。</li>
+<li><code>owned</code> 转移所有权、<code>ref</code> 原地修改、<code>from</code> 借用并约束不可逃逸。</li>
+<li>弱引用语法 <code>weak Type</code> / <code>unowned Type</code>，访问已释放对象会确定性 trap。</li>
+</ul>
+</div>
+</section>
+
+<!-- ============ 第 14 章 ============ -->
+<section class="chapter">
+<h1 id="ch14"><span class="ch-no">Chapter 14</span>并发、线程、通道与 async/await</h1>
+<div class="h1-rule"></div>
+
+<div class="objectives">
+<span class="bt">学习目标</span>
+<ul>
+<li>用 <code>spawn</code> / <code>await</code> 启动并等待任务</li>
+<li>理解冷 <code>Future&lt;T&gt;</code> 与热 <code>Task&lt;T&gt;</code> 的区别</li>
+<li>用 <code>spawn all</code> / <code>spawn select</code> / <code>pool</code> 组织结构化并发</li>
+<li>用通道方法与 <code>select</code> 在任务间传递消息</li>
+</ul>
+</div>
+
+<h2>14.1 spawn 与 await</h2>
+<p><code>spawn</code> 启动热任务，返回 <code>Task&lt;T&gt;</code>；等待结果统一使用 <code>await</code>：</p>
+<pre class="lang" data-lang="bolide"><code>fn heavy_work(id: int) -> int {
+    return id * id;
+}
+
+let t: Task&lt;int&gt; = spawn heavy_work(10);
+let result: int = await t;
+print(result);
+
+let blocking: Task&lt;int&gt; = spawn thread heavy_work(3);
+print(await blocking);</code></pre>
+
+<h2>14.2 async 函数与冷 Future</h2>
+<p><code>async fn</code> 调用会创建<strong>冷 Future</strong>——它不会自动并行执行，<code>await</code> 时才驱动；<code>await</code> 一次只等待一个 Future：</p>
+<pre class="lang" data-lang="bolide"><code>async fn fetch_data(id: int) -> int {
+    return id * 10;
+}
+
+let f1: Future&lt;int&gt; = fetch_data(1); // 冷 Future，未自动并行
+let f2: Future&lt;int&gt; = fetch_data(2);
+
+let r1: int = await f1;
+let r2: int = await f2;</code></pre>
+
+<h2>14.3 spawn all（并行等待）</h2>
+<p><code>spawn all</code> 并发执行一组任务并等待全部完成，结果以元组返回（类型可省略，编译器自动推断）：</p>
+<pre class="lang" data-lang="bolide"><code>fn fetch_a() -> int { return 100; }
+fn fetch_b() -> int { return 200; }
+
+let results: (int, int) = spawn all {
+    fetch_a(),
+    fetch_b()
+};
+print(results[0]); // 100
+print(results[1]); // 200</code></pre>
+
+<h2>14.4 spawn select（竞态等待）</h2>
+<p><code>spawn select</code> 并行启动所有任务，等待<strong>第一个</strong>完成的任务并执行对应分支：</p>
+<pre class="lang" data-lang="bolide"><code>spawn select {
+    res1 = task_fast() => {
+        print("fast finished");
+    }
+    res2 = task_slow() => {
+        print("slow finished");
+    }
+}</code></pre>
+
+<h2>14.5 线程池</h2>
+<pre class="lang" data-lang="bolide"><code>pool(4) {
+    let t1: Task&lt;int&gt; = spawn work(1);
+    let t2: Task&lt;int&gt; = spawn work(2);
+    print(await t1);
+    print(await t2);
+}
+// pool 块结束时自动等待所有任务完成</code></pre>
+
+<h2>14.6 通道</h2>
+<pre class="lang" data-lang="bolide"><code>let ch: channel&lt;int&gt; = channel();
+
+fn sender(c: channel&lt;int&gt;) -> int {
+    c.send(42);
+    return 0;
+}
+
+let t: Task&lt;int&gt; = spawn sender(ch);
+let value: int = ch.recv();
+print(value);
+await t;</code></pre>
+
+<h2>14.7 select（通道多路复用）</h2>
+<pre class="lang" data-lang="bolide"><code>select {
+    x = ch1.recv() => {
+        print(x);
+    }
+    y = ch2.recv() => {
+        print(y);
+    }
+    timeout(1000) => {
+        print("timeout");
+    }
+    default => {
+        print("nothing ready");
+    }
+}</code></pre>
+
+<div class="callout tip">
+<span class="ct">并发实践</span>
+<ul style="margin:0;">
+<li>共享可变状态越少越好。</li>
+<li>优先用通道传递消息。</li>
+<li><code>spawn</code> 传入对象时注意所有权语义。</li>
+<li>任务边界要明确处理错误。</li>
+</ul>
+</div>
+
+<div class="summary">
+<span class="bt">本章小结</span>
+<ul>
+<li><code>spawn</code> 返回热 <code>Task&lt;T&gt;</code>，用 <code>await</code> 取结果。</li>
+<li><code>async fn</code> 产生冷 <code>Future&lt;T&gt;</code>；<code>spawn all</code> 并行收束返回元组、<code>spawn select</code> 取最先完成者。</li>
+<li>线程池用 <code>pool(n)</code>；通道用 <code>send</code>/<code>recv</code> 收发，<code>select</code> 多路复用。</li>
+</ul>
+</div>
+</section>
+
+<!-- ============ 第 15 章 ============ -->
+<section class="chapter">
+<h1 id="ch15"><span class="ch-no">Chapter 15</span>FFI 与 AOT 发布</h1>
+<div class="h1-rule"></div>
+
+<div class="objectives">
+<span class="bt">学习目标</span>
+<ul>
+<li>用 <code>extern</code> 声明并调用 C 函数</li>
+<li>用 <code>export fn</code> 把 Bolide 函数导出给 C</li>
+<li>编译静态库 / 可执行文件，并掌握发布前检查项</li>
+</ul>
+</div>
+
+<p>Bolide 支持<strong>双向</strong> C 互操作：既能调用 C 库，也能被 C 程序调用。</p>
+
+<h2>15.1 调用 C 函数</h2>
+<p>源码只写跨平台的逻辑库名，不写 <code>.dll</code>/<code>.so</code>/<code>.dylib</code>。开发期用动态加载 <code>dyn:</code>：</p>
+<pre class="lang" data-lang="bolide"><code>extern "dyn:c" {
+    fn abs(x: c_int) -> c_int;
+}
+
+extern "dyn:m" {
+    fn sqrt(x: c_double) -> c_double;
+}
+
+let a: int = abs(-42);     // 42
+let b: float = sqrt(16.0); // 4.0</code></pre>
+
+<p>也支持把 Bolide 函数作为<strong>回调</strong>传给 C：</p>
+<pre class="lang" data-lang="bolide"><code>fn my_callback(a: int, b: int) -> int {
+    return a + b;
+}
+let r: int = test_callback(my_callback, 10, 20);</code></pre>
+
+<h2>15.2 外部库标识</h2>
+<p><code>extern "..."</code> 的库名使用跨平台标识，避免把平台文件名写进源码：</p>
+<table>
+<caption data-label="表 15-1">外部库标识</caption>
+<thead><tr><th>标识</th><th>用途</th><th>AOT</th><th>JIT</th></tr></thead>
+<tbody>
+<tr><td><code>bolide</code></td><td>runtime 内置函数</td><td>直接链接</td><td>直接链接</td></tr>
+<tr><td><code>lib:name</code></td><td>静态库 / 导入库链接</td><td>支持</td><td>不支持</td></tr>
+<tr><td><code>dyn:name</code></td><td>运行时动态加载</td><td>支持</td><td>支持</td></tr>
+<tr><td><code>auto:name</code></td><td>JIT 动态、AOT 链接</td><td>支持</td><td>支持</td></tr>
+</tbody>
+</table>
+<p>常用别名 <code>dyn:c</code>/<code>dyn:m</code>、<code>lib:c</code>/<code>lib:m</code>、<code>auto:c</code>/<code>auto:m</code> 分别对应 C 标准库 / 数学库。</p>
+
+<div class="callout warn">
+<span class="ct">关键约束</span>
+<ul style="margin:0;">
+<li><code>lib:name</code> 是 <strong>AOT-only</strong>：JIT 没有链接阶段，开发期动态加载请用 <code>dyn:name</code>。</li>
+<li>raw <code>extern</code> 绑定才用 <code>c_int</code>/<code>c_double</code>/<code>*char</code>/<code>*void</code> 等 C ABI 类型；普通 Bolide API 用 <code>int</code>/<code>float</code>/<code>str</code>。</li>
+<li><code>int</code> 是 Bolide 64 位整数，<strong>不等同于</strong> C <code>int</code>；精确匹配 C 签名时用 <code>c_*</code> 类型。</li>
+</ul>
+</div>
+<h2>15.3 export fn（C 调 Bolide）</h2>
+<p>用 <code>export fn</code> 标记要暴露给 C 的函数（裸符号名，无 name mangling），未标记的函数保持内部命名空间隔离：</p>
+<pre class="lang" data-lang="bolide"><code>export fn add(a: int, b: int) -> int {
+    return a + b;
+}</code></pre>
+
+<p>编译静态库并生成头文件：</p>
+<pre class="lang nohl" data-lang="bash"><code>bolide compile mathlib.bl --lib --header</code></pre>
+
+<p>产物：</p>
+<ul>
+<li>Windows：<code>mathlib.lib</code>、<code>mathlib.h</code></li>
+<li>Linux/macOS：<code>libmathlib.a</code>、<code>mathlib.h</code></li>
+</ul>
+
+<p>C 端链接 Bolide 库 + runtime 静态库即可调用：</p>
+<pre class="lang nohl" data-lang="bash"><code>cl main.c mathlib.lib bolide_runtime.lib   # Windows (MSVC)
+cc main.c libmathlib.a libbolide_runtime.a # Linux</code></pre>
+
+<div class="callout warn">
+<span class="ct">C 互调 ABI 约定</span>
+跨 C 边界仅保证<strong>数值与指针签名</strong>稳定：<code>int</code>/<code>bool</code> → <code>long long</code>，<code>float</code> → <code>double</code>；其余复合类型（<code>str</code>/<code>list</code>/对象）按运行时内部指针（<code>void*</code>）传递，C 端无法安全构造。需要 C 友好的导出函数时，请使用纯数值 / 指针签名。
+</div>
+
+<h2>15.4 AOT 发布</h2>
+<pre class="lang nohl" data-lang="bash"><code>bolide compile src/main.bl -o app</code></pre>
+
+<div class="callout warn">
+<span class="ct">发布前检查</span>
+<ul style="margin:0;">
+<li>是否依赖本地相对路径文件。</li>
+<li>是否需要动态库。</li>
+<li>是否需要 runtime 静态库参与链接。</li>
+<li>是否在目标平台验证过。</li>
+</ul>
+</div>
+
+<div class="summary">
+<span class="bt">本章小结</span>
+<ul>
+<li><code>extern</code> 区分 <code>dyn:</code>（开发）与 <code>lib:</code>（链接）两种来源。</li>
+<li><code>export fn</code> + <code>--lib --header</code> 把 Bolide 当作 C 库提供。</li>
+<li>AOT 发布要核对路径依赖、动态库、runtime 链接与目标平台。</li>
+</ul>
+</div>
+</section>
+
+<!-- ============ 第 16 章 ============ -->
+<section class="chapter">
+<h1 id="ch16"><span class="ch-no">Chapter 16</span>Web、模板、数据库与 GUI 标准库</h1>
+<div class="h1-rule"></div>
+
+<div class="objectives">
+<span class="bt">学习目标</span>
+<ul>
+<li>用 Web 标准库搭建路由与响应</li>
+<li>用模板生成 HTML、用数据库标准库做基本 CRUD</li>
+<li>用 GUI 标准库声明式绘制界面</li>
+</ul>
+</div>
+
+<h2>16.1 Web</h2>
+<p>Web 标准库目标是用简洁 API 写出接近 FastAPI 体验、又能 AOT 编译为原生单文件的服务。请求处理函数接收 <code>web.Request</code>、返回 <code>web.Response</code>：</p>
+<pre class="lang" data-lang="bolide"><code>import "std/web/web.bl";
+
+fn index(req: web.Request) -> web.Response {
+    return web.html("&lt;h1&gt;Hello Bolide&lt;/h1&gt;&lt;p&gt;path=" + req.path() + "&lt;/p&gt;");
+}
+
+fn hello(req: web.Request) -> web.Response {
+    return web.text("hello " + req.path_param("name"));
+}
+
+let app: web.App = web.app();
+app.get("/", index);
+app.get_async("/hello/{name}", hello);
+app.static_files("/static", "public");
+
+app.run("127.0.0.1", 8080);</code></pre>
+
+<table>
+<caption data-label="表 16-1">Web 标准库能力</caption>
+<thead><tr><th>方面</th><th>支持</th></tr></thead>
+<tbody>
+<tr><td>HTTP 方法</td><td>GET / POST / PUT / PATCH / DELETE / HEAD / OPTIONS / TRACE / CONNECT</td></tr>
+<tr><td>路由</td><td>精确路径、<code>/posts/{id}</code> 动态参数、静态文件目录</td></tr>
+<tr><td>请求读取</td><td>method / path / query / header / cookie / query 参数 / form 参数 / path 参数 / body 文本与 bytes</td></tr>
+<tr><td>响应构造</td><td><code>text</code> / <code>html</code> / <code>json</code> / <code>bytes</code> / <code>empty</code> / <code>redirect</code>，自定义 status/header/cookie</td></tr>
+<tr><td>会话</td><td>session id、get/set/contains/remove/clear/destroy/regenerate</td></tr>
+</tbody>
+</table>
+
+<h2>16.2 模板</h2>
+<p>模板引擎用 <code>template.render(模板, 数据字典)</code> 渲染；数据为 <code>dict&lt;str, dynamic&gt;</code>：</p>
+<pre class="lang" data-lang="bolide"><code>import "std/template/template.bl";
+
+let html: str = template.render(
+    "&lt;h1&gt;{{ title }}&lt;/h1&gt;{% for post in posts %}&lt;article&gt;{{ post.title }}&lt;/article&gt;{% endfor %}",
+    {
+        "title": "Blog",
+        "posts": posts,
+    }
+);
+print(html);</code></pre>
+
+<table>
+<caption data-label="表 16-2">模板语法</caption>
+<thead><tr><th>语法</th><th>含义</th></tr></thead>
+<tbody>
+<tr><td><code>{{ expr }}</code></td><td>输出并 <strong>HTML 转义</strong>（适合页面文本）</td></tr>
+<tr><td><code>{!! expr !!}</code></td><td>输出<strong>原始 HTML</strong>（仅用于可信内容）</td></tr>
+<tr><td><code>{% if cond %}…{% else %}…{% endif %}</code></td><td>条件渲染</td></tr>
+<tr><td><code>{% for x in xs %}…{% endfor %}</code></td><td>遍历列表</td></tr>
+<tr><td><code>post.title</code></td><td>点路径读取字典 / 对象字段</td></tr>
+</tbody>
+</table>
+
+<h2>16.3 数据库</h2>
+<p>文件数据库以目录为存储位置，表按文件保存。用户侧只接触 <code>str</code>、<code>dict&lt;str, dynamic&gt;</code>、<code>list&lt;dict&lt;str, dynamic&gt;&gt;</code> 和 <code>Database</code> 等 Bolide 类型：</p>
+<pre class="lang" data-lang="bolide"><code>import "std/db/db.bl";
+
+let database: db.Database = db.open("data/blog");
+database.create_table("posts", "title,slug,body,published");
+
+let row: dict&lt;str, dynamic&gt; = {
+    "title": "Hello Bolide",
+    "slug": "hello-bolide",
+    "body": "A first post.",
+    "published": true,
+};
+database.insert("posts", row);
+
+let posts: list&lt;dict&lt;str, dynamic&gt;&gt; = database.all("posts");
+database.close();</code></pre>
+
+<p>数据库方法：<code>create_table</code>、<code>insert</code>、<code>update</code>、<code>delete</code>、<code>get</code>、<code>all</code>、<code>where_eq</code>、<code>count</code>、<code>last_error</code>。</p>
+
+<h2>16.4 GUI</h2>
+<p>GUI 标准库后端为 <code>egui/eframe</code>，声明式渲染：状态存在全局变量或对象中，<code>gui.run(title, w, h, root)</code> 每帧调用 <code>root(ui)</code> 绘制界面。<code>ui.button</code> 返回 <code>bool</code> 表示是否被点击：</p>
+<pre class="lang" data-lang="bolide"><code>import "std/gui/gui.bl";
+
+let count: int = 0;
+let status: str = "准备";
+
+fn toolbar(ui: gui.Ui) {
+    if ui.button("增加") {
+        count = count + 1;
+        status = "计数 " + str(count);
+    }
+    if ui.button("清零") {
+        count = 0;
+        status = "已清零";
+    }
+}
+
+fn body(ui: gui.Ui) {
+    ui.heading("Bolide GUI");
+    ui.pack_left(8, toolbar);
+    ui.space(12);
+}
+
+fn root(ui: gui.Ui) {
+    ui.pad(16, 16, body);
+}
+
+gui.run("Bolide GUI", 420, 280, root);</code></pre>
+
+<table>
+<caption data-label="表 16-3">GUI 控件与布局</caption>
+<thead><tr><th>类别</th><th>API</th></tr></thead>
+<tbody>
+<tr><td>文本</td><td><code>label</code> / <code>heading</code> / <code>small</code> / <code>strong</code></td></tr>
+<tr><td>命令与选择</td><td><code>button</code> / <code>selectable</code> / <code>link</code></td></tr>
+<tr><td>输入</td><td><code>text_input</code> / <code>password_input</code> / <code>multiline_input</code> / <code>checkbox</code> / <code>slider</code></td></tr>
+<tr><td>状态</td><td><code>progress</code> / <code>separator</code> / <code>space</code></td></tr>
+<tr><td>布局</td><td><code>pad</code> / <code>pack_top·left·right·bottom</code> / <code>row</code> / <code>column</code> / <code>grid</code> / <code>fill</code> / <code>frame</code> / <code>scroll</code></td></tr>
+</tbody>
+</table>
+
+<div class="callout tip">
+<span class="ct">提示</span>
+GUI 与 Web 都建议先用 JIT 快速迭代，发布时用 AOT 编译为单文件（GUI/Web runtime 会静态链接进最终程序）。
+</div>
+
+<div class="summary">
+<span class="bt">本章小结</span>
+<ul>
+<li>Web：<code>web.app()</code> + 路由 + <code>web.text/html/json</code> 响应 + 会话，可 AOT 单文件发布。</li>
+<li>模板支持 <code>{{ }}</code>/<code>{!! !!}</code>/<code>{% if %}</code>/<code>{% for %}</code> 与点路径。</li>
+<li>数据库用 <code>db.open</code> + <code>create_table</code>/<code>insert</code>/<code>all</code> 等方法；GUI 用 <code>gui.run</code> + 声明式布局。</li>
+</ul>
+</div>
+</section>
+
+<!-- ============ 第 17 章 ============ -->
+<section class="chapter">
+<h1 id="ch17"><span class="ch-no">Chapter 17</span>报错诊断、调试与测试</h1>
+<div class="h1-rule"></div>
+
+<div class="objectives">
+<span class="bt">学习目标</span>
+<ul>
+<li>读懂 CLI 的源码级报错诊断</li>
+<li>识别常见错误类型及其处理方式</li>
+<li>用最小测试覆盖语义边界</li>
+</ul>
+</div>
+
+<p>Bolide 0.13.1 起，CLI 提供源码级报错诊断。<code>run</code>、<code>compile</code>、<code>compile --lib</code> 和 REPL 都会显示：</p>
+<ul>
+<li>错误阶段：<code>bolide::parse</code> 或 <code>bolide::compile</code></li>
+<li>文件名、行列号、源码片段、caret 标注、针对性 help</li>
+</ul>
+
+<p>示例：</p>
+<pre class="lang" data-lang="bolide"><code>let x = missing_name + 1;
+print(x);</code></pre>
+
+<p>输出：</p>
+<pre class="lang nohl" data-lang="text"><code>Error: bolide::compile
+
+  × Compile error: Undefined variable or function: missing_name
+   ╭─[example.bl:1:9]
+ 1 │ let x = missing_name + 1;
+   ·         ──────┬─────
+   ·               ╰── 'missing_name' is not defined
+ 2 │ print(x);
+   ╰────
+  help: Define the name before using it, or check for a spelling/import mistake.</code></pre>
+
+<p>常见错误：</p>
+<table>
+<caption data-label="表 17-1">常见错误与处理</caption>
+<thead><tr><th>错误</th><th>原因</th><th>处理</th></tr></thead>
+<tbody>
+<tr><td>Undefined variable</td><td>名字未定义或拼写错误</td><td>检查作用域、导入和拼写</td></tr>
+<tr><td>Undefined function</td><td>函数不存在或未导入</td><td>定义函数或导入模块</td></tr>
+<tr><td>Unknown method</td><td>接收者类型没有该方法</td><td>检查类型和方法名</td></tr>
+<tr><td>missing required argument</td><td>调用缺少必填参数</td><td>补充位置参数或具名参数</td></tr>
+<tr><td>Failed to parse module</td><td>import 的文件语法错误</td><td>直接运行被导入文件查看位置</td></tr>
+</tbody>
+</table>
+
+<h2>17.1 测试</h2>
+<p>一个测试文件可以用打印 <code>PASS</code> / <code>FAIL</code> 的方式表达：</p>
+<pre class="lang" data-lang="bolide"><code>fn expect(label: str, ok: bool) {
+    if ok {
+        print("PASS " + label);
+    } else {
+        print("FAIL " + label);
+    }
+}
+
+expect("add", 1 + 1 == 2);</code></pre>
+
+<p>运行：</p>
+<pre class="lang nohl" data-lang="bash"><code>bolide run tests/test_add.bl</code></pre>
+
+<div class="callout tip">
+<span class="ct">测试建议</span>
+<ul style="margin:0;">
+<li>语义边界写小测试。</li>
+<li>对函数值、闭包、所有权、异常、并发写回归测试。</li>
+<li>JIT 和 AOT 都要覆盖核心路径。</li>
+</ul>
+</div>
+
+<div class="summary">
+<span class="bt">本章小结</span>
+<ul>
+<li>报错带阶段、行列、源码片段与 help，定位成本低。</li>
+<li>记住五类高频错误的根因与处理路径。</li>
+<li>测试聚焦语义边界，并同时覆盖 JIT 与 AOT。</li>
+</ul>
+</div>
+</section>
+
+<!-- ============ 第 18 章 ============ -->
+<section class="chapter">
+<h1 id="ch18"><span class="ch-no">Chapter 18</span>性能优化与工程实践</h1>
+<div class="h1-rule"></div>
+
+<div class="objectives">
+<span class="bt">学习目标</span>
+<ul>
+<li>建立「先测量、再优化」的习惯</li>
+<li>掌握分配、字符串、集合、并发的优化要点</li>
+<li>形成可维护的工程实践约定</li>
+</ul>
+</div>
+
+<p>性能优化先测量，再修改。</p>
+
+<h2>18.1 优先级</h2>
+<ol>
+<li>减少不必要的分配。</li>
+<li>避免在热路径使用 <code>dynamic</code>。</li>
+<li>大集合处理时减少中间列表。</li>
+<li>频繁调用的函数写清楚类型签名。</li>
+<li>发布时使用 AOT。</li>
+</ol>
+
+<h2>18.2 字符串</h2>
+<p>大量拼接时，尽量把片段组织好，避免循环里反复创建大字符串。</p>
+<pre class="lang" data-lang="bolide"><code>let out = "";
+for item in items {
+    out = out + render_item(item);
+}</code></pre>
+<p>如果性能敏感，应改成批量渲染或模板。</p>
+
+<h2>18.3 集合</h2>
+<p><code>map</code> / <code>filter</code> 清晰，但在超热路径中可能产生中间集合。必要时使用显式循环。</p>
+
+<h2>18.4 并发</h2>
+<p>线程不是越多越快。对于 CPU 密集任务，线程池大小通常接近核心数；对于 IO 密集任务，可以更高，但要用压测确认。</p>
+
+<h2>18.5 工程实践</h2>
+<ul>
+<li>公共边界显式写类型。</li>
+<li>错误类型用类或 enum 建模。</li>
+<li>模块之间只暴露必要函数。</li>
+<li>测试覆盖语义边界，不只覆盖 happy path。</li>
+<li>发布前用 <code>bolide compile</code> 验证 AOT 路径。</li>
+</ul>
+
+<div class="summary">
+<span class="bt">本章小结</span>
+<ul>
+<li>优化顺序：测量 → 减分配 → 避热路径 <code>dynamic</code> → 减中间集合 → AOT。</li>
+<li>字符串与集合在热路径上警惕中间产物。</li>
+<li>线程数据量按 CPU/IO 性质压测确定，不盲目加大。</li>
+</ul>
+</div>
+</section>
+
+<!-- ============ 第 19 章 ============ -->
+<section class="chapter">
+<h1 id="ch19"><span class="ch-no">Chapter 19</span>综合项目：命令行任务管理器</h1>
+<div class="h1-rule"></div>
+
+<p class="lead">本章把前面的知识组合成一个小项目，串联类、列表、循环、函数与编译发布。</p>
+
+<div class="objectives">
+<span class="bt">项目目标</span>
+<ul>
+<li>添加任务</li>
+<li>列出任务</li>
+<li>标记完成</li>
+</ul>
+</div>
+
+<h2>19.1 数据模型</h2>
+<pre class="lang" data-lang="bolide"><code>class TodoItem {
+    id: int;
+    title: str;
+    done: bool = false;
+}</code></pre>
+
+<h2>19.2 基本操作</h2>
+<pre class="lang" data-lang="bolide"><code>fn add_task(tasks: list&lt;TodoItem&gt;, title: str) -> list&lt;TodoItem&gt; {
+    let id = tasks.len() + 1;
+    tasks.push(TodoItem(id, title, false));
+    return tasks;
+}
+
+fn list_tasks(tasks: list&lt;TodoItem&gt;) {
+    for item in tasks {
+        let mark = " ";
+        if item.done {
+            mark = "x";
+        }
+        print(str(item.id) + ". [" + mark + "] " + item.title);
+    }
+}
+
+fn finish(tasks: list&lt;TodoItem&gt;, id: int) -> list&lt;TodoItem&gt; {
+    for item in tasks {
+        if item.id == id {
+            item.done = true;
+        }
+    }
+    return tasks;
+}</code></pre>
+
+<h2>19.3 主程序</h2>
+<pre class="lang" data-lang="bolide"><code>let tasks: list&lt;TodoItem&gt; = [];
+
+tasks = add_task(tasks, "learn Bolide");
+tasks = add_task(tasks, "write a program");
+tasks = finish(tasks, 1);
+
+list_tasks(tasks);</code></pre>
+
+<p>运行：</p>
+<pre class="lang nohl" data-lang="bash"><code>bolide run todo.bl</code></pre>
+
+<p>编译：</p>
+<pre class="lang nohl" data-lang="bash"><code>bolide compile todo.bl -o todo</code></pre>
+
+<div class="callout tip">
+<span class="ct">扩展方向</span>
+<ul style="margin:0;">
+<li>用文件保存任务。</li>
+<li>用数据库标准库存储任务。</li>
+<li>用 Web 标准库做浏览器界面。</li>
+<li>用 GUI 标准库做桌面界面。</li>
+</ul>
+</div>
+
+<div class="summary">
+<span class="bt">本章小结</span>
+<ul>
+<li>用类建模实体、用列表存集合、用函数封装操作。</li>
+<li>同一份代码可 <code>run</code> 调试、可 <code>compile</code> 发布。</li>
+<li>沿数据库 / Web / GUI 方向都能自然扩展。</li>
+</ul>
+</div>
+</section>
+
+<!-- ============ 第 20 章 ============ -->
+<section class="chapter">
+<h1 id="ch20"><span class="ch-no">Chapter 20</span>附录：常用语法速查</h1>
+<div class="h1-rule"></div>
+
+<h2>20.1 变量</h2>
+<pre class="lang" data-lang="bolide"><code>let x: int = 1;
+let y = 2;
+x += 1;</code></pre>
+
+<h2>20.2 函数</h2>
+<pre class="lang" data-lang="bolide"><code>fn add(a: int, b: int) -> int {
+    return a + b;
+}</code></pre>
+
+<h2>20.3 默认参数与具名参数</h2>
+<pre class="lang" data-lang="bolide"><code>fn greet(name: str = "world") {
+    print(name);
+}
+
+greet(name="Bolide");</code></pre>
+
+<h2>20.4 列表</h2>
+<pre class="lang" data-lang="bolide"><code>let xs: list&lt;int&gt; = [1, 2, 3];
+xs.push(4);
+print(xs[0]);</code></pre>
+
+<h2>20.5 字典</h2>
+<pre class="lang" data-lang="bolide"><code>let m: dict&lt;str, int&gt; = {"a": 1};
+m["b"] = 2;</code></pre>
+
+<h2>20.6 类</h2>
+<pre class="lang" data-lang="bolide"><code>class Point {
+    x: int;
+    y: int;
+}
+
+let p = Point(1, 2);</code></pre>
+
+<h2>20.7 闭包</h2>
+<pre class="lang" data-lang="bolide"><code>let f: func(int) -> int = fn(x: int) -> int {
+    return x + 1;
+};</code></pre>
+
+<h2>20.8 异常</h2>
+<pre class="lang" data-lang="bolide"><code>try {
+    throw Error("error");
+} catch (e: Error) {
+    print(e.message);
+} finally {
+    print("cleanup");
+}</code></pre>
+
+<h2>20.9 Result / Option</h2>
+<pre class="lang" data-lang="bolide"><code>fn read_id(raw: str) -> Result&lt;int, Error&gt; {
+    let id: int = int(raw);
+    return Result.Ok(id);
+}
+
+fn checked_id(raw: str) -> Result&lt;int, Error&gt; {
+    let id: int = read_id(raw)?;
+    return Result.Ok(id + 1);
+}</code></pre>
+
+<h2>20.10 并发与通道</h2>
+<pre class="lang" data-lang="bolide"><code>fn work(x: int) -> int {
+    return x * 2;
+}
+
+async fn fetch(id: int) -> int {
+    return id * 10;
+}
+
+let task: Task&lt;int&gt; = spawn work(21);
+let value: int = await task;
+
+let f: Future&lt;int&gt; = fetch(1);
+print(await f);
+
+let ch: channel&lt;int&gt; = channel();
+ch.send(42);
+print(ch.recv());</code></pre>
+
+<h2>20.11 AOT 与静态库</h2>
+<pre class="lang nohl" data-lang="bash"><code>bolide compile main.bl -o main</code></pre>
+<pre class="lang" data-lang="bolide"><code>export fn add(a: int, b: int) -> int {
+    return a + b;
+}</code></pre>
+<pre class="lang nohl" data-lang="bash"><code>bolide compile lib.bl --lib --header</code></pre>
+
+<h2>20.12 关键字速览</h2>
+<table>
+<caption data-label="表 20-1">按用途分类的关键字（基于全书示例）</caption>
+<thead><tr><th>类别</th><th>关键字</th></tr></thead>
+<tbody>
+<tr><td>绑定 / 函数</td><td><code>let</code> · <code>fn</code> · <code>return</code> · <code>self</code></td></tr>
+<tr><td>控制流</td><td><code>if</code> · <code>elif</code> · <code>else</code> · <code>while</code> · <code>for</code> · <code>in</code> · <code>break</code> · <code>continue</code> · <code>match</code></td></tr>
+<tr><td>类型 / 数据</td><td><code>class</code> · <code>enum</code> · <code>union</code></td></tr>
+<tr><td>错误处理</td><td><code>try</code> · <code>catch</code> · <code>finally</code> · <code>throw</code> · <code>throws</code></td></tr>
+<tr><td>模块</td><td><code>import</code> · <code>as</code></td></tr>
+<tr><td>并发</td><td><code>spawn</code> · <code>await</code> · <code>async</code> · <code>all</code> · <code>pool</code> · <code>select</code> · <code>timeout</code> · <code>default</code></td></tr>
+<tr><td>内存 / 所有权</td><td><code>owned</code> · <code>ref</code> · <code>weak</code> · <code>unowned</code> · <code>from</code></td></tr>
+<tr><td>FFI</td><td><code>extern</code> · <code>export</code></td></tr>
+<tr><td>逻辑 / 字面量</td><td><code>and</code> · <code>or</code> · <code>not</code> · <code>true</code> · <code>false</code> · <code>none</code></td></tr>
+</tbody>
+</table>
+</section>
+
+<!-- ============ 结语 ============ -->
+<section class="chapter epilogue">
+<h1 id="epi"><span class="ch-no">Epilogue</span>结语</h1>
+<div class="h1-rule"></div>
+
+<p>学会 Bolide 的关键不是记住所有语法，而是掌握几条主线：</p>
+<ul>
+<li>用静态类型描述核心数据。</li>
+<li>用函数和闭包表达可组合逻辑。</li>
+<li>用类管理有状态对象。</li>
+<li>用模块和包管理工程边界。</li>
+<li>用 ARC、所有权和生命周期避免资源错误。</li>
+<li>用 JIT 快速开发，用 AOT 稳定发布。</li>
+</ul>
+
+<p>读完这本书后，你已经具备从零写出 Bolide 程序、组织中型项目、诊断错误、编写测试、接入 C、发布原生可执行文件的完整路径。</p>
+
+<hr class="soft">
+<p style="text-align:center; color:#8a949e; font-family:'JetBrains Mono'; font-size:9pt;">— Bolide 0.13.1 · 从入门到精通 —</p>
+</section>
+
+<!-- ============ 语法高亮（在 Paged.js 注入前于 load 阶段同步执行） ============ -->
+<script>
+(function () {
+  var KW = ['let','fn','return','if','elif','else','while','for','in','break','continue','class','enum','union','match','try','catch','finally','throw','throws','import','as','spawn','await','async','scope','pool','select','default','timeout','extern','export','owned','ref','weak','unowned','from','and','or','not'];
+  var LIT = ['true','false','none','self'];
+  var TY = ['int','float','bool','str','bigint','decimal','dynamic','list','dict','tuple','func','channel','Future','Task','bytes','ptr','c_int','c_double','char','void'];
+  var kw = {}, lit = {}, ty = {};
+  KW.forEach(function (w) { kw[w] = 1; });
+  LIT.forEach(function (w) { lit[w] = 1; });
+  TY.forEach(function (w) { ty[w] = 1; });
+  function esc(s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+  function isWord(c) { return /[A-Za-z0-9_]/.test(c); }
+  function hl(src) {
+    var out = '', i = 0, n = src.length;
+    while (i < n) {
+      var c = src[i];
+      if (c === '/' && src[i + 1] === '/') {
+        var j = src.indexOf('\n', i); if (j < 0) j = n;
+        out += '<span class="c-cm">' + esc(src.slice(i, j)) + '</span>'; i = j; continue;
+      }
+      if (c === '"') {
+        var j = i + 1;
+        while (j < n && src[j] !== '"') { if (src[j] === '\\') j++; j++; }
+        j++; out += '<span class="c-st">' + esc(src.slice(i, j)) + '</span>'; i = j; continue;
+      }
+      if (/[0-9]/.test(c)) {
+        var j = i;
+        while (j < n && /[0-9._]/.test(src[j])) j++;
+        if (src[j] === 'b' || src[j] === 'd') j++;
+        out += '<span class="c-nu">' + esc(src.slice(i, j)) + '</span>'; i = j; continue;
+      }
+      if (/[A-Za-z_]/.test(c)) {
+        var j = i;
+        while (j < n && isWord(src[j])) j++;
+        var w = src.slice(i, j);
+        var cls = kw[w] ? 'c-kw' : lit[w] ? 'c-li' : ty[w] ? 'c-ty' : null;
+        if (!cls && src[j] === '(') cls = 'c-fn';
+        out += cls ? ('<span class="' + cls + '">' + esc(w) + '</span>') : esc(w);
+        i = j; continue;
+      }
+      out += esc(c); i++;
+    }
+    return out;
+  }
+  var blocks = document.querySelectorAll('pre > code');
+  for (var k = 0; k < blocks.length; k++) {
+    var code = blocks[k];
+    if (code.parentNode.classList.contains('nohl')) continue;
+    code.innerHTML = hl(code.textContent);
+  }
+  if (window.mermaid) {
+    mermaid.initialize({
+      startOnLoad: true, theme: 'neutral',
+      themeVariables: { primaryColor: '#f5f5f5', primaryTextColor: '#333', primaryBorderColor: '#999', lineColor: '#666', fontFamily: 'Noto Sans SC, sans-serif' }
+    });
+  }
+})();
+</script>
+</body>
+</html>

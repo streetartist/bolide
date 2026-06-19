@@ -1,0 +1,125 @@
+// Result/exception interop sugar: ?, !, and try expression.
+
+fn ok_value() -> Result<int, Error> {
+    return Result.Ok(7);
+}
+
+fn err_value() -> Result<int, Error> {
+    return Result.Err(Error("bad"));
+}
+
+fn add_one_ok() -> Result<int, Error> {
+    let v: int = ok_value()?;
+    return Result.Ok(v + 1);
+}
+
+fn add_one_err() -> Result<int, Error> {
+    let v: int = err_value()?;
+    return Result.Ok(v + 1);
+}
+
+fn some_value() -> Option<int> {
+    return Option.Some(9);
+}
+
+fn none_value() -> Option<int> {
+    return Option.None();
+}
+
+fn option_ok() -> Option<int> {
+    let v: int = some_value()?;
+    return Option.Some(v + 1);
+}
+
+fn option_none() -> Option<int> {
+    let v: int = none_value()?;
+    return Option.Some(v + 1);
+}
+
+fn check(name: str, got: int, want: int) {
+    if got == want {
+        print("ok " + name);
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want));
+    }
+}
+
+match add_one_ok() {
+    Ok(v) => {
+        check("question ok", v, 8);
+    }
+    Err(e) => {
+        print("FAIL question ok err " + e.message);
+    }
+}
+
+match add_one_err() {
+    Ok(v) => {
+        print("FAIL question err ok " + str(v));
+    }
+    Err(e) => {
+        check("question err", e.message.len(), 3);
+    }
+}
+
+match option_ok() {
+    Some(v) => {
+        check("option question ok", v, 10);
+    }
+    None() => {
+        print("FAIL option question ok none");
+    }
+}
+
+match option_none() {
+    Some(v) => {
+        print("FAIL option question none some " + str(v));
+    }
+    None() => {
+        print("ok option question none");
+    }
+}
+
+try {
+    let v: int = ok_value()!;
+    check("bang ok", v, 7);
+} catch (e: Error) {
+    print("FAIL bang ok catch " + e.message);
+}
+
+try {
+    let v: int = err_value()!;
+    print("FAIL bang err value " + str(v));
+} catch (e: Error) {
+    check("bang err", e.message.len(), 3);
+}
+
+let captured_ok: Result<int, Error> = try {
+    let x: int = 2;
+    x + 5;
+};
+
+match captured_ok {
+    Ok(v) => {
+        check("try expr ok", v, 7);
+    }
+    Err(e) => {
+        print("FAIL try expr ok err " + e.message);
+    }
+}
+
+let captured_err: Result<int, Error> = try {
+    throw Error("boom");
+    99;
+};
+
+match captured_err {
+    Ok(v) => {
+        print("FAIL try expr err ok " + str(v));
+    }
+    Err(e) => {
+        check("try expr err", e.message.len(), 4);
+    }
+}
+
+print("result exception sugar done");

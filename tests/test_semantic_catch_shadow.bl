@@ -11,17 +11,17 @@ fn check(name: str, got: int, want: int) {
 let err: int = 7;
 
 try {
-    throw 42;
-} catch (err: int) {
-    check("catch shadow value", err, 42);
+    throw Error("42");
+} catch (err: Error) {
+    check("catch shadow value", err.message.len(), 2);
 }
 
 check("outer after catch", err, 7);
 
 try {
-    throw 11;
-} catch (e: int) {
-    let e: int = e + 1;
+    throw Error("11");
+} catch (e: Error) {
+    let e: int = e.message.len() + 10;
     check("inner catch shadow", e, 12);
 }
 

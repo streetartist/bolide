@@ -8,15 +8,15 @@ async fn async_bigint() -> bigint {
 }
 
 // 测试单个协程
-let f1: future = async_bigint();
+let f1 = async_bigint();
 let r1: bigint = await f1;
 print(r1);
 
 bigint_debug_stats();
 
 // 测试多个协程
-let f2: future = async_bigint();
-let f3: future = async_bigint();
+let f2 = async_bigint();
+let f3 = async_bigint();
 let r2: bigint = await f2;
 let r3: bigint = await f3;
 print(r2);

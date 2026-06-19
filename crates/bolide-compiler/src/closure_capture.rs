@@ -124,10 +124,6 @@ fn collect_stmt(
                 }
             }
         }
-        Statement::Send(s) => {
-            add_free(&s.channel, bound, free, seen);
-            collect_expr(&s.value, bound, free, seen);
-        }
         // 其余语句不涉及变量引用或暂不分析
         _ => {}
     }
@@ -230,17 +226,23 @@ fn collect_expr(
                 collect_expr(it, bound, free, seen);
             }
         }
-        Expr::Spawn(name, args) => {
+        Expr::Spawn(name, args) | Expr::SpawnThread(name, args) => {
             add_free(name, bound, free, seen);
             for a in args {
                 collect_expr(a, bound, free, seen);
             }
         }
-        Expr::Recv(channel) => add_free(channel, bound, free, seen),
         Expr::Await(e) => collect_expr(e, bound, free, seen),
         Expr::SpawnAll(exprs) => {
             for e in exprs {
                 collect_expr(e, bound, free, seen);
+            }
+        }
+        Expr::Propagate(e) | Expr::Raise(e) => collect_expr(e, bound, free, seen),
+        Expr::TryExpr(body) => {
+            let mut inner = bound.clone();
+            for stmt in body {
+                collect_stmt(stmt, &mut inner, free, seen);
             }
         }
         Expr::ListComprehension {

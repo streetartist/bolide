@@ -12,7 +12,7 @@
     <img src="https://img.shields.io/badge/License-MIT-brightgreen.svg" alt="License: MIT">
   </a>
   <a href="#">
-    <img src="https://img.shields.io/badge/version-0.12.3-blue.svg" alt="Version">
+    <img src="https://img.shields.io/badge/version-0.13.1-blue.svg" alt="Version">
   </a>
   <a href="#">
     <img src="https://img.shields.io/badge/platform-windows%20%7C%20linux-lightgrey.svg" alt="Platform">
@@ -46,6 +46,8 @@
 - **内存管理** - ARC 引用计数 + 生命周期注解 + weak/unowned 引用
 
 ## 快速开始
+
+完整教程见：[Bolide 从入门到精通](docs/book/bolide-from-zero-to-mastery.md)。
 
 ### 从源码构建
 
@@ -573,8 +575,8 @@ async fn fetch_data(id: int) -> int {
 }
 
 // 创建冷 Future；不会自动并行执行
-let f1: future = fetch_data(1);
-let f2: future = fetch_data(2);
+let f1: Future<int> = fetch_data(1);
+let f2: Future<int> = fetch_data(2);
 
 // await 只等待单个 Future
 let r1: int = await f1;
@@ -621,9 +623,10 @@ spawn select {
 
 ### 多线程与并行
 
-#### Spawn & Join
+#### Spawn & Await
 
-使用 `spawn`关键字在新的系统线程中启动任务：
+使用 `spawn` 启动热任务，返回 `Task<T>`；等待统一使用 `await`。
+`pool` 块内的普通 `spawn` 进入当前线程池，`spawn thread` 会显式使用独立系统线程。
 
 ```bolide
 fn heavy_work(id: int) -> int {
@@ -631,11 +634,11 @@ fn heavy_work(id: int) -> int {
     return id * id;
 }
 
-// 启动新线程
-let t: future = spawn heavy_work(10);
+// 启动独立系统线程
+let t: Task<int> = spawn thread heavy_work(10);
 
 // 等待线程结束并获取结果
-let result: int = join(t);
+let result: int = await t;
 ```
 
 #### 线程池 (Thread Pool)
@@ -645,16 +648,17 @@ let result: int = join(t);
 ```bolide
 pool(4) {
     // 这些任务将在4个工作线程中并发执行
-    spawn task(1);
-    spawn task(2);
-    spawn task(3);
+    let t1: Task<int> = spawn heavy_work(1);
+    let t2: Task<int> = spawn heavy_work(2);
+    print(await t1);
+    print(await t2);
 }
 // pool 块结束时会自动等待所有任务完成
 ```
 
 #### 通道 (Channels)
 
-线程间安全的通信机制：
+线程间安全的通信机制。通道收发采用方法风格，与字符串、列表等保持一致：
 
 ```bolide
 // 创建通道
@@ -662,13 +666,14 @@ let ch: channel<int> = channel();
 
 // 定义发送函数
 fn sender(c: channel<int>) {
-    c <- 42;
+    c.send(42);
 }
 
 // 启动发送线程
 spawn sender(ch);
 
-let val: int = <- ch;  // 接收数据
+let val: int = ch.recv();  // 接收数据
+ch.recv();                 // 纯同步：接收并丢弃返回值
 ```
 
 #### Channel Select (多路复用)
@@ -677,7 +682,7 @@ let val: int = <- ch;  // 接收数据
 
 ```bolide
 select {
-    val1 <- ch1 => {
+    val1 = ch1.recv() => {
         print("Received from ch1");
     }
     timeout(100) => {
@@ -806,14 +811,14 @@ import "utils/extra.bl";      // 导入包内的其他源文件（相对包源�
 - 运行时内部 ABI（如 `list_push`、`object_alloc`）**不暴露**给用户代码，
   列表/字典操作请使用方法语法（`xs.push(3)`）；
 - 用户可直接调用的内置函数（`print`、`input`、`range`、`str`/`int`/`float`
-  等类型转换、`join`、`channel`）是显式白名单，不受隔离影响。
+  等类型转换、`channel`）是显式白名单，不受隔离影响。
 
 ### 变量与作用域
 
 - 顶层 `let` 声明**全局变量**，函数内可读取、赋值（GUI 回调依赖这一点）；
 - 函数内的 `let` 声明**局部变量**，同名时遮蔽全局变量；
 - 全局变量与局部变量能力一致：可作 `ref` 实参、可作通道用于
-  `<-` 收发与 `select`、支持 `float` 等全部类型。
+  `send`/`recv` 收发与 `select`、支持 `float` 等全部类型。
 
 ### 类与面向对象
 
@@ -971,18 +976,17 @@ cc main.c libmathlib.a libbolide_runtime.a # Linux
 
 ### 错误处理 (try/catch/throw)
 
-Bolide 提供了轻量级的异常处理机制：`throw` 抛出异常，`try/catch` 捕获异常，支持可选的 `finally` 清理块。
+Bolide 提供了轻量级的异常处理机制：`throw` 抛出 `Error` 或其子类，`try/catch` 捕获异常，支持可选的 `finally` 清理块。可恢复错误推荐用 `Result<T, E>` 或 `Option<T>` 建模。
 
 #### 基本用法
 
 ```bolide
 try {
     print("in try body");
-    throw 42;
+    throw Error("boom");
     print("after throw (will not print)");
-} catch (e: int) {
-    print("caught: ");
-    print(e);  // 42
+} catch (e: Error) {
+    print("caught: " + e.message);
 }
 print("after try/catch");
 ```
@@ -993,11 +997,91 @@ print("after try/catch");
 throw_stmt = { "throw" ~ expr ~ ";" }
 try_stmt  = { "try" ~ block ~ catch_clause+ ~ finally? }
 catch_clause = { "catch" ~ "(" ~ ident ~ ":" ~ type_expr ~ ")" ~ block }
+throws_clause = { "throws" ~ type_expr ~ ("," ~ type_expr)* }
+try_expr = { "try" ~ block }
+postfix_expr = { primary ~ (... | "?" | "!")* }
 ```
 
-- **`throw`** 可以抛出任意类型的值（`int`、`str`、对象等）
-- **`catch (e: T)`** 通过类型标签匹配异常，支持子类匹配（编译器自动展开）
+- **`throw`** 只能抛出 `Error` 或 `Error` 子类
+- **`catch (e: T)`** 只能捕获 `Error` 或 `Error` 子类，支持子类匹配（编译器自动展开）
 - **`finally`** 块无论是否抛出异常都会执行，适合资源清理
+- **`throws`** 是可选函数注解，用于声明函数可能抛出的异常类型：
+  `fn load(path: str) throws IoError, ParseError -> Config { ... }`
+- **`expr?`** 解包 `Result.Ok(v)` / `Option.Some(v)`，遇到 `Err` / `None` 时从当前函数早返回
+- **`expr!`** 解包 `Result.Ok(v)`，遇到 `Err(e)` 时把 `e` 作为异常抛出（`E` 必须是 `Error` 或子类）
+- **`try { ... }` 表达式** 捕获块内抛出的异常并返回 `Result<T, Error>`；最后一个表达式语句作为 `Ok` 值，没有表达式时为 `Ok(0)`
+
+#### Result / Option 与 `?`
+
+`Result<T, E>` 和 `Option<T>` 是内置泛型 ADT，适合表达可恢复错误和值缺失：
+
+```bolide
+fn parse_number(text: str) -> Result<int, Error> {
+    if text.len() == 0 {
+        return Result.Err(Error("empty input"));
+    }
+    return Result.Ok(int(text));
+}
+
+fn load_value() -> Result<int, Error> {
+    let value: int = parse_number("42")?;
+    return Result.Ok(value + 1);
+}
+```
+
+`expr?` 的规则：
+
+- `Result.Ok(v)?` 得到 `v`
+- `Result.Err(e)?` 从当前函数早返回 `Result.Err(e)`
+- `Option.Some(v)?` 得到 `v`
+- `Option.None()?` 从当前函数早返回 `Option.None()`
+
+当前实现要求 `?` 所在函数的返回类型与被传播表达式同为 `Result` 或同为 `Option`。不同错误类型之间的自动转换还没有实现。
+
+#### `!`：Result 转异常
+
+当调用点认为错误不应继续作为普通 `Result` 传播时，可以用 `!` 把 `Err` 升级为异常：
+
+```bolide
+fn init() {
+    let value: int = parse_number("42")!;
+    print(value);
+}
+```
+
+`expr!` 的规则：
+
+- `Result.Ok(v)!` 得到 `v`
+- `Result.Err(e)!` 执行 `throw e`
+- `e` 的类型必须是 `Error` 或 `Error` 子类
+
+#### `try` 表达式：异常转 Result
+
+`try { ... }` 表达式会把块内抛出的异常捕获为 `Result.Err(error)`：
+
+```bolide
+let result: Result<int, Error> = try {
+    let value: int = parse_number("42")!;
+    value + 1;
+};
+```
+
+最后一个表达式语句作为 `Result.Ok(value)` 的值；如果块内没有最后表达式，则返回 `Result.Ok(0)`。当前不会自动扁平化 `Result<Result<T, E>, Error>`。
+
+#### 错误类型转换与 `From<E>`（计划中）
+
+`From<E>` 的目标是让 `?` 可以跨错误类型传播。例如当前函数返回 `Result<T, AppError>`，但内部调用返回 `Result<U, IoError>` 时，未来可以通过声明 `From<IoError> for AppError`，让 `?` 自动把 `IoError` 转成 `AppError`。
+
+```bolide
+// 计划中的形式，当前尚未实现
+impl From<IoError> for AppError {
+    fn from(e: IoError) -> AppError {
+        return AppError.Io(e);
+    }
+}
+```
+
+当前版本需要手动把错误包装成目标错误类型。
 
 #### 内置 Error 类
 
@@ -1029,12 +1113,12 @@ try {
 ```bolide
 try {
     try {
-        throw 42;
-    } catch (e: int) {
-        print("inner catch: " + str(e));
+        throw Error("inner");
+    } catch (e: Error) {
+        print("inner catch: " + e.message);
     }
     print("after inner try");
-} catch (e: int) {
+} catch (e: Error) {
     print("outer catch (should not reach)");
 }
 ```
@@ -1044,13 +1128,13 @@ try {
 ```bolide
 try {
     try {
-        throw 77;
-    } catch (e: int) {
-        print("rethrowing: " + str(e));
+        throw Error("77");
+    } catch (e: Error) {
+        print("rethrowing: " + e.message);
         throw e;  // 重新抛出
     }
-} catch (e: int) {
-    print("outer catch: " + str(e));  // 77
+} catch (e: Error) {
+    print("outer catch: " + e.message);  // 77
 }
 ```
 
@@ -1069,9 +1153,9 @@ fn close_file(handle: int) {
 let handle: int = open_file("data.txt");
 try {
     // ... 可能抛出异常的代码
-    throw "something went wrong";
-} catch (e: str) {
-    print("error: " + e);
+    throw Error("something went wrong");
+} catch (e: Error) {
+    print("error: " + e.message);
 } finally {
     close_file(handle);  // 一定会执行
     print("cleanup done");
@@ -1080,14 +1164,18 @@ try {
 
 #### 实现原理
 
-不使用 `setjmp/longjmp`（与 Cranelift SSA 寄存器分配不兼容）。编译器维护一个 **catch 落点栈**：`throw` 将异常值和类型标签存入 thread-local，然后直接跳转到最近的 catch 块。异常值通过内存（thread-local）传递，不经过寄存器，因此 SSA 安全。
+不使用 `setjmp/longjmp` 或 OS 栈展开。当前实现采用显式异常传播 ABI：
+
+- 同一函数内：编译器维护 **catch 落点栈**，`throw` 将异常值和类型标签存入 thread-local，然后跳转到最近的 catch 块
+- 跨函数调用：callee 抛出异常后把 pending exception 留在线程局部状态中并返回默认值；caller 在用户函数/方法/闭包调用后检查 pending exception，再跳到当前函数的最近 catch 或继续向上传播
+- `finally` 会在本地跳转、重抛和跨函数传播路径上执行
 
 类型标签机制：
-- 基本类型（`int`、`float`、`str` 等）有固定标签
+- 异常对象必须是 `Error` 或其子类
 - 自定义类按声明顺序分配 ID（≥100）
 - `catch (e: T)` 的类型过滤在编译器展开为标签比较的 OR 链（含 T 的所有已知子类）
 
-> **当前限制**: 仅支持同函数内的 try/catch（catch 与 throw 必须在同一编译函数内）。跨函数异常的栈展开计划在后续版本实现。
+> **当前状态**: 跨函数异常传播已支持 JIT 和 AOT，但 `throws` 仍是签名注解和工具元数据，暂未实现 checked-exception 式强制诊断。
 
 ## 类型系统
 
@@ -1104,7 +1192,8 @@ try {
 | `channel<T>` | 通道 | `let ch: channel<int> = channel();` |
 | `dict<K, V>` | 字典 | `let d: dict<str, int> = {"a": 1};` |
 | `dynamic` | 动态类型 | (运行时自动推导) |
-| `future` | 协程 Future | `let f: future = async_fn();` |
+| `Future<T>` | 冷协程 Future | `let f: Future<int> = async_fn();` |
+| `Task<T>` | 已启动任务句柄 | `let t: Task<int> = spawn work();` |
 | `func(T...) -> R` | 函数类型 | `let f: func(int) -> int = double;` |
 
 
@@ -1353,9 +1442,7 @@ database.close();
 - `post.title` 这类点路径可以读取字典和对象字段。
 
 数据库 API 使用目录作为存储位置，表按文件保存，支持 `create_table`、`insert`、`update`、
-`delete`、`get`、`all`、`where_eq`、`count` 和 `last_error`。`all` 是合法方法名；
-`spawn all { ... }` 中的 `all` 只是上下文关键字，不应阻止 `database.all("posts")`
-这样的成员调用。这类冲突属于语言解析/编译器 bug，应修编译器，不应把标准库 API 改名绕开。
+`delete`、`get`、`all`、`where_eq`、`count` 和 `last_error`。`all
 
 完整博客示例见 `examples/blog/`，包含文章列表、详情页、
 关于页、后台列表、新建、编辑、删除、种子数据和响应式页面样式。开发时可用：

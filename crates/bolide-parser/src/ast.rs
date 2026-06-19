@@ -21,7 +21,6 @@ pub enum Statement {
     Select(SelectStmt),
     AwaitScope(AwaitScopeStmt),
     SpawnSelect(SpawnSelectStmt),
-    Send(SendStmt),
     /// break; - 跳出最近一层循环
     Break,
     /// continue; - 进入最近一层循环的下一次迭代
@@ -78,6 +77,9 @@ pub struct FuncDef {
     /// 泛型参数，如 `fn id<T>(x: T) -> T`
     pub type_params: Vec<String>,
     pub params: Vec<Param>,
+    /// Optional exception annotation: `throws IoError, ParseError`.
+    /// This is intentionally advisory for now; compiler diagnostics may use it.
+    pub throws: Vec<Type>,
     pub return_type: Option<Type>,
     /// 生命周期依赖: from x, y 表示返回值依赖于参数 x 和 y 的生命周期
     /// 当指定时，跳过 ARC 并执行生命周期检查
@@ -181,7 +183,7 @@ pub struct PoolStmt {
     pub body: Vec<Statement>,
 }
 
-/// Select 语句: select { x <- ch => { ... } }
+/// Select 语句: select { v = ch.recv() => { ... } }
 #[derive(Debug, Clone)]
 pub struct SelectStmt {
     pub branches: Vec<SelectBranch>,
@@ -190,7 +192,7 @@ pub struct SelectStmt {
 /// Select 分支
 #[derive(Debug, Clone)]
 pub enum SelectBranch {
-    /// 接收分支: var <- channel => { body }
+    /// 接收分支: var = channel.recv() => { body }
     Recv {
         var: String,
         channel: String,
@@ -228,13 +230,6 @@ pub enum SpawnSelectBranch {
     },
     /// 不带绑定: expr => { body }
     Expr { expr: Expr, body: Vec<Statement> },
-}
-
-/// 通道发送: ch <- val;
-#[derive(Debug, Clone)]
-pub struct SendStmt {
-    pub channel: String,
-    pub value: Expr,
 }
 
 /// match 语句
@@ -306,14 +301,20 @@ pub enum Expr {
     List(Vec<Expr>),
     /// 字典字面量: {key: value, ...}
     Dict(Vec<(Expr, Expr)>),
-    /// spawn func(args) - 在新线程执行函数
+    /// spawn func(args) - 在线程池或新线程执行函数
     Spawn(String, Vec<Expr>),
-    /// <- ch - 从通道接收
-    Recv(String),
+    /// spawn thread func(args) - 强制在独立系统线程执行函数
+    SpawnThread(String, Vec<Expr>),
     /// await expr - 等待异步结果
     Await(Box<Expr>),
     /// spawn all { expr, ... } - 并行启动多个任务并等待全部
     SpawnAll(Vec<Expr>),
+    /// expr? - propagate Result.Err / Option.None with early return
+    Propagate(Box<Expr>),
+    /// expr! - unwrap Result.Ok or throw Result.Err as Error
+    Raise(Box<Expr>),
+    /// try { ... } expression - convert thrown Error into Result.Err
+    TryExpr(Vec<Statement>),
     /// 元组字面量: (expr, expr, ...)
     Tuple(Vec<Expr>),
     /// 闭包表达式: fn(params) -> ret { body }

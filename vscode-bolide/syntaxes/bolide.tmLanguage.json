@@ -174,11 +174,11 @@
                 },
                 {
                     "name": "keyword.declaration.bolide",
-                    "match": "\\b(fn|let|class|extern|struct|type|export|enum|union|from)\\b"
+                    "match": "\\b(fn|let|class|extern|struct|type|export|enum|union|from|throws)\\b"
                 },
                 {
                     "name": "keyword.control.async.bolide",
-                    "match": "\\b(async|await|spawn|pool|scope)\\b"
+                    "match": "\\b(async|await|spawn|thread|pool|scope)\\b"
                 },
                 {
                     "name": "storage.modifier.bolide",
@@ -198,7 +198,7 @@
             "patterns": [
                 {
                     "name": "storage.type.primitive.bolide",
-                    "match": "\\b(int|float|bool|str|bytes|bigint|decimal|dynamic|ptr|future|void)\\b"
+                    "match": "\\b(int|float|bool|str|bytes|bigint|decimal|dynamic|ptr|Future|Task|void)\\b"
                 },
                 {
                     "name": "storage.type.generic.bolide",
@@ -272,10 +272,6 @@
                 {
                     "name": "keyword.operator.arrow.skinny.bolide",
                     "match": "->"
-                },
-                {
-                    "name": "keyword.operator.channel.bolide",
-                    "match": "<-"
                 },
                 {
                     "name": "keyword.operator.assignment.compound.bolide",

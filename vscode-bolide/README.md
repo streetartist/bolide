@@ -7,12 +7,12 @@ VS Code extension for the Bolide programming language.
 - Syntax highlighting for current Bolide `.bl` syntax:
   - declarations: `fn`, `async fn`, `export fn`, `class`, `enum`, `union`, `extern`, `struct`, `type`
   - control flow: `if`/`elif`/`else`, `while`, `for in`, `match`, `try`/`catch`/`finally`, `throw`
-  - concurrency: `async`, `await`, `await scope`, `spawn`, `spawn all`, `spawn select`, `pool`, channel `<-`, `select`
+  - concurrency: `async`, `await`, `await scope`, `spawn`, `spawn all`, `spawn select`, `pool`, channel `send`/`recv`, `select`
   - ownership and lifetimes: `owned`, `ref`, `from`, `weak`, `unowned`
-  - types: `int`, `float`, `bool`, `str`, `bytes`, `bigint`, `decimal`, `dynamic`, `ptr`, `future`, `list<T>`, `dict<K,V>`, `channel<T>`, `func(...) -> T`
+  - types: `int`, `float`, `bool`, `str`, `bytes`, `bigint`, `decimal`, `dynamic`, `ptr`, `Future<T>`, `Task<T>`, `list<T>`, `dict<K,V>`, `channel<T>`, `func(...) -> T`
   - FFI C ABI types: `c_int`, `c_double`, `*char`, `*void`, `size_t`, fixed-width integer types, and `fn(...) -> ...` C function pointers
   - literals: strings, booleans, `none`, decimal/bigint suffixes, hex integers, and numeric separators
-  - operators: `->`, `=>`, `<-`, compound assignment, bitwise operators, spread `*`/`**`
+  - operators: `->`, `=>`, compound assignment, bitwise operators, spread `*`/`**`
 - Context-aware highlighting for `spawn all`: `all` is not treated as a global keyword, so calls like `database.all("posts")` remain normal method calls.
 - Editor language configuration for comments, bracket matching, indentation, word selection, and block-comment continuation.
 - Commands to run the current file with JIT or compile/run it with AOT.

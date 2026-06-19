@@ -175,7 +175,6 @@ fn parse_statement(pair: Pair<Rule>) -> Result<Option<Statement>, String> {
         Rule::select_stmt => Ok(Some(Statement::Select(parse_select_stmt(pair)?))),
         Rule::await_scope_stmt => Ok(Some(Statement::AwaitScope(parse_await_scope_stmt(pair)?))),
         Rule::spawn_select_stmt => Ok(Some(Statement::SpawnSelect(parse_spawn_select_stmt(pair)?))),
-        Rule::send_stmt => Ok(Some(Statement::Send(parse_send_stmt(pair)?))),
         Rule::break_stmt => Ok(Some(Statement::Break)),
         Rule::continue_stmt => Ok(Some(Statement::Continue)),
         Rule::throw_stmt => Ok(Some(Statement::Throw(parse_expr(
@@ -268,6 +267,7 @@ fn parse_func_def(pair: Pair<Rule>) -> Result<FuncDef, String> {
 
     let mut type_params = Vec::new();
     let mut params = Vec::new();
+    let mut throws = Vec::new();
     let mut return_type = None;
     let mut lifetime_deps = None;
     let mut body = Vec::new();
@@ -282,6 +282,13 @@ fn parse_func_def(pair: Pair<Rule>) -> Result<FuncDef, String> {
                     params.push(parse_param(param_pair)?);
                 }
                 validate_params(&params)?;
+            }
+            Rule::throws_clause => {
+                throws = item
+                    .into_inner()
+                    .filter(|p| p.as_rule() == Rule::type_expr)
+                    .map(parse_type)
+                    .collect::<Result<Vec<_>, _>>()?;
             }
             Rule::type_expr => {
                 return_type = Some(parse_type(item)?);
@@ -308,6 +315,9 @@ fn parse_func_def(pair: Pair<Rule>) -> Result<FuncDef, String> {
     if let Some(ref mut ret_ty) = return_type {
         rewrite_type_generics(ret_ty, &type_params);
     }
+    for throw_ty in &mut throws {
+        rewrite_type_generics(throw_ty, &type_params);
+    }
 
     Ok(FuncDef {
         name,
@@ -315,6 +325,7 @@ fn parse_func_def(pair: Pair<Rule>) -> Result<FuncDef, String> {
         is_export,
         type_params,
         params,
+        throws,
         return_type,
         lifetime_deps,
         body,
@@ -633,7 +644,27 @@ fn parse_type(pair: Pair<Rule>) -> Result<Type, String> {
                 .collect::<Vec<&str>>()
                 .join(".");
             let args: Result<Vec<_>, _> = inner.map(parse_type).collect();
-            Type::Adt(name, args?)
+            let args = args?;
+            match name.as_str() {
+                "future" | "task" => {
+                    let replacement = if name == "future" {
+                        "Future<T>"
+                    } else {
+                        "Task<T>"
+                    };
+                    return Err(format!(
+                        "legacy type `{}` has been removed; use `{}`",
+                        name, replacement
+                    ));
+                }
+                "Future" | "Task" => {
+                    if args.len() != 1 {
+                        return Err(format!("{} expects exactly one type argument", name));
+                    }
+                    Type::Future
+                }
+                _ => Type::Adt(name, args),
+            }
         }
         Rule::basic_type => {
             let s = type_pair.as_str().trim();
@@ -657,8 +688,24 @@ fn parse_type(pair: Pair<Rule>) -> Result<Type, String> {
                 "decimal" => Type::Decimal,
                 "dynamic" => Type::Dynamic,
                 "ptr" => Type::Ptr,
-                "future" => Type::Future,
                 "func" => Type::Func,
+                "future" | "task" => {
+                    let replacement = if clean_s == "future" {
+                        "Future<T>"
+                    } else {
+                        "Task<T>"
+                    };
+                    return Err(format!(
+                        "legacy type `{}` has been removed; use `{}`",
+                        clean_s, replacement
+                    ));
+                }
+                "Future" | "Task" => {
+                    return Err(format!(
+                        "`{}` expects exactly one type argument; use `{}<T>`",
+                        clean_s, clean_s
+                    ));
+                }
                 _ => Type::Custom(clean_s),
             }
         }
@@ -812,13 +859,6 @@ fn parse_select_branch(pair: Pair<Rule>) -> Result<SelectBranch, String> {
         }
         _ => Err(format!("Unknown select branch: {:?}", inner.as_rule())),
     }
-}
-
-fn parse_send_stmt(pair: Pair<Rule>) -> Result<SendStmt, String> {
-    let mut inner = pair.into_inner();
-    let channel = inner.next().unwrap().as_str().to_string();
-    let value = parse_expr(inner.next().unwrap())?;
-    Ok(SendStmt { channel, value })
 }
 
 fn parse_await_scope_stmt(pair: Pair<Rule>) -> Result<AwaitScopeStmt, String> {
@@ -1222,6 +1262,12 @@ fn parse_postfix_expr(pair: Pair<Rule>) -> Result<Expr, String> {
                 let name = item.into_inner().next().unwrap().as_str().to_string();
                 expr = Expr::Member(Box::new(expr), name);
             }
+            Rule::propagate_op => {
+                expr = Expr::Propagate(Box::new(expr));
+            }
+            Rule::raise_op => {
+                expr = Expr::Raise(Box::new(expr));
+            }
             _ => {}
         }
     }
@@ -1391,6 +1437,49 @@ fn unescape_string(s: &str) -> String {
     res
 }
 
+fn parse_spawn_expr(pair: Pair<Rule>) -> Result<Expr, String> {
+    match pair.as_rule() {
+        Rule::spawn_thread_expr => parse_spawn_call(pair, true),
+        Rule::spawn_func_expr => parse_spawn_call(pair, false),
+        Rule::spawn_expr => {
+            let inner = pair
+                .into_inner()
+                .next()
+                .ok_or("spawn expression missing body")?;
+            parse_spawn_expr(inner)
+        }
+        _ => Err(format!("Unknown spawn expression: {:?}", pair.as_rule())),
+    }
+}
+
+fn parse_spawn_call(pair: Pair<Rule>, force_thread: bool) -> Result<Expr, String> {
+    let mut func_name = None;
+    let mut args = None;
+
+    for item in pair.into_inner() {
+        match item.as_rule() {
+            Rule::ident => func_name = Some(item.as_str().to_string()),
+            Rule::call_args => {
+                args = Some(
+                    item.into_inner()
+                        .map(parse_call_arg)
+                        .collect::<Result<Vec<_>, _>>()?,
+                );
+            }
+            Rule::kw_spawn | Rule::kw_thread => {}
+            _ => {}
+        }
+    }
+
+    let func_name = func_name.ok_or("spawn expression missing function name")?;
+    let args = args.ok_or("spawn expression missing call arguments")?;
+    if force_thread {
+        Ok(Expr::SpawnThread(func_name, args))
+    } else {
+        Ok(Expr::Spawn(func_name, args))
+    }
+}
+
 fn parse_primary(pair: Pair<Rule>) -> Result<Expr, String> {
     let inner = pair.into_inner().next().unwrap();
     match inner.as_rule() {
@@ -1461,24 +1550,11 @@ fn parse_primary(pair: Pair<Rule>) -> Result<Expr, String> {
             Ok(Expr::Dict(entries))
         }
         Rule::spawn_expr => {
-            // 跳过 kw_spawn 关键字对
-            let mut spawn_inner = inner.into_inner();
-            let mut first = spawn_inner.next().unwrap();
-            if first.as_rule() == Rule::kw_spawn {
-                first = spawn_inner.next().unwrap();
-            }
-            let func_name = first.as_str().to_string();
-            let args: Result<Vec<_>, _> = spawn_inner
-                .next()
-                .unwrap()
+            let spawn_inner = inner
                 .into_inner()
-                .map(parse_call_arg)
-                .collect();
-            Ok(Expr::Spawn(func_name, args?))
-        }
-        Rule::recv_expr => {
-            let channel = inner.into_inner().next().unwrap().as_str().to_string();
-            Ok(Expr::Recv(channel))
+                .next()
+                .ok_or("spawn expression missing body")?;
+            parse_spawn_expr(spawn_inner)
         }
         Rule::await_expr => {
             // await 绑定到后缀表达式层级（跳过 kw_await 关键字对）
@@ -1497,6 +1573,13 @@ fn parse_primary(pair: Pair<Rule>) -> Result<Expr, String> {
                 .map(parse_expr)
                 .collect();
             Ok(Expr::SpawnAll(exprs?))
+        }
+        Rule::try_expr => {
+            let block = inner
+                .into_inner()
+                .find(|p| p.as_rule() == Rule::block)
+                .ok_or("try expression missing block")?;
+            Ok(Expr::TryExpr(parse_block(block)?))
         }
         Rule::tuple_literal => {
             let exprs: Result<Vec<_>, _> = inner.into_inner().map(parse_expr).collect();

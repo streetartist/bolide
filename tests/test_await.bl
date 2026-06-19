@@ -5,7 +5,7 @@ async fn simple_async() -> int {
 }
 
 // 调用 async 函数
-let f: future = simple_async();
+let f: Future<int> = simple_async();
 let result: int = await f;
 print(result);
 

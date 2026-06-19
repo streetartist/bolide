@@ -14,8 +14,8 @@ fn main_test() {
     print("After spawn:");
     bigint_debug_stats();
 
-    let result: bigint = join(handle);
-    print("After join:");
+    let result: bigint = await handle;
+    print("After await:");
     print(result);
     bigint_debug_stats();
 }

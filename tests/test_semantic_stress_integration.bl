@@ -102,7 +102,7 @@ fn finally_with_closure(f: func(int) -> int) -> int {
     try {
         mark(1);
         return f(6);
-    } catch (e: int) {
+    } catch (e: Error) {
         mark(8);
     } finally {
         mark(2);
