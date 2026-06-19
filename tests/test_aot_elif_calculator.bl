@@ -1,0 +1,36 @@
+let result: int = 0;
+let current: int = 0;
+let op: str = "";
+
+fn set_op(next: str) {
+    result = current;
+    op = next;
+}
+
+fn calculate() {
+    if op == "+" {
+        current = result + current;
+    } elif op == "-" {
+        current = result - current;
+    } elif op == "*" {
+        current = result * current;
+    } elif op == "/" {
+        current = result / current;
+    } else {
+        current = 0;
+    }
+    op = "";
+}
+
+fn run_case(left: int, next: str, right: int) -> int {
+    current = left;
+    set_op(next);
+    current = right;
+    calculate();
+    return current;
+}
+
+print(run_case(2, "+", 3));
+print(run_case(7, "-", 2));
+print(run_case(4, "*", 5));
+print(run_case(8, "/", 2));

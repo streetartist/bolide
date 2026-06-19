@@ -14197,45 +14197,85 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         self.builder.switch_to_block(then_block);
         self.builder.seal_block(then_block);
 
-        let scope_idx = self.enter_scope();
-        let mut then_returned = false;
-        for stmt in &if_stmt.then_body {
-            if self.compile_stmt(stmt)? {
-                then_returned = true;
-                break;
-            }
-        }
-        if then_returned {
-            self.abandon_scope(scope_idx)?;
-        } else {
-            self.leave_scope(scope_idx)?;
-            self.builder.ins().jump(merge_block, &[]);
-        }
-        // Scope variables released before jump
+        let then_returned = self.compile_conditional_body(&if_stmt.then_body, merge_block)?;
 
         // else 分支
         self.builder.switch_to_block(else_block);
         self.builder.seal_block(else_block);
 
-        let scope_idx_else = self.enter_scope();
-        let mut else_returned = false;
-        if let Some(ref else_body) = if_stmt.else_body {
-            for stmt in else_body {
-                if self.compile_stmt(stmt)? {
-                    else_returned = true;
-                    break;
-                }
-            }
-        }
-        if else_returned {
-            self.abandon_scope(scope_idx_else)?;
+        let else_returned = if !if_stmt.elif_branches.is_empty() {
+            self.compile_elif_chain(&if_stmt.elif_branches, &if_stmt.else_body, merge_block)?
+        } else if let Some(ref else_body) = if_stmt.else_body {
+            self.compile_conditional_body(else_body, merge_block)?
         } else {
-            self.leave_scope(scope_idx_else)?;
             self.builder.ins().jump(merge_block, &[]);
-        }
+            false
+        };
 
         self.builder.switch_to_block(merge_block);
         self.builder.seal_block(merge_block);
+
+        Ok(then_returned && else_returned)
+    }
+
+    fn compile_conditional_body(
+        &mut self,
+        body: &[Statement],
+        merge_block: Block,
+    ) -> Result<bool, String> {
+        let scope_idx = self.enter_scope();
+        let mut returned = false;
+        for stmt in body {
+            if self.compile_stmt(stmt)? {
+                returned = true;
+                break;
+            }
+        }
+        if returned {
+            self.abandon_scope(scope_idx)?;
+        } else {
+            self.leave_scope(scope_idx)?;
+            self.builder.ins().jump(merge_block, &[]);
+        }
+        Ok(returned)
+    }
+
+    fn compile_elif_chain(
+        &mut self,
+        elif_branches: &[(Expr, Vec<Statement>)],
+        else_body: &Option<Vec<Statement>>,
+        merge_block: Block,
+    ) -> Result<bool, String> {
+        if elif_branches.is_empty() {
+            if let Some(body) = else_body {
+                return self.compile_conditional_body(body, merge_block);
+            }
+            self.builder.ins().jump(merge_block, &[]);
+            return Ok(false);
+        }
+
+        let (cond_expr, then_body) = &elif_branches[0];
+        let rest = &elif_branches[1..];
+
+        let cond = self.compile_expr(cond_expr)?;
+        let then_block = self.builder.create_block();
+        let else_block = self.builder.create_block();
+
+        let zero = self.builder.ins().iconst(types::I64, 0);
+        let cond_bool = self.builder.ins().icmp(IntCC::NotEqual, cond, zero);
+        self.release_temp_rc_values();
+
+        self.builder
+            .ins()
+            .brif(cond_bool, then_block, &[], else_block, &[]);
+
+        self.builder.switch_to_block(then_block);
+        self.builder.seal_block(then_block);
+        let then_returned = self.compile_conditional_body(then_body, merge_block)?;
+
+        self.builder.switch_to_block(else_block);
+        self.builder.seal_block(else_block);
+        let else_returned = self.compile_elif_chain(rest, else_body, merge_block)?;
 
         Ok(then_returned && else_returned)
     }
