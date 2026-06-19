@@ -1,0 +1,21 @@
+// Regression: awaiting a spawned bigint result inside a call must preserve the bigint pointer type.
+
+fn square(x: bigint) -> bigint {
+    return x * x;
+}
+
+fn check_str(name: str, got: str, want: str) {
+    if got == want {
+        print("ok " + name);
+    } else {
+        print("FAIL " + name);
+        print(got);
+        print(want);
+    }
+}
+
+let a: bigint = 123456789B;
+check_str("direct square", str(a * a), "15241578750190521");
+
+let task = spawn square(a);
+check_str("threaded square str await", str(await task), "15241578750190521");

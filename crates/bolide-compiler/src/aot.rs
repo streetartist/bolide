@@ -10674,6 +10674,7 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             Expr::Ident(var_name) => self
                 .spawn_func_map
                 .get(var_name)
+                .or_else(|| self.task_func_map.get(var_name))
                 .and_then(|func_name| self.func_return_types.get(func_name).cloned().flatten()),
             Expr::Spawn(func_name, _) | Expr::SpawnThread(func_name, _) => {
                 self.func_return_types.get(func_name).cloned().flatten()
@@ -11445,15 +11446,20 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
                 BolideType::Int
             }
             Expr::Ident(var_name) => {
-                // 只有当当前作用域中该变量类型为 Future 时，才用 spawn_func_map
-                // 推断返回类型，避免局部变量遮蔽全局同名变量时误判类型。
-                if self
+                // Only trust the handle map when the visible binding is a Future/Task handle.
+                // Local bindings can shadow a global handle with the same name.
+                let is_handle_binding = self
                     .var_types
                     .get(var_name)
+                    .or_else(|| self.global_var_types.get(var_name))
                     .map(|t| matches!(t, BolideType::Future))
-                    == Some(true)
-                {
-                    if let Some(func_name) = self.spawn_func_map.get(var_name) {
+                    == Some(true);
+                if is_handle_binding {
+                    if let Some(func_name) = self
+                        .spawn_func_map
+                        .get(var_name)
+                        .or_else(|| self.task_func_map.get(var_name))
+                    {
                         return self
                             .func_return_types
                             .get(func_name)
@@ -13517,6 +13523,35 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
                 self.builder
                     .ins()
                     .store(MemFlags::new(), store_val, addr, 0);
+            }
+            self.spawn_func_map.remove(&decl.name);
+            self.task_func_map.remove(&decl.name);
+            self.force_thread_tasks.remove(&decl.name);
+            if let Some(ref value) = decl.value {
+                match value {
+                    Expr::Spawn(func_name, _) => {
+                        self.spawn_func_map
+                            .insert(decl.name.clone(), func_name.clone());
+                        self.task_func_map
+                            .insert(decl.name.clone(), func_name.clone());
+                    }
+                    Expr::SpawnThread(func_name, _) => {
+                        self.spawn_func_map
+                            .insert(decl.name.clone(), func_name.clone());
+                        self.task_func_map
+                            .insert(decl.name.clone(), func_name.clone());
+                        self.force_thread_tasks.insert(decl.name.clone());
+                    }
+                    Expr::Call(func_expr, _) => {
+                        if let Expr::Ident(func_name) = func_expr.as_ref() {
+                            if self.async_funcs.contains(func_name) {
+                                self.spawn_func_map
+                                    .insert(decl.name.clone(), func_name.clone());
+                            }
+                        }
+                    }
+                    _ => {}
+                }
             }
             return Ok(());
         }

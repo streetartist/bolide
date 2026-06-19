@@ -8119,17 +8119,22 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                 }
                 BolideType::Int
             }
-            // let f = fetch_a(); await f
+            // let f = fetch_a(); await f / let t = spawn work(); await t
             Expr::Ident(var_name) => {
-                // 只有当变量在当前作用域中是 Future 类型时，才用 spawn_func_map
-                // 避免局部变量遮蔽全局同名变量（如全局 f: float）导致类型误判。
-                if self
+                // Only trust the handle map when the visible binding is a Future/Task handle.
+                // Local bindings can shadow a global handle with the same name.
+                let is_handle_binding = self
                     .var_types
                     .get(var_name)
+                    .or_else(|| self.global_var_types.get(var_name))
                     .map(|t| matches!(t, BolideType::Future))
-                    == Some(true)
-                {
-                    if let Some(func_name) = self.spawn_func_map.get(var_name) {
+                    == Some(true);
+                if is_handle_binding {
+                    if let Some(func_name) = self
+                        .spawn_func_map
+                        .get(var_name)
+                        .or_else(|| self.task_func_map.get(var_name))
+                    {
                         return self
                             .func_return_types
                             .get(func_name)
@@ -16039,6 +16044,7 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             Expr::Ident(var_name) => self
                 .spawn_func_map
                 .get(var_name)
+                .or_else(|| self.task_func_map.get(var_name))
                 .and_then(|func_name| self.func_return_types.get(func_name).cloned().flatten()),
             Expr::Spawn(func_name, _) | Expr::SpawnThread(func_name, _) => {
                 self.func_return_types.get(func_name).cloned().flatten()
