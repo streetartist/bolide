@@ -1,0 +1,46 @@
+import "std/bytes/bytes.bl" as bytes;
+
+fn check_bool(name: str, got: bool, want: bool) {
+    if got == want {
+        print("ok " + name + "\n");
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want) + "\n");
+    }
+}
+
+fn check_int(name: str, got: int, want: int) {
+    if got == want {
+        print("ok " + name + "\n");
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want) + "\n");
+    }
+}
+
+fn check_str(name: str, got: str, want: str) {
+    if got == want {
+        print("ok " + name + "\n");
+    } else {
+        print("FAIL " + name + " got=" + got + " want=" + want + "\n");
+    }
+}
+
+let data: bytes = bytes.with_capacity(8);
+check_bool("capacity", bytes.capacity(data) >= 8, true);
+
+bytes.push(data, 65);
+bytes.push(data, 66);
+check_int("len push", data.len(), 2);
+check_int("get", data[0], 65);
+
+check_bool("set ok", bytes.set(data, 1, 67), true);
+check_int("set", data[1], 67);
+check_str("to string", bytes.to_string_lossy(data), "AC");
+
+let more: bytes = bytes.from_string("DE");
+bytes.extend(data, more);
+check_str("extend", bytes.to_string_lossy(data), "ACDE");
+
+bytes.clear(data);
+check_int("clear", data.len(), 0);
+
+print("std bytes done\n");

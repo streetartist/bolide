@@ -1,0 +1,124 @@
+// Bolide atomic primitives.
+// Usage: import "std/atomic/atomic.bl" as atomic;
+
+extern "bolide" {
+    fn bolide_atomic_int_new(value: i64) -> *void;
+    fn bolide_atomic_int_free(value: *void);
+    fn bolide_atomic_int_get(value: *void) -> i64;
+    fn bolide_atomic_int_set(value: *void, next: i64);
+    fn bolide_atomic_int_swap(value: *void, next: i64) -> i64;
+    fn bolide_atomic_int_add(value: *void, delta: i64) -> i64;
+    fn bolide_atomic_int_sub(value: *void, delta: i64) -> i64;
+    fn bolide_atomic_int_compare_exchange(value: *void, current: i64, next: i64) -> i64;
+
+    fn bolide_atomic_bool_new(value: i64) -> *void;
+    fn bolide_atomic_bool_free(value: *void);
+    fn bolide_atomic_bool_get(value: *void) -> i64;
+    fn bolide_atomic_bool_set(value: *void, next: i64);
+    fn bolide_atomic_bool_swap(value: *void, next: i64) -> i64;
+    fn bolide_atomic_bool_compare_exchange(value: *void, current: i64, next: i64) -> i64;
+}
+
+class AtomicInt {
+    handle: ptr;
+
+    fn ok() -> bool {
+        return self.handle != 0;
+    }
+
+    fn get() -> int {
+        return bolide_atomic_int_get(self.handle);
+    }
+
+    fn set(value: int) {
+        bolide_atomic_int_set(self.handle, value);
+    }
+
+    fn swap(value: int) -> int {
+        return bolide_atomic_int_swap(self.handle, value);
+    }
+
+    fn add(delta: int) -> int {
+        return bolide_atomic_int_add(self.handle, delta);
+    }
+
+    fn sub(delta: int) -> int {
+        return bolide_atomic_int_sub(self.handle, delta);
+    }
+
+    fn inc() -> int {
+        return self.add(1);
+    }
+
+    fn dec() -> int {
+        return self.sub(1);
+    }
+
+    fn compare_exchange(current: int, next: int) -> bool {
+        return bolide_atomic_int_compare_exchange(self.handle, current, next) != 0;
+    }
+
+    fn close() {
+        if self.handle != 0 {
+            bolide_atomic_int_free(self.handle);
+            self.handle = 0;
+        }
+    }
+}
+
+class AtomicBool {
+    handle: ptr;
+
+    fn ok() -> bool {
+        return self.handle != 0;
+    }
+
+    fn get() -> bool {
+        return bolide_atomic_bool_get(self.handle) != 0;
+    }
+
+    fn set(value: bool) {
+        if value {
+            bolide_atomic_bool_set(self.handle, 1);
+        } else {
+            bolide_atomic_bool_set(self.handle, 0);
+        }
+    }
+
+    fn swap(value: bool) -> bool {
+        if value {
+            return bolide_atomic_bool_swap(self.handle, 1) != 0;
+        }
+        return bolide_atomic_bool_swap(self.handle, 0) != 0;
+    }
+
+    fn compare_exchange(current: bool, next: bool) -> bool {
+        var current_value: int = 0;
+        var next_value: int = 0;
+        if current {
+            current_value = 1;
+        }
+        if next {
+            next_value = 1;
+        }
+        return bolide_atomic_bool_compare_exchange(self.handle, current_value, next_value) != 0;
+    }
+
+    fn close() {
+        if self.handle != 0 {
+            bolide_atomic_bool_free(self.handle);
+            self.handle = 0;
+        }
+    }
+}
+
+fn new_int(value: int) -> AtomicInt {
+    return AtomicInt(bolide_atomic_int_new(value));
+}
+
+fn new_bool(value: bool) -> AtomicBool {
+    if value {
+        return AtomicBool(bolide_atomic_bool_new(1));
+    }
+    return AtomicBool(bolide_atomic_bool_new(0));
+}

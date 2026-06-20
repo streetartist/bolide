@@ -140,7 +140,7 @@ fn friendly_rule_name(rule: &Rule) -> Option<&'static str> {
         Rule::param => Some("parameter"),
         Rule::param_list => Some("parameter list"),
         Rule::call_arg | Rule::call_args => Some("call argument"),
-        Rule::var_decl => Some("'let' declaration"),
+        Rule::var_decl => Some("'let'/'var' declaration"),
         Rule::func_def => Some("'fn' definition"),
         Rule::class_def => Some("'class' definition"),
         Rule::if_stmt => Some("'if' statement"),
@@ -738,6 +738,8 @@ fn parse_block(pair: Pair<Rule>) -> Result<Vec<Statement>, String> {
 
 fn parse_var_decl(pair: Pair<Rule>) -> Result<VarDecl, String> {
     let mut inner = pair.into_inner();
+    let kind = inner.next().unwrap();
+    let mutable = kind.as_str() == "var";
     let name = inner.next().unwrap().as_str().to_string();
 
     let mut ty = None;
@@ -755,7 +757,12 @@ fn parse_var_decl(pair: Pair<Rule>) -> Result<VarDecl, String> {
         }
     }
 
-    Ok(VarDecl { name, ty, value })
+    Ok(VarDecl {
+        name,
+        mutable,
+        ty,
+        value,
+    })
 }
 
 fn parse_if_stmt(pair: Pair<Rule>) -> Result<IfStmt, String> {

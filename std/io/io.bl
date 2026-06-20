@@ -1,0 +1,51 @@
+// Bolide streaming file I/O.
+// Usage: import "std/io/io.bl" as io;
+
+extern "bolide" {
+    fn bolide_io_open_write(path: *char) -> *void;
+    fn bolide_io_open_append(path: *char) -> *void;
+    fn bolide_io_write(writer: *void, text: *char) -> i64;
+    fn bolide_io_write_line(writer: *void, text: *char) -> i64;
+    fn bolide_io_write_bytes(writer: *void, data: bytes) -> i64;
+    fn bolide_io_flush(writer: *void) -> i64;
+    fn bolide_io_close(writer: *void);
+}
+
+class Writer {
+    handle: ptr;
+
+    fn ok() -> bool {
+        return self.handle != 0;
+    }
+
+    fn write(text: str) -> bool {
+        return bolide_io_write(self.handle, text) != 0;
+    }
+
+    fn line(text: str) -> bool {
+        return bolide_io_write_line(self.handle, text) != 0;
+    }
+
+    fn write_bytes(data: bytes) -> bool {
+        return bolide_io_write_bytes(self.handle, data) != 0;
+    }
+
+    fn flush() -> bool {
+        return bolide_io_flush(self.handle) != 0;
+    }
+
+    fn close() {
+        if self.handle != 0 {
+            bolide_io_close(self.handle);
+            self.handle = 0;
+        }
+    }
+}
+
+fn open_write(path: str) -> Writer {
+    return Writer(bolide_io_open_write(path));
+}
+
+fn open_append(path: str) -> Writer {
+    return Writer(bolide_io_open_append(path));
+}

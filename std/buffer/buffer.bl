@@ -1,0 +1,102 @@
+// Bolide growable text buffer.
+// Usage: import "std/buffer/buffer.bl" as buffer;
+
+extern "bolide" {
+    fn bolide_buffer_new() -> *void;
+    fn bolide_buffer_with_capacity(capacity: i64) -> *void;
+    fn bolide_buffer_free(buffer: *void);
+    fn bolide_buffer_len(buffer: *void) -> i64;
+    fn bolide_buffer_capacity(buffer: *void) -> i64;
+    fn bolide_buffer_reserve(buffer: *void, additional: i64);
+    fn bolide_buffer_clear(buffer: *void);
+    fn bolide_buffer_push(buffer: *void, value: *char);
+    fn bolide_buffer_push_line(buffer: *void, value: *char);
+    fn bolide_buffer_push_int(buffer: *void, value: i64);
+    fn bolide_buffer_push_float(buffer: *void, value: c_double);
+    fn bolide_buffer_push_bool(buffer: *void, value: i64);
+    fn bolide_buffer_to_string(buffer: *void) -> str;
+}
+
+class Buffer {
+    handle: ptr;
+
+    fn len() -> int {
+        return bolide_buffer_len(self.handle);
+    }
+
+    fn capacity() -> int {
+        return bolide_buffer_capacity(self.handle);
+    }
+
+    fn reserve(additional: int) {
+        bolide_buffer_reserve(self.handle, additional);
+    }
+
+    fn clear() {
+        bolide_buffer_clear(self.handle);
+    }
+
+    fn push(value: str) {
+        bolide_buffer_push(self.handle, value);
+    }
+
+    fn push(value: int) {
+        bolide_buffer_push_int(self.handle, value);
+    }
+
+    fn push(value: float) {
+        bolide_buffer_push_float(self.handle, value);
+    }
+
+    fn push(value: bool) {
+        if value {
+            bolide_buffer_push_bool(self.handle, 1);
+        } else {
+            bolide_buffer_push_bool(self.handle, 0);
+        }
+    }
+
+    fn line(value: str) {
+        bolide_buffer_push_line(self.handle, value);
+    }
+
+    fn line(value: int) {
+        self.push(value);
+        self.push("\n");
+    }
+
+    fn line(value: float) {
+        self.push(value);
+        self.push("\n");
+    }
+
+    fn line(value: bool) {
+        self.push(value);
+        self.push("\n");
+    }
+
+    fn to_string() -> str {
+        return bolide_buffer_to_string(self.handle);
+    }
+
+    fn close() {
+        if self.handle != 0 {
+            bolide_buffer_free(self.handle);
+            self.handle = 0;
+        }
+    }
+}
+
+fn new() -> Buffer {
+    return Buffer(bolide_buffer_new());
+}
+
+fn with_capacity(capacity: int) -> Buffer {
+    return Buffer(bolide_buffer_with_capacity(capacity));
+}
+
+fn from(value: str) -> Buffer {
+    let out: Buffer = new();
+    out.push(value);
+    return out;
+}

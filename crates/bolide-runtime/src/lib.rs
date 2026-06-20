@@ -21,7 +21,9 @@
 //! - `thread`: 线程和线程池
 //! - `channel`: 线程安全通道
 
+mod atomic;
 mod bigint;
+mod buffer;
 mod bytes;
 mod channel;
 mod closure;
@@ -35,6 +37,8 @@ mod exception;
 mod ffi;
 mod fs;
 mod gui;
+mod hash;
+mod io;
 pub mod list;
 mod math;
 mod object;
@@ -45,13 +49,16 @@ mod rc;
 mod regex_std;
 mod sqlite;
 mod string;
+mod sync;
 mod template;
 mod thread;
 mod time;
 mod tuple;
 mod web;
 
+pub use atomic::*;
 pub use bigint::*;
+pub use buffer::*;
 pub use bytes::*;
 pub use channel::*;
 pub use closure::*;
@@ -65,6 +72,8 @@ pub use exception::*;
 pub use ffi::*;
 pub use fs::*;
 pub use gui::*;
+pub use hash::*;
+pub use io::*;
 pub use list::*;
 pub use math::*;
 pub use object::*;
@@ -75,6 +84,7 @@ pub use rc::*;
 pub use regex_std::*;
 pub use sqlite::*;
 pub use string::*;
+pub use sync::*;
 pub use template::*;
 pub use thread::*;
 pub use time::*;

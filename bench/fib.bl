@@ -1,0 +1,37 @@
+// Recursive Fibonacci benchmark for Bolide.
+//
+// Workload: naive O(phi^n) recursion. Isolates function-call overhead,
+// integer arithmetic and branch prediction. Almost no memory traffic, so
+// this measures the cost of calls and the prologue/epilogue the codegen emits.
+
+import "std/env/env.bl" as env;
+import "std/time/time.bl" as time;
+
+fn arg_or(args: list<str>, index: int, fallback: int) -> int {
+    if args.len() > index {
+        return int(args[index]);
+    }
+    return fallback;
+}
+
+fn fib(n: int) -> int {
+    if n < 2 {
+        return n;
+    }
+    return fib(n - 1) + fib(n - 2);
+}
+
+let args: list<str> = env.args();
+let n: int = arg_or(args, 1, 35);
+let reps: int = arg_or(args, 2, 1);
+
+let start: int = time.monotonic_ms();
+var result: int = 0;
+var r: int = 0;
+while r < reps {
+    result = fib(n);
+    r = r + 1;
+}
+let elapsed: int = time.monotonic_ms() - start;
+
+print("bolide fib n={} reps={} ms={} checksum={}\n".format(n, reps, elapsed, result));

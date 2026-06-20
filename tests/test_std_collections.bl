@@ -1,0 +1,63 @@
+import "std/collections/collections.bl" as collections;
+
+fn check_bool(name: str, got: bool, want: bool) {
+    if got == want {
+        print("ok " + name + "\n");
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want) + "\n");
+    }
+}
+
+fn check_int(name: str, got: int, want: int) {
+    if got == want {
+        print("ok " + name + "\n");
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want) + "\n");
+    }
+}
+
+let ints: collections.IntSet = collections.int_set();
+ints.add(3);
+ints.add(3);
+ints.add(1);
+check_int("int set len", ints.len(), 2);
+check_bool("int set contains", ints.contains(3), true);
+check_bool("int set remove", ints.remove(3), true);
+check_bool("int set gone", ints.contains(3), false);
+
+let strings: collections.StringSet = collections.string_set();
+strings.add("a");
+strings.add("b");
+check_bool("string set contains", strings.contains("b"), true);
+check_int("string set len", strings.len(), 2);
+
+let q: collections.Queue = collections.queue();
+q.push(10);
+q.push(20);
+check_int("queue len", q.len(), 2);
+check_int("queue pop 1", int(q.pop()), 10);
+check_int("queue pop 2", int(q.pop()), 20);
+check_bool("queue empty", q.is_empty(), true);
+
+let s: collections.Stack = collections.stack();
+s.push("a");
+s.push("b");
+check_int("stack len", s.len(), 2);
+check_bool("stack pop", str(s.pop()) == "b", true);
+
+let c: collections.Counter = collections.counter();
+c.add("red");
+c.add_by("red", 4);
+check_int("counter get", c.get("red"), 5);
+check_int("counter missing", c.get("blue"), 0);
+
+let pq: collections.IntPriorityQueue = collections.int_priority_queue();
+pq.push(5);
+pq.push(1);
+pq.push(3);
+check_int("pq peek", pq.peek(), 1);
+check_int("pq pop 1", pq.pop(), 1);
+check_int("pq pop 2", pq.pop(), 3);
+check_int("pq pop 3", pq.pop(), 5);
+
+print("std collections done\n");

@@ -1,0 +1,21 @@
+import "std/bytes/bytes.bl" as bytes;
+import "std/hash/hash.bl" as hash;
+
+fn check_int(name: str, got: int, want: int) {
+    if got == want {
+        print("ok " + name + "\n");
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want) + "\n");
+    }
+}
+
+let text: str = "hello";
+let data: bytes = bytes.from_string(text);
+
+check_int("fnv1a str", hash.fnv1a(text), 1335831723);
+check_int("fnv1a bytes", hash.fnv1a(data), 1335831723);
+check_int("crc32 str", hash.crc32(text), 907060870);
+check_int("crc32 bytes", hash.crc32(data), 907060870);
+check_int("crc32 standard", hash.crc32("123456789"), 3421780262);
+
+print("std hash done\n");

@@ -1,0 +1,141 @@
+// N-body benchmark for Bolide.
+//
+// Workload: deterministic O(n^2 * steps) gravitational simulation.
+// It stresses float math, list indexing/mutation, function calls, branches,
+// argument parsing and a small amount of formatted output.
+
+import "std/env/env.bl" as env;
+import "std/math/math.bl" as math;
+import "std/time/time.bl" as time;
+
+fn arg_or(args: list<str>, index: int, fallback: int) -> int {
+    if args.len() > index {
+        return int(args[index]);
+    }
+    return fallback;
+}
+
+fn push_body(
+    x: list<float>,
+    y: list<float>,
+    z: list<float>,
+    vx: list<float>,
+    vy: list<float>,
+    vz: list<float>,
+    mass: list<float>,
+    i: int
+) {
+    let fi: float = float(i);
+    x.push(math.sin(fi * 0.013) * 100.0 + float(i % 17));
+    y.push(math.cos(fi * 0.017) * 100.0 - float(i % 23));
+    z.push(math.sin(fi * 0.019) * math.cos(fi * 0.011) * 50.0);
+    vx.push(math.cos(fi * 0.007) * 0.01);
+    vy.push(math.sin(fi * 0.009) * 0.01);
+    vz.push(math.cos(fi * 0.005) * 0.01);
+    mass.push(0.5 + float((i * 13) % 97) / 97.0);
+}
+
+fn init_bodies(
+    n: int,
+    x: list<float>,
+    y: list<float>,
+    z: list<float>,
+    vx: list<float>,
+    vy: list<float>,
+    vz: list<float>,
+    mass: list<float>
+) {
+    var i: int = 0;
+    while i < n {
+        push_body(x, y, z, vx, vy, vz, mass, i);
+        i = i + 1;
+    }
+}
+
+fn simulate(
+    n: int,
+    steps: int,
+    x: list<float>,
+    y: list<float>,
+    z: list<float>,
+    vx: list<float>,
+    vy: list<float>,
+    vz: list<float>,
+    mass: list<float>
+) {
+    let dt: float = 0.01;
+    let softening: float = 0.01;
+
+    var step: int = 0;
+    while step < steps {
+        var i: int = 0;
+        while i < n {
+            var j: int = i + 1;
+            while j < n {
+                let dx: float = x[j] - x[i];
+                let dy: float = y[j] - y[i];
+                let dz: float = z[j] - z[i];
+                let dist_sq: float = dx * dx + dy * dy + dz * dz + softening;
+                let inv_dist: float = 1.0 / math.sqrt(dist_sq);
+                let inv_dist3: float = inv_dist * inv_dist * inv_dist;
+                let force: float = inv_dist3 * dt;
+                let mi: float = mass[i];
+                let mj: float = mass[j];
+                let fx: float = dx * force;
+                let fy: float = dy * force;
+                let fz: float = dz * force;
+
+                vx[i] = vx[i] + fx * mj;
+                vy[i] = vy[i] + fy * mj;
+                vz[i] = vz[i] + fz * mj;
+                vx[j] = vx[j] - fx * mi;
+                vy[j] = vy[j] - fy * mi;
+                vz[j] = vz[j] - fz * mi;
+
+                j = j + 1;
+            }
+            i = i + 1;
+        }
+
+        var k: int = 0;
+        while k < n {
+            x[k] = x[k] + vx[k] * dt;
+            y[k] = y[k] + vy[k] * dt;
+            z[k] = z[k] + vz[k] * dt;
+            k = k + 1;
+        }
+
+        step = step + 1;
+    }
+}
+
+fn checksum(n: int, x: list<float>, y: list<float>, z: list<float>, vx: list<float>) -> float {
+    var sum: float = 0.0;
+    var i: int = 0;
+    while i < n {
+        sum = sum + x[i] * 0.13 + y[i] * 0.17 + z[i] * 0.19 + vx[i] * 23.0;
+        i = i + 1;
+    }
+    return sum;
+}
+
+let args: list<str> = env.args();
+let n: int = arg_or(args, 1, 900);
+let steps: int = arg_or(args, 2, 120);
+
+var x: list<float> = [];
+var y: list<float> = [];
+var z: list<float> = [];
+var vx: list<float> = [];
+var vy: list<float> = [];
+var vz: list<float> = [];
+var mass: list<float> = [];
+
+init_bodies(n, x, y, z, vx, vy, vz, mass);
+
+let start: int = time.monotonic_ms();
+simulate(n, steps, x, y, z, vx, vy, vz, mass);
+let elapsed: int = time.monotonic_ms() - start;
+let sum: float = checksum(n, x, y, z, vx);
+
+print("bolide nbody bodies={} steps={} ms={} checksum={}\n".format(n, steps, elapsed, sum));

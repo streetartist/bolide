@@ -17,10 +17,26 @@ impl BolideBytes {
         }))
     }
 
+    pub fn with_capacity(capacity: usize) -> *mut Self {
+        Box::into_raw(Box::new(Self {
+            header: RcHeader::new(TypeTag::Bytes),
+            data: Vec::with_capacity(capacity),
+        }))
+    }
+
     pub fn from_slice(bytes: &[u8]) -> *mut Self {
         Box::into_raw(Box::new(Self {
             header: RcHeader::new(TypeTag::Bytes),
             data: bytes.to_vec(),
+        }))
+    }
+
+    pub fn clone_preserve_capacity(bytes: &Self) -> *mut Self {
+        let mut data = Vec::with_capacity(bytes.data.capacity());
+        data.extend_from_slice(bytes.as_slice());
+        Box::into_raw(Box::new(Self {
+            header: RcHeader::new(TypeTag::Bytes),
+            data,
         }))
     }
 
@@ -47,6 +63,20 @@ impl BolideBytes {
 #[no_mangle]
 pub extern "C" fn bolide_bytes_new() -> *mut BolideBytes {
     BolideBytes::new()
+}
+
+#[no_mangle]
+pub extern "C" fn bolide_bytes_with_capacity(capacity: i64) -> *mut BolideBytes {
+    BolideBytes::with_capacity(capacity.max(0) as usize)
+}
+
+#[no_mangle]
+pub extern "C" fn bolide_bytes_from_string(text: *const BolideString) -> *mut BolideBytes {
+    if text.is_null() {
+        return BolideBytes::new();
+    }
+    let text = unsafe { &*text };
+    BolideBytes::from_slice(text.as_str().as_bytes())
 }
 
 #[no_mangle]
@@ -84,7 +114,7 @@ pub extern "C" fn bolide_bytes_clone(bytes: *const BolideBytes) -> *mut BolideBy
         return BolideBytes::new();
     }
     let bytes = unsafe { &*bytes };
-    BolideBytes::from_slice(bytes.as_slice())
+    BolideBytes::clone_preserve_capacity(bytes)
 }
 
 #[no_mangle]
@@ -93,6 +123,32 @@ pub extern "C" fn bolide_bytes_len(bytes: *const BolideBytes) -> i64 {
         return 0;
     }
     unsafe { (*bytes).data.len() as i64 }
+}
+
+#[no_mangle]
+pub extern "C" fn bolide_bytes_capacity(bytes: *const BolideBytes) -> i64 {
+    if bytes.is_null() {
+        return 0;
+    }
+    unsafe { (&(*bytes).data).capacity() as i64 }
+}
+
+#[no_mangle]
+pub extern "C" fn bolide_bytes_reserve(bytes: *mut BolideBytes, additional: i64) {
+    if bytes.is_null() || additional <= 0 {
+        return;
+    }
+    let bytes = unsafe { &mut *bytes };
+    bytes.data.reserve(additional as usize);
+}
+
+#[no_mangle]
+pub extern "C" fn bolide_bytes_clear(bytes: *mut BolideBytes) {
+    if bytes.is_null() {
+        return;
+    }
+    let bytes = unsafe { &mut *bytes };
+    bytes.data.clear();
 }
 
 #[no_mangle]
@@ -122,6 +178,16 @@ pub extern "C" fn bolide_bytes_push(bytes: *mut BolideBytes, value: i64) {
         return;
     }
     unsafe { (*bytes).data.push(value as u8) };
+}
+
+#[no_mangle]
+pub extern "C" fn bolide_bytes_extend(bytes: *mut BolideBytes, other: *const BolideBytes) {
+    if bytes.is_null() || other.is_null() {
+        return;
+    }
+    let bytes = unsafe { &mut *bytes };
+    let other = unsafe { &*other };
+    bytes.data.extend_from_slice(other.as_slice());
 }
 
 #[no_mangle]

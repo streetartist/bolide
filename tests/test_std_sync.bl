@@ -1,0 +1,62 @@
+import "std/sync/sync.bl" as sync;
+
+fn check_bool(name: str, got: bool, want: bool) {
+    if got == want {
+        print("ok " + name + "\n");
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want) + "\n");
+    }
+}
+
+fn check_int(name: str, got: int, want: int) {
+    if got == want {
+        print("ok " + name + "\n");
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want) + "\n");
+    }
+}
+
+fn bump(lock: sync.Mutex, count: int) -> int {
+    for i in range(count) {
+        lock.add_int(1);
+    }
+    return 0;
+}
+
+let lock: sync.Mutex = sync.mutex(1);
+check_bool("mutex ok", lock.ok(), true);
+check_int("mutex get", int(lock.get()), 1);
+lock.set(3);
+check_int("mutex set", int(lock.get()), 3);
+check_int("mutex swap old", int(lock.swap(7)), 3);
+check_int("mutex swap new", int(lock.get()), 7);
+check_int("mutex add", lock.add_int(5), 12);
+
+lock.set(0);
+let done: (int, int, int, int) = spawn all {
+    bump(lock, 1000),
+    bump(lock, 1000),
+    bump(lock, 1000),
+    bump(lock, 1000)
+};
+check_int("mutex parallel", int(lock.get()), 4000);
+
+let rw: sync.RwLock = sync.rwlock("seed");
+check_bool("rw ok", rw.ok(), true);
+check_bool("rw get str", str(rw.get()) == "seed", true);
+rw.set(10);
+check_int("rw set", int(rw.get()), 10);
+check_int("rw add", rw.add_int(2), 12);
+
+let once: sync.Once = sync.once();
+check_bool("once first", once.try_begin(), true);
+check_bool("once done", once.done(), true);
+check_bool("once second", once.try_begin(), false);
+once.reset();
+check_bool("once reset", once.try_begin(), true);
+
+lock.close();
+rw.close();
+once.close();
+
+print("std sync done\n");

@@ -1,0 +1,60 @@
+// Bolide bytes helper library.
+// Usage: import "std/bytes/bytes.bl" as bytes;
+
+extern "bolide" {
+    fn bolide_bytes_new() -> bytes;
+    fn bolide_bytes_with_capacity(capacity: i64) -> bytes;
+    fn bolide_bytes_from_string(text: str) -> bytes;
+    fn bolide_bytes_capacity(data: bytes) -> i64;
+    fn bolide_bytes_reserve(data: bytes, additional: i64);
+    fn bolide_bytes_clear(data: bytes);
+    fn bolide_bytes_extend(data: bytes, other: bytes);
+    fn bolide_bytes_get(data: bytes, index: i64) -> i64;
+    fn bolide_bytes_set(data: bytes, index: i64, value: i64) -> i64;
+    fn bolide_bytes_push(data: bytes, value: i64);
+    fn bolide_bytes_to_string_lossy(data: bytes) -> str;
+}
+
+fn new() -> bytes {
+    return bolide_bytes_new();
+}
+
+fn with_capacity(capacity: int) -> bytes {
+    return bolide_bytes_with_capacity(capacity);
+}
+
+fn from_string(text: str) -> bytes {
+    return bolide_bytes_from_string(text);
+}
+
+fn capacity(data: bytes) -> int {
+    return bolide_bytes_capacity(data);
+}
+
+fn reserve(data: bytes, additional: int) {
+    bolide_bytes_reserve(data, additional);
+}
+
+fn clear(data: bytes) {
+    bolide_bytes_clear(data);
+}
+
+fn extend(data: bytes, other: bytes) {
+    bolide_bytes_extend(data, other);
+}
+
+fn get(data: bytes, index: int) -> int {
+    return bolide_bytes_get(data, index);
+}
+
+fn set(data: bytes, index: int, value: int) -> bool {
+    return bolide_bytes_set(data, index, value) != 0;
+}
+
+fn push(data: bytes, value: int) {
+    bolide_bytes_push(data, value);
+}
+
+fn to_string_lossy(data: bytes) -> str {
+    return bolide_bytes_to_string_lossy(data);
+}

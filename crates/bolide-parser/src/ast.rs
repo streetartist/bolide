@@ -63,6 +63,7 @@ pub struct Assign {
 #[derive(Debug, Clone)]
 pub struct VarDecl {
     pub name: String,
+    pub mutable: bool,
     pub ty: Option<Type>,
     pub value: Option<Expr>,
 }

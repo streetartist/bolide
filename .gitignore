@@ -47,3 +47,14 @@ bench/*stderr*.txt
 data/
 examples/blog/data/
 tests/tmp_*/
+/tmp/
+examples/tmp/
+
+# 编译器调试输出
+*_debug.txt
+
+# 文档导出产物(源为 .md)
+/bolide_tutorial.html
+/Bolide语言教程.pdf
+docs/standard-library.html
+docs/standard-library.pdf

@@ -1,0 +1,160 @@
+// Bolide list/iteration helpers.
+// Usage: import "std/iter/iter.bl" as iter;
+
+class IntPair {
+    first: int;
+    second: int;
+}
+
+class StringPair {
+    first: str;
+    second: str;
+}
+
+fn ints(start: int, end: int) -> list<int> {
+    return ints_step(start, end, 1);
+}
+
+fn ints_step(start: int, end: int, step: int) -> list<int> {
+    var out: list<int> = [];
+    if step == 0 {
+        return out;
+    }
+    if step > 0 {
+        var i: int = start;
+        while i < end {
+            out.push(i);
+            i = i + step;
+        }
+        return out;
+    }
+    var j: int = start;
+    while j > end {
+        out.push(j);
+        j = j + step;
+    }
+    return out;
+}
+
+fn repeat(value: int, count: int) -> list<int> {
+    var out: list<int> = [];
+    for i in range(count) {
+        out.push(value);
+    }
+    return out;
+}
+
+fn take(values: list<int>, count: int) -> list<int> {
+    var out: list<int> = [];
+    var limit: int = count;
+    if limit > values.len() {
+        limit = values.len();
+    }
+    if limit < 0 {
+        limit = 0;
+    }
+    for i in range(limit) {
+        out.push(values[i]);
+    }
+    return out;
+}
+
+fn drop(values: list<int>, count: int) -> list<int> {
+    var out: list<int> = [];
+    var start: int = count;
+    if start < 0 {
+        start = 0;
+    }
+    for i in range(start, values.len()) {
+        out.push(values[i]);
+    }
+    return out;
+}
+
+fn chunk(values: list<int>, size: int) -> list<list<int>> {
+    var out: list<list<int>> = [];
+    if size <= 0 {
+        return out;
+    }
+    var i: int = 0;
+    while i < values.len() {
+        var item: list<int> = [];
+        var j: int = 0;
+        while j < size and i + j < values.len() {
+            item.push(values[i + j]);
+            j = j + 1;
+        }
+        out.push(item);
+        i = i + size;
+    }
+    return out;
+}
+
+fn sum(values: list<int>) -> int {
+    var total: int = 0;
+    for value in values {
+        total = total + value;
+    }
+    return total;
+}
+
+fn min(values: list<int>) -> int {
+    if values.len() == 0 {
+        return 0;
+    }
+    var best: int = values[0];
+    for value in values {
+        if value < best {
+            best = value;
+        }
+    }
+    return best;
+}
+
+fn max(values: list<int>) -> int {
+    if values.len() == 0 {
+        return 0;
+    }
+    var best: int = values[0];
+    for value in values {
+        if value > best {
+            best = value;
+        }
+    }
+    return best;
+}
+
+fn join(values: list<str>, sep: str) -> str {
+    var out: str = "";
+    for i in range(values.len()) {
+        if i > 0 {
+            out = out + sep;
+        }
+        out = out + values[i];
+    }
+    return out;
+}
+
+fn zip(values_a: list<int>, values_b: list<int>) -> list<IntPair> {
+    var out: list<IntPair> = [];
+    var limit: int = values_a.len();
+    if values_b.len() < limit {
+        limit = values_b.len();
+    }
+    for i in range(limit) {
+        out.push(IntPair(values_a[i], values_b[i]));
+    }
+    return out;
+}
+
+fn zip(values_a: list<str>, values_b: list<str>) -> list<StringPair> {
+    var out: list<StringPair> = [];
+    var limit: int = values_a.len();
+    if values_b.len() < limit {
+        limit = values_b.len();
+    }
+    for i in range(limit) {
+        out.push(StringPair(values_a[i], values_b[i]));
+    }
+    return out;
+}

@@ -1,0 +1,120 @@
+// Bolide synchronization primitives.
+// Usage: import "std/sync/sync.bl" as sync;
+
+extern "bolide" {
+    fn bolide_sync_mutex_new(value: *dynamic) -> *void;
+    fn bolide_sync_mutex_free(lock: *void);
+    fn bolide_sync_mutex_get(lock: *void) -> dynamic;
+    fn bolide_sync_mutex_set(lock: *void, value: *dynamic);
+    fn bolide_sync_mutex_swap(lock: *void, value: *dynamic) -> dynamic;
+    fn bolide_sync_mutex_add_int(lock: *void, delta: i64) -> i64;
+
+    fn bolide_sync_rwlock_new(value: *dynamic) -> *void;
+    fn bolide_sync_rwlock_free(lock: *void);
+    fn bolide_sync_rwlock_get(lock: *void) -> dynamic;
+    fn bolide_sync_rwlock_set(lock: *void, value: *dynamic);
+    fn bolide_sync_rwlock_add_int(lock: *void, delta: i64) -> i64;
+
+    fn bolide_sync_once_new() -> *void;
+    fn bolide_sync_once_free(flag: *void);
+    fn bolide_sync_once_check(flag: *void) -> i64;
+    fn bolide_sync_once_try_begin(flag: *void) -> i64;
+    fn bolide_sync_once_reset(flag: *void);
+}
+
+class Mutex {
+    handle: ptr;
+
+    fn ok() -> bool {
+        return self.handle != 0;
+    }
+
+    fn get() -> dynamic {
+        return bolide_sync_mutex_get(self.handle);
+    }
+
+    fn set(value: dynamic) {
+        bolide_sync_mutex_set(self.handle, value);
+    }
+
+    fn swap(value: dynamic) -> dynamic {
+        return bolide_sync_mutex_swap(self.handle, value);
+    }
+
+    fn add_int(delta: int) -> int {
+        return bolide_sync_mutex_add_int(self.handle, delta);
+    }
+
+    fn close() {
+        if self.handle != 0 {
+            bolide_sync_mutex_free(self.handle);
+            self.handle = 0;
+        }
+    }
+}
+
+class RwLock {
+    handle: ptr;
+
+    fn ok() -> bool {
+        return self.handle != 0;
+    }
+
+    fn get() -> dynamic {
+        return bolide_sync_rwlock_get(self.handle);
+    }
+
+    fn set(value: dynamic) {
+        bolide_sync_rwlock_set(self.handle, value);
+    }
+
+    fn add_int(delta: int) -> int {
+        return bolide_sync_rwlock_add_int(self.handle, delta);
+    }
+
+    fn close() {
+        if self.handle != 0 {
+            bolide_sync_rwlock_free(self.handle);
+            self.handle = 0;
+        }
+    }
+}
+
+class Once {
+    handle: ptr;
+
+    fn ok() -> bool {
+        return self.handle != 0;
+    }
+
+    fn done() -> bool {
+        return bolide_sync_once_check(self.handle) != 0;
+    }
+
+    fn try_begin() -> bool {
+        return bolide_sync_once_try_begin(self.handle) != 0;
+    }
+
+    fn reset() {
+        bolide_sync_once_reset(self.handle);
+    }
+
+    fn close() {
+        if self.handle != 0 {
+            bolide_sync_once_free(self.handle);
+            self.handle = 0;
+        }
+    }
+}
+
+fn mutex(value: dynamic) -> Mutex {
+    return Mutex(bolide_sync_mutex_new(value));
+}
+
+fn rwlock(value: dynamic) -> RwLock {
+    return RwLock(bolide_sync_rwlock_new(value));
+}
+
+fn once() -> Once {
+    return Once(bolide_sync_once_new());
+}

@@ -1,0 +1,27 @@
+fn check_str(name: str, got: str, want: str) {
+    if got == want {
+        print("ok " + name + "\n");
+    } else {
+        print("FAIL " + name + " got=" + got + " want=" + want + "\n");
+    }
+}
+
+check_str("empty", "hello".format(), "hello");
+check_str("one", "hello {}".format("bolide"), "hello bolide");
+check_str("many", "{} + {} = {}".format(1, 2, 3), "1 + 2 = 3");
+check_str("bool", "ok={}".format(true), "ok=true");
+check_str("float", "value={}".format(1.5), "value=1.5");
+check_str("escape open", "{{}}".format(), "{}");
+check_str("escape mixed", "{{ {} }}".format("x"), "{ x }");
+check_str("missing", "{} {}".format("a"), "a {}");
+check_str("extra", "{}".format("a", "b"), "a");
+check_str("named", "{a}".format(a="1"), "1");
+check_str("named many", "{name}={value}".format(value=42, name="answer"), "answer=42");
+check_str("named mixed", "{} {name} {}".format("hello", "!", name="bolide"), "hello bolide !");
+check_str("named missing", "{missing}".format(name="bolide"), "{missing}");
+
+let name: str = "bolide";
+let count: int = 4;
+check_str("variables", "{} has {} libs".format(name, count), "bolide has 4 libs");
+
+print("string format done\n");

@@ -1,0 +1,416 @@
+import "std/gui/gui.bl" as gui;
+import "std/web/web.bl" as web;
+import "std/json/json.bl" as json;
+import "std/url/url.bl" as url;
+
+let mode: str = "standard";
+let input_text: str = "Hello, how are you today?";
+let translated_text: str = "";
+let detected_source: str = "";
+let target_lang: str = "zh";
+let style: str = "professional";
+let context: str = "general";
+let preserve_format: bool = true;
+let status: str = "就绪";
+let last_http_status: int = 0;
+let processing_time: str = "";
+let translating: bool = false;
+let done_ch: channel<int> = channel();
+
+let worker_text: str = "";
+let worker_source: str = "";
+let worker_status: str = "";
+let worker_processing_time: str = "";
+let worker_http_status: int = 0;
+
+fn json_unescape(value: str) -> str {
+    return value
+        .replace("\\n", "\n")
+        .replace("\\r", "\r")
+        .replace("\\t", "\t")
+        .replace("\\\"", "\"")
+        .replace("\\\\", "\\");
+}
+
+fn json_string_field(body: str, key: str) -> str {
+    let quoted_key: str = "\"" + key + "\"";
+    let parts: list<str> = body.split(quoted_key);
+    if parts.len() < 2 {
+        return "";
+    }
+    let tail: str = parts[1];
+    let colon_parts: list<str> = tail.split(":");
+    if colon_parts.len() < 2 {
+        return "";
+    }
+    let after_colon: str = colon_parts[1].trim();
+    if not after_colon.starts_with("\"") {
+        return "";
+    }
+    let rest: str = after_colon.substring(1, after_colon.len());
+    let value_parts: list<str> = rest.split("\"");
+    if value_parts.len() < 1 {
+        return "";
+    }
+    return json_unescape(value_parts[0]);
+}
+
+fn json_number_field(body: str, key: str) -> str {
+    let needle: str = "\"" + key + "\"";
+    let pos: int = body.find(needle);
+    if pos < 0 {
+        return "";
+    }
+
+    let after_key: str = body.substring(pos + needle.len(), body.len());
+    let colon: int = after_key.find(":");
+    if colon < 0 {
+        return "";
+    }
+
+    let i: int = pos + needle.len() + colon + 1;
+    while i < body.len() and (body.char_at(i) == " " or body.char_at(i) == "\n" or body.char_at(i) == "\r" or body.char_at(i) == "\t") {
+        i = i + 1;
+    }
+
+    let start: int = i;
+    while i < body.len() {
+        let ch: str = body.char_at(i);
+        if ch == "," or ch == "}" or ch == "\n" or ch == "\r" or ch == " " {
+            return body.substring(start, i);
+        }
+        i = i + 1;
+    }
+    return body.substring(start, body.len());
+}
+
+fn headers() -> str {
+    return "Content-Type: application/json\r\nAccept: application/json\r\n";
+}
+
+fn error_message(body: str) -> str {
+    let message: str = json_string_field(body, "message");
+    if message != "" {
+        return message;
+    }
+    let err: str = json_string_field(body, "error");
+    if err != "" {
+        return err;
+    }
+    return body;
+}
+
+fn translated_field(body: str) -> str {
+    let text: str = json_string_field(body, "translated_text");
+    if text != "" {
+        return text;
+    }
+    return json_string_field(body, "translate");
+}
+
+fn standard_body(text: str, target: str) -> str {
+    return json.object([
+        json.pair("to_lang", json.value(target)),
+        json.pair("text", json.value(text))
+    ]);
+}
+
+fn ai_body(text: str, target: str, ai_style: str, ai_context: str, keep_format: bool) -> str {
+    let pairs: list<json.Pair> = [];
+    pairs.push(json.pair("target_lang", json.value(target)));
+    pairs.push(json.pair("text", json.value(text)));
+    pairs.push(json.pair("style", json.value(ai_style)));
+    pairs.push(json.pair("context", json.value(ai_context)));
+    pairs.push(json.pair("preserve_format", json.value(keep_format)));
+    return json.object(pairs);
+}
+
+fn translate_standard_worker(text: str, target: str) {
+    let endpoint: str = "https://uapis.cn/api/v1/translate/text?to_lang=" + url.encode_query_component(target);
+    let res: web.ClientResponse = web.fetch_with_options("POST", endpoint, standard_body(text, target), headers(), 12000, 2);
+    last_http_status = res.status();
+    let body: str = res.body_text();
+    res.free();
+
+    if last_http_status >= 200 and last_http_status < 300 {
+        worker_source = json_string_field(body, "source_lang");
+        worker_text = translated_field(body);
+        worker_processing_time = "";
+        if worker_text == "" {
+            worker_status = "请求成功，但没有找到译文字段";
+        } else {
+            worker_status = "翻译完成";
+        }
+    } else {
+        worker_text = error_message(body);
+        worker_source = "";
+        worker_processing_time = "";
+        worker_status = "请求失败: HTTP " + str(last_http_status);
+    }
+    worker_http_status = last_http_status;
+}
+
+fn translate_ai_worker(text: str, target: str, ai_style: str, ai_context: str, keep_format: bool) {
+    let endpoint: str = "https://uapis.cn/api/v1/ai/translate?target_lang=" + url.encode_query_component(target);
+    let res: web.ClientResponse = web.fetch_with_options("POST", endpoint, ai_body(text, target, ai_style, ai_context, keep_format), headers(), 20000, 2);
+    last_http_status = res.status();
+    let body: str = res.body_text();
+    res.free();
+
+    if last_http_status >= 200 and last_http_status < 300 {
+        worker_source = json_string_field(body, "source_lang");
+        worker_text = translated_field(body);
+        worker_processing_time = json_number_field(body, "processing_time_ms");
+        if worker_text == "" {
+            worker_status = "请求成功，但没有找到译文字段";
+        } else {
+            worker_status = "AI 翻译完成";
+        }
+    } else {
+        worker_text = error_message(body);
+        worker_source = "";
+        worker_processing_time = "";
+        worker_status = "请求失败: HTTP " + str(last_http_status);
+    }
+    worker_http_status = last_http_status;
+}
+
+fn translate_worker(kind: str, text: str, target: str, ai_style: str, ai_context: str, keep_format: bool, ch: channel<int>) -> int {
+    if kind == "ai" {
+        translate_ai_worker(text, target, ai_style, ai_context, keep_format);
+    } else {
+        translate_standard_worker(text, target);
+    }
+    ch.send(1);
+    return 1;
+}
+
+fn translate() {
+    if translating {
+        status = "正在翻译，请稍候";
+        return;
+    }
+    if input_text.strip() == "" {
+        status = "请输入要翻译的文本";
+        return;
+    }
+    if target_lang.strip() == "" {
+        status = "请输入目标语言代码";
+        return;
+    }
+    if mode == "standard" and input_text.len() > 3000 {
+        status = "普通翻译最多 3000 字符";
+        return;
+    }
+    if mode == "ai" and input_text.len() > 10000 {
+        status = "AI 翻译最多 10000 字符";
+        return;
+    }
+
+    translating = true;
+    status = "正在翻译...";
+    translated_text = "";
+    detected_source = "";
+    processing_time = "";
+    last_http_status = 0;
+    worker_text = "";
+    worker_source = "";
+    worker_status = "";
+    worker_processing_time = "";
+    worker_http_status = 0;
+    spawn thread translate_worker(mode, input_text, target_lang.strip(), style, context, preserve_format, done_ch);
+}
+
+fn poll_translation(ui: gui.Ui) {
+    if not translating {
+        return;
+    }
+    select {
+        done = done_ch.recv() => {
+            translated_text = worker_text;
+            detected_source = worker_source;
+            processing_time = worker_processing_time;
+            last_http_status = worker_http_status;
+            status = worker_status;
+            translating = false;
+        }
+        timeout(0) => {
+            ui.request_repaint();
+        }
+    }
+}
+
+fn mode_panel(ui: gui.Ui) {
+    ui.strong("模式");
+    ui.space(4);
+    if ui.selectable("普通翻译", mode == "standard") {
+        mode = "standard";
+        status = "已切换到普通翻译";
+    }
+    if ui.selectable("AI 智能翻译", mode == "ai") {
+        mode = "ai";
+        status = "已切换到 AI 智能翻译";
+    }
+    ui.separator();
+    if last_http_status > 0 {
+        ui.small("HTTP " + str(last_http_status));
+    }
+    if detected_source != "" {
+        ui.small("源语言: " + detected_source);
+    }
+    if processing_time != "" {
+        ui.small("耗时: " + processing_time + " ms");
+    }
+}
+
+fn quick_langs(ui: gui.Ui) {
+    if ui.selectable("中文 zh", target_lang == "zh") { target_lang = "zh"; }
+    if ui.selectable("英语 en", target_lang == "en") { target_lang = "en"; }
+    ui.end_row();
+    if ui.selectable("日语 ja", target_lang == "ja") { target_lang = "ja"; }
+    if ui.selectable("韩语 ko", target_lang == "ko") { target_lang = "ko"; }
+    ui.end_row();
+    if ui.selectable("法语 fr", target_lang == "fr") { target_lang = "fr"; }
+    if ui.selectable("德语 de", target_lang == "de") { target_lang = "de"; }
+    ui.end_row();
+    if ui.selectable("西语 es", target_lang == "es") { target_lang = "es"; }
+    if ui.selectable("俄语 ru", target_lang == "ru") { target_lang = "ru"; }
+    ui.end_row();
+}
+
+fn style_buttons(ui: gui.Ui) {
+    if ui.selectable("口语", style == "casual") { style = "casual"; }
+    if ui.selectable("商务", style == "professional") { style = "professional"; }
+    ui.end_row();
+    if ui.selectable("学术", style == "academic") { style = "academic"; }
+    if ui.selectable("文学", style == "literary") { style = "literary"; }
+    ui.end_row();
+}
+
+fn context_buttons(ui: gui.Ui) {
+    if ui.selectable("通用", context == "general") { context = "general"; }
+    if ui.selectable("商务", context == "business") { context = "business"; }
+    ui.end_row();
+    if ui.selectable("技术", context == "technical") { context = "technical"; }
+    if ui.selectable("医疗", context == "medical") { context = "medical"; }
+    ui.end_row();
+    if ui.selectable("法律", context == "legal") { context = "legal"; }
+    if ui.selectable("营销", context == "marketing") { context = "marketing"; }
+    ui.end_row();
+    if ui.selectable("教育", context == "education") { context = "education"; }
+    if ui.selectable("新闻", context == "news") { context = "news"; }
+    ui.end_row();
+}
+
+fn settings_panel(ui: gui.Ui) {
+    ui.frame("语言", settings_content);
+}
+
+fn settings_content(ui: gui.Ui) {
+    ui.small("目标: " + target_lang);
+    ui.space(6);
+    ui.strong("常用");
+    ui.grid("language-grid", 2, true, quick_langs);
+
+    if mode == "ai" {
+        ui.separator();
+        ui.strong("风格");
+        ui.grid("style-grid", 2, true, style_buttons);
+        ui.strong("场景");
+        ui.grid("context-grid", 2, true, context_buttons);
+        preserve_format = ui.checkbox("保留格式", preserve_format);
+    }
+}
+
+fn input_panel(ui: gui.Ui) {
+    ui.frame("原文", input_content);
+}
+
+fn input_content(ui: gui.Ui) {
+    input_text = ui.multiline_input("input-text", input_text, 8);
+    ui.space(6);
+    ui.pack_left(8, input_actions);
+}
+
+fn input_actions(ui: gui.Ui) {
+    if translating {
+        ui.small("翻译中...");
+    } else {
+        if ui.button("翻译") { translate(); }
+    }
+    if ui.button("清空") { clear_all(); }
+}
+
+fn clear_all() {
+    if translating {
+        status = "翻译中，暂不能清空";
+        return;
+    }
+    input_text = "";
+    translated_text = "";
+    detected_source = "";
+    processing_time = "";
+    last_http_status = 0;
+    status = "已清空";
+}
+
+fn output_panel(ui: gui.Ui) {
+    ui.frame("译文", output_content);
+}
+
+fn output_content(ui: gui.Ui) {
+    if translated_text == "" {
+        ui.small("译文会显示在下面的文本框中");
+    } else {
+        ui.strong("翻译结果");
+    }
+    translated_text = ui.multiline_input("translated-text", translated_text, 8);
+    ui.space(6);
+    ui.pack_left(8, output_actions);
+}
+
+fn output_actions(ui: gui.Ui) {
+    if ui.button("译文作原文") { use_output_as_input(); }
+}
+
+fn use_output_as_input() {
+    input_text = translated_text;
+    translated_text = "";
+    status = "译文已放入原文";
+}
+
+fn left_column(ui: gui.Ui) {
+    ui.scroll("translator-sidebar-scroll", 610, left_column_scroll);
+}
+
+fn left_column_scroll(ui: gui.Ui) {
+    mode_panel(ui);
+    ui.separator();
+    settings_panel(ui);
+}
+
+fn work_area(ui: gui.Ui) {
+    input_panel(ui);
+    ui.space(8);
+    output_panel(ui);
+}
+
+fn footer(ui: gui.Ui) {
+    ui.small(status);
+}
+
+fn root(ui: gui.Ui) {
+    poll_translation(ui);
+    ui.place(10, 8, 960, 62, title_bar);
+    ui.place(10, 82, 220, 612, left_column);
+    ui.place(240, 82, 730, 286, input_panel);
+    ui.place(240, 378, 730, 286, output_panel);
+    ui.place(240, 672, 730, 34, footer);
+}
+
+fn title_bar(ui: gui.Ui) {
+    ui.heading("Bolide Translator");
+    ui.small("双模式翻译工具");
+}
+
+gui.run("Bolide Translator", 980, 720, root);

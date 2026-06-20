@@ -18,6 +18,8 @@ kw_await  = @{ "await"  ~ !id_char }
 kw_spawn  = @{ "spawn"  ~ !id_char }
 kw_thread = @{ "thread" ~ !id_char }
 kw_throws = @{ "throws" ~ !id_char }
+kw_let    = @{ "let"    ~ !id_char }
+kw_var    = @{ "var"    ~ !id_char }
 
 // 程序入口
 program = { SOI ~ (statement)* ~ EOI }
@@ -155,7 +157,8 @@ select_timeout = { "timeout" ~ "(" ~ expr ~ ")" ~ "=>" ~ block }
 select_default = { "default" ~ "=>" ~ block }
 
 return_stmt = { "return" ~ expr? ~ ";" }
-var_decl = { "let" ~ ident ~ (":" ~ type_expr)? ~ ("=" ~ expr)? ~ ";" }
+var_kind = { kw_let | kw_var }
+var_decl = { var_kind ~ ident ~ (":" ~ type_expr)? ~ ("=" ~ expr)? ~ ";" }
 assign_stmt = { assign_target ~ assign_op ~ expr ~ ";" }
 assign_op = @{ "+=" | "-=" | "*=" | "/=" | "%=" | ("=" ~ !"=") }
 assign_target = { (ident | self_lit) ~ (member | index)* }

@@ -1,0 +1,117 @@
+import "std/buffer/buffer.bl" as buffer;
+import "std/fs/fs.bl" as fs;
+import "std/time/time.bl" as time;
+
+fn iter_at(px: int, py: int, width: int, height: int, max_iter: int) -> int {
+    let cx: float = (float(px) / float(width)) * 3.5 - 2.5;
+    let cy: float = (float(py) / float(height)) * 2.0 - 1.0;
+    let x: float = 0.0;
+    let y: float = 0.0;
+    let iter: int = 0;
+
+    while x * x + y * y <= 4.0 and iter < max_iter {
+        let next_x: float = x * x - y * y + cx;
+        y = 2.0 * x * y + cy;
+        x = next_x;
+        iter = iter + 1;
+    }
+
+    return iter;
+}
+
+fn write_color(out: buffer.Buffer, iter: int, max_iter: int) {
+    if iter >= max_iter {
+        out.push("8 10 18\n");
+        return;
+    }
+
+    let t: int = iter * 255 / max_iter;
+    let r: int = t;
+    let g: int = (t * t) / 255;
+    let b: int = 255 - t;
+    out.push(r);
+    out.push(" ");
+    out.push(g);
+    out.push(" ");
+    out.push(b);
+    out.push("\n");
+}
+
+fn render_band(y0: int, y1: int, width: int, height: int, max_iter: int) -> str {
+    let out: buffer.Buffer = buffer.with_capacity((y1 - y0) * width * 12);
+    for y in range(y0, y1) {
+        for x in range(width) {
+            write_color(out, iter_at(x, y, width, height, max_iter), max_iter);
+        }
+    }
+    let text: str = out.to_string();
+    out.close();
+    return text;
+}
+
+fn ppm_header(width: int, height: int) -> str {
+    return "P3\n{} {}\n255\n".format(width, height);
+}
+
+fn render_serial(width: int, height: int, max_iter: int) -> str {
+    return ppm_header(width, height) + render_band(0, height, width, height, max_iter);
+}
+
+fn render_parallel(width: int, height: int, max_iter: int) -> str {
+    let step: int = height / 8;
+
+    let parts: (str, str, str, str, str, str, str, str) = spawn all {
+        render_band(0, step, width, height, max_iter),
+        render_band(step, step * 2, width, height, max_iter),
+        render_band(step * 2, step * 3, width, height, max_iter),
+        render_band(step * 3, step * 4, width, height, max_iter),
+        render_band(step * 4, step * 5, width, height, max_iter),
+        render_band(step * 5, step * 6, width, height, max_iter),
+        render_band(step * 6, step * 7, width, height, max_iter),
+        render_band(step * 7, height, width, height, max_iter)
+    };
+
+    return ppm_header(width, height)
+        + parts[0] + parts[1] + parts[2] + parts[3]
+        + parts[4] + parts[5] + parts[6] + parts[7];
+}
+
+fn report(name: str, elapsed_ms: int, path: str, ok: bool) {
+    if ok {
+        print("{}: {} ms -> {}\n".format(name, elapsed_ms, path));
+    } else {
+        print("{}: write failed -> {}\n".format(name, path));
+    }
+}
+
+let width: int = 640;
+let height: int = 360;
+let max_iter: int = 900;
+
+fs.create_dir_all("tmp");
+
+print("Mandelbrot parallel rendering demo\n");
+print("image: {}x{}, max_iter={}\n".format(width, height, max_iter));
+
+let serial_start: int = time.monotonic_ms();
+let serial_image: str = render_serial(width, height, max_iter);
+let serial_ms: int = time.monotonic_ms() - serial_start;
+let serial_ok: bool = fs.write_text("tmp/mandelbrot_serial.ppm", serial_image);
+report("serial", serial_ms, "tmp/mandelbrot_serial.ppm", serial_ok);
+
+let parallel_start: int = time.monotonic_ms();
+let parallel_image: str = render_parallel(width, height, max_iter);
+let parallel_ms: int = time.monotonic_ms() - parallel_start;
+let parallel_ok: bool = fs.write_text("tmp/mandelbrot_parallel.ppm", parallel_image);
+report("parallel", parallel_ms, "tmp/mandelbrot_parallel.ppm", parallel_ok);
+
+if parallel_image == serial_image {
+    print("check: serial and parallel images are identical\n");
+} else {
+    print("check: images differ\n");
+}
+
+if parallel_ms > 0 {
+    let speedup: float = float(serial_ms) / float(parallel_ms);
+    print("speedup: {}x\n".format(speedup));
+}

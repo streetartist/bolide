@@ -12,7 +12,7 @@
     <img src="https://img.shields.io/badge/License-MIT-brightgreen.svg" alt="License: MIT">
   </a>
   <a href="#">
-    <img src="https://img.shields.io/badge/version-0.13.4-blue.svg" alt="Version">
+    <img src="https://img.shields.io/badge/version-0.13.5-blue.svg" alt="Version">
   </a>
   <a href="#">
     <img src="https://img.shields.io/badge/platform-windows%20%7C%20linux-lightgrey.svg" alt="Platform">
@@ -35,13 +35,14 @@
 - **闭包** - 支持 `fn(...) -> T { ... }` 闭包字面量、自动捕获局部变量、闭包参数与返回闭包
 - **泛型函数** - 支持 `fn id<T>(x: T) -> T` 形式的类型参数，调用点自动推断并单态化
 - **函数参数** - 支持默认值、具名调用、`*args` 列表变长参数和 `**kwargs` 字典变长参数
+- **默认不可变绑定** - `let` 默认不可变，`var` 用于需要重新赋值或原地修改的状态
 - **字符串与切片** - 内置字符串方法，支持字符串、列表、元组的 Python 风格切片
 - **异步协程** - 一等公民的 async/await 支持
 - **双向 FFI** - 无缝调用 C 库（支持回调）；也可将 Bolide 编译为静态库供 C 调用（`export fn` + `.h` 生成）
 - **模块系统** - 命名空间隔离的模块导入
 - **源码级报错** - `run`、`compile` 和 REPL 输出文件名、行列号、源码片段、指针标注与修复提示
 - **丰富类型** - BigInt、Decimal、Dynamic 等
-- **并发支持** - 线程、通道、线程池
+- **并发支持** - 线程、通道、线程池、原子类型和同步原语
 - **Web 标准库** - 高性能 HTTP 服务、路由、会话、静态文件和 AOT 单文件部署
 - **内存管理** - ARC 引用计数 + 生命周期注解 + weak/unowned 引用
 
@@ -144,6 +145,8 @@ Bolide 运行时静态库（`bolide_runtime.lib` / `libbolide_runtime.a`）。�
 
 ### 变量与类型
 
+`let` 声明不可变绑定；需要重新赋值或原地修改容器/对象字段时使用 `var`。
+
 ```bolide
 let x: int = 42;
 let pi: float = 3.14159;
@@ -157,6 +160,12 @@ let million: int = 1_000_000;
 
 // 字符串支持转义序列: \" \\ \n \t \r \0
 let quoted: str = "he said \"hi\"\nsecond line";
+
+var counter: int = 0;
+counter += 1;
+
+var items: list<int> = [1, 2];
+items.push(3);
 ```
 
 ### 用户输入
@@ -245,7 +254,7 @@ greet(name="Bolide");            // 具名参数，等价于 name: "Bolide"
 greet(punctuation="?", name="B");// 具名参数可调整顺序
 
 fn total(base: int = 10, *nums: int, **opts: int) -> int {
-    let sum: int = base;
+    var sum: int = base;
     for n in nums {              // nums 的类型是 list<int>
         sum += n;
     }
@@ -435,12 +444,13 @@ for n in nums {
 }
 
 // while 循环
+var x: int = 5;
 while x > 0 {
     x = x - 1;
 }
 
 // 复合赋值
-let n: int = 10;
+var n: int = 10;
 n += 5;   // 15
 n -= 3;   // 12
 n *= 2;   // 24
@@ -448,7 +458,7 @@ n /= 4;   // 6
 n %= 4;   // 2
 
 // break / continue
-let total: int = 0;
+var total: int = 0;
 for i in range(10) {
     if i == 3 {
         continue;  // 跳过本次迭代
@@ -499,7 +509,7 @@ Unicode 码点截取。
 Bolide 提供了丰富的 Python 风格列表操作：
 
 ```bolide
-let nums: list<int> = [3, 1, 4, 1, 5, 9];
+var nums: list<int> = [3, 1, 4, 1, 5, 9];
 
 // 基本操作
 nums.push(10);           // 追加元素
@@ -549,7 +559,7 @@ Bolide 支持强类型和混合类型的动态字典，语法类似于 Python：
 
 ```bolide
 // 强类型字典
-let scores: dict<str, int> = {"Alice": 100, "Bob": 90};
+var scores: dict<str, int> = {"Alice": 100, "Bob": 90};
 print(scores["Alice"]);  // 100
 
 // 混合类型字典 (自动推导为 dict<dynamic, dynamic>)
@@ -674,6 +684,25 @@ spawn sender(ch);
 
 let val: int = ch.recv();  // 接收数据
 ch.recv();                 // 纯同步：接收并丢弃返回值
+```
+
+#### 原子与同步
+
+`std/atomic` 提供 `AtomicInt`、`AtomicBool`；`std/sync` 提供值语义的
+`Mutex`、`RwLock` 和 `Once`。锁内值通过 `dynamic` 承载。锁 API 不暴露裸 guard，使用 `get()` 读取副本，
+用 `set`/`swap`/`add_int` 等方法在运行时锁内完成修改。
+
+```bolide
+import "std/atomic/atomic.bl" as atomic;
+import "std/sync/sync.bl" as sync;
+
+let counter: atomic.AtomicInt = atomic.new_int(0);
+counter.add(1);
+print(counter.get());
+
+let lock: sync.Mutex = sync.mutex(10);
+lock.add_int(5);
+print(lock.get());
 ```
 
 #### Channel Select (多路复用)
@@ -815,8 +844,11 @@ import "utils/extra.bl";      // 导入包内的其他源文件（相对包源�
 
 ### 变量与作用域
 
-- 顶层 `let` 声明**全局变量**，函数内可读取、赋值（GUI 回调依赖这一点）；
-- 函数内的 `let` 声明**局部变量**，同名时遮蔽全局变量；
+- `let` 声明不可变绑定，声明后不能重新赋值，也不能通过该绑定做
+  `xs[i] = ...`、`xs.push(...)`、`dict.set(...)` 这类原地修改；
+- `var` 声明可变绑定，允许重新赋值、复合赋值和容器原地修改；
+- 顶层声明是**全局变量**，函数内可读取；需要在函数/回调中修改的全局状态应使用 `var`；
+- 函数内声明是**局部变量**，同名时遮蔽全局变量；
 - 全局变量与局部变量能力一致：可作 `ref` 实参、可作通道用于
   `send`/`recv` 收发与 `select`、支持 `float` 等全部类型。
 
@@ -1266,8 +1298,11 @@ print(u.value);             // 对象存活时直接访问
 ### 并发安全
 
 - 所有引用计数（强/弱）均为原子操作，跨线程 retain/release 无数据竞争；
-- `spawn` 对传入对象采用 move 语义，原变量失效（运行时 MOVED 标记）；
-- channel 当前只支持值类型传递，对象传递的 Arc 方案见 todo.md。
+- `spawn` 会拒绝明显共享可变的 `list`、`dict`、`bytes` 和 `dynamic` 参数；
+- 已确认不可变的 `let` 绑定可以作为 `spawn` 参数传入；运行时会按类型 clone/retain，
+  例如 `list`/`dict`/`bytes` 会传递独立容器副本；
+- 需要在线程间共享并修改状态时，优先使用 channel、`std/atomic` 或 `std/sync`；
+- `pool(0)` 会钳制为至少 1 个 worker；线程/任务句柄的重复 await/join 会被运行时同步保护。
 
 
 ## 项目结构
@@ -1285,6 +1320,17 @@ bolide/
 ```
 
 ## 标准库实现方式
+
+### 常用标准库模块
+
+- `std/collections/collections.bl`：`IntSet`、`StringSet`、`Queue`、`Stack`、`Counter`、`IntPriorityQueue`。
+- `std/iter/iter.bl`：整数序列、`take`、`drop`、`chunk`、`sum`、`min`、`max`、`join`、`zip`。
+- `std/arena/arena.bl`：`Arena` 用于批量保活/释放 dynamic 值，`BufferArena` 用于临时文本构建。
+- `std/atomic/atomic.bl`：`AtomicInt`、`AtomicBool`。
+- `std/sync/sync.bl`：`Mutex`、`RwLock`、`Once`。
+- `std/json/json.bl`、`std/csv/csv.bl`、`std/html/html.bl`、`std/template/template.bl`：常用文本与 Web 输出工具。
+- `std/fs/fs.bl`、`std/path/path.bl`、`std/io/io.bl`、`std/process/process.bl`、`std/env/env.bl`：系统与文件处理。
+- `std/http/http.bl`、`std/web/web.bl`、`std/gui/gui.bl`：HTTP 客户端、Web 服务和 GUI。
 
 Bolide 标准库通常由 `.bl` 包装层加底层实现组成。用户侧通过 `import "std/..."` 使用稳定的 Bolide API，底层实现由工具链处理。
 
@@ -1523,8 +1569,8 @@ GUI 标准库的用户层只接触 Bolide 类型：`gui.Ui`、`str`、`int`、`b
 ```bolide
 import "std/gui/gui.bl";
 
-let count: int = 0;
-let status: str = "准备";
+var count: int = 0;
+var status: str = "准备";
 
 fn toolbar(ui: gui.Ui) {
     if ui.button("增加") {

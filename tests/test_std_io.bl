@@ -1,0 +1,40 @@
+import "std/bytes/bytes.bl" as bytes;
+import "std/fs/fs.bl" as fs;
+import "std/io/io.bl" as io;
+
+fn check_bool(name: str, got: bool, want: bool) {
+    if got == want {
+        print("ok " + name + "\n");
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want) + "\n");
+    }
+}
+
+fn check_str(name: str, got: str, want: str) {
+    if got == want {
+        print("ok " + name + "\n");
+    } else {
+        print("FAIL " + name + " got=" + got + " want=" + want + "\n");
+    }
+}
+
+let path: str = "tmp/test_std_io.txt";
+fs.create_dir_all("tmp");
+
+let out: io.Writer = io.open_write(path);
+check_bool("open write", out.ok(), true);
+check_bool("write", out.write("hello"), true);
+check_bool("line", out.line(" world"), true);
+check_bool("bytes", out.write_bytes(bytes.from_string("bytes")), true);
+check_bool("flush", out.flush(), true);
+out.close();
+
+let append: io.Writer = io.open_append(path);
+check_bool("open append", append.ok(), true);
+check_bool("append", append.line("!"), true);
+append.close();
+
+check_str("content", fs.read_text(path), "hello world\nbytes!\n");
+fs.remove_file(path);
+
+print("std io done\n");

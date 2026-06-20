@@ -3,6 +3,7 @@
 //! 提供线程创建、线程池和 Future 支持
 //! 使用 trampoline 方案，运行时只处理无参函数
 
+use std::cell::Cell;
 use std::collections::VecDeque;
 use std::os::raw::c_void;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -30,14 +31,36 @@ unsafe impl Sync for ThreadResult {}
 /// 线程句柄
 #[repr(C)]
 pub struct BolideThreadHandle {
+    state: Mutex<ThreadHandleState>,
+    cancelled: Arc<AtomicBool>,
+}
+
+struct ThreadHandleState {
     handle: Option<JoinHandle<ThreadResult>>,
     result: ThreadResult,
     has_result: bool,
-    cancelled: Arc<AtomicBool>,
 }
 
 unsafe impl Send for BolideThreadHandle {}
 unsafe impl Sync for BolideThreadHandle {}
+
+fn thread_result(handle: &BolideThreadHandle) -> Option<ThreadResult> {
+    let mut state = handle.state.lock().unwrap();
+
+    if !state.has_result {
+        if let Some(join_handle) = state.handle.take() {
+            match join_handle.join() {
+                Ok(result) => {
+                    state.result = result;
+                    state.has_result = true;
+                }
+                Err(_) => return None,
+            }
+        }
+    }
+
+    Some(state.result)
+}
 
 /// 线程池
 pub struct BolideThreadPool {
@@ -55,6 +78,7 @@ struct Worker {
 
 impl BolideThreadPool {
     pub fn new(size: usize) -> Self {
+        let size = size.max(1);
         let sender: Arc<Mutex<VecDeque<Job>>> = Arc::new(Mutex::new(VecDeque::new()));
         let condvar = Arc::new(Condvar::new());
         let shutdown = Arc::new(Mutex::new(false));
@@ -140,9 +164,11 @@ pub extern "C" fn bolide_thread_spawn_int(
     });
 
     Box::into_raw(Box::new(BolideThreadHandle {
-        handle: Some(handle),
-        result: ThreadResult { int_val: 0 },
-        has_result: false,
+        state: Mutex::new(ThreadHandleState {
+            handle: Some(handle),
+            result: ThreadResult { int_val: 0 },
+            has_result: false,
+        }),
         cancelled,
     }))
 }
@@ -161,9 +187,11 @@ pub extern "C" fn bolide_thread_spawn_float(
     });
 
     Box::into_raw(Box::new(BolideThreadHandle {
-        handle: Some(handle),
-        result: ThreadResult { float_val: 0.0 },
-        has_result: false,
+        state: Mutex::new(ThreadHandleState {
+            handle: Some(handle),
+            result: ThreadResult { float_val: 0.0 },
+            has_result: false,
+        }),
         cancelled,
     }))
 }
@@ -182,11 +210,13 @@ pub extern "C" fn bolide_thread_spawn_ptr(
     });
 
     Box::into_raw(Box::new(BolideThreadHandle {
-        handle: Some(handle),
-        result: ThreadResult {
-            ptr_val: std::ptr::null_mut(),
-        },
-        has_result: false,
+        state: Mutex::new(ThreadHandleState {
+            handle: Some(handle),
+            result: ThreadResult {
+                ptr_val: std::ptr::null_mut(),
+            },
+            has_result: false,
+        }),
         cancelled,
     }))
 }
@@ -212,9 +242,11 @@ pub extern "C" fn bolide_thread_spawn_int_with_env(
     });
 
     Box::into_raw(Box::new(BolideThreadHandle {
-        handle: Some(handle),
-        result: ThreadResult { int_val: 0 },
-        has_result: false,
+        state: Mutex::new(ThreadHandleState {
+            handle: Some(handle),
+            result: ThreadResult { int_val: 0 },
+            has_result: false,
+        }),
         cancelled,
     }))
 }
@@ -238,9 +270,11 @@ pub extern "C" fn bolide_thread_spawn_float_with_env(
     });
 
     Box::into_raw(Box::new(BolideThreadHandle {
-        handle: Some(handle),
-        result: ThreadResult { float_val: 0.0 },
-        has_result: false,
+        state: Mutex::new(ThreadHandleState {
+            handle: Some(handle),
+            result: ThreadResult { float_val: 0.0 },
+            has_result: false,
+        }),
         cancelled,
     }))
 }
@@ -264,11 +298,13 @@ pub extern "C" fn bolide_thread_spawn_ptr_with_env(
     });
 
     Box::into_raw(Box::new(BolideThreadHandle {
-        handle: Some(handle),
-        result: ThreadResult {
-            ptr_val: std::ptr::null_mut(),
-        },
-        has_result: false,
+        state: Mutex::new(ThreadHandleState {
+            handle: Some(handle),
+            result: ThreadResult {
+                ptr_val: std::ptr::null_mut(),
+            },
+            has_result: false,
+        }),
         cancelled,
     }))
 }
@@ -280,21 +316,8 @@ pub extern "C" fn bolide_thread_join_int(handle: *mut BolideThreadHandle) -> i64
         return 0;
     }
 
-    let handle = unsafe { &mut *handle };
-
-    if !handle.has_result {
-        if let Some(join_handle) = handle.handle.take() {
-            match join_handle.join() {
-                Ok(result) => {
-                    handle.result = result;
-                    handle.has_result = true;
-                }
-                Err(_) => return 0,
-            }
-        }
-    }
-
-    unsafe { handle.result.int_val }
+    let handle = unsafe { &*handle };
+    thread_result(handle).map_or(0, |result| unsafe { result.int_val })
 }
 
 /// 等待线程完成并获取 float 类型结果
@@ -304,21 +327,8 @@ pub extern "C" fn bolide_thread_join_float(handle: *mut BolideThreadHandle) -> f
         return 0.0;
     }
 
-    let handle = unsafe { &mut *handle };
-
-    if !handle.has_result {
-        if let Some(join_handle) = handle.handle.take() {
-            match join_handle.join() {
-                Ok(result) => {
-                    handle.result = result;
-                    handle.has_result = true;
-                }
-                Err(_) => return 0.0,
-            }
-        }
-    }
-
-    unsafe { handle.result.float_val }
+    let handle = unsafe { &*handle };
+    thread_result(handle).map_or(0.0, |result| unsafe { result.float_val })
 }
 
 /// 等待线程完成并获取指针类型结果
@@ -328,21 +338,8 @@ pub extern "C" fn bolide_thread_join_ptr(handle: *mut BolideThreadHandle) -> *mu
         return std::ptr::null_mut();
     }
 
-    let handle = unsafe { &mut *handle };
-
-    if !handle.has_result {
-        if let Some(join_handle) = handle.handle.take() {
-            match join_handle.join() {
-                Ok(result) => {
-                    handle.result = result;
-                    handle.has_result = true;
-                }
-                Err(_) => return std::ptr::null_mut(),
-            }
-        }
-    }
-
-    unsafe { handle.result.ptr_val }
+    let handle = unsafe { &*handle };
+    thread_result(handle).map_or(std::ptr::null_mut(), |result| unsafe { result.ptr_val })
 }
 
 /// 释放线程句柄
@@ -382,38 +379,37 @@ pub extern "C" fn bolide_thread_is_cancelled(handle: *const BolideThreadHandle) 
 
 // ==================== 线程池 FFI ====================
 
-struct SendPtr(*mut BolideThreadPool);
-unsafe impl Send for SendPtr {}
-unsafe impl Sync for SendPtr {}
+thread_local! {
+    static POOL_CONTEXT: Cell<*mut BolideThreadPool> = const { Cell::new(std::ptr::null_mut()) };
+}
 
-static POOL_CONTEXT: Mutex<Option<SendPtr>> = Mutex::new(None);
+fn current_pool() -> *mut BolideThreadPool {
+    POOL_CONTEXT.with(Cell::get)
+}
 
 /// 创建线程池
 #[no_mangle]
 pub extern "C" fn bolide_pool_create(size: i64) -> *mut BolideThreadPool {
-    let pool = BolideThreadPool::new(size as usize);
+    let pool = BolideThreadPool::new(size.max(1) as usize);
     Box::into_raw(Box::new(pool))
 }
 
 /// 设置当前线程池上下文
 #[no_mangle]
 pub extern "C" fn bolide_pool_enter(pool: *mut BolideThreadPool) {
-    let mut ctx = POOL_CONTEXT.lock().unwrap();
-    *ctx = Some(SendPtr(pool));
+    POOL_CONTEXT.with(|ctx| ctx.set(pool));
 }
 
 /// 清除当前线程池上下文
 #[no_mangle]
 pub extern "C" fn bolide_pool_exit() {
-    let mut ctx = POOL_CONTEXT.lock().unwrap();
-    *ctx = None;
+    POOL_CONTEXT.with(|ctx| ctx.set(std::ptr::null_mut()));
 }
 
 /// 检查是否在线程池上下文中
 #[no_mangle]
 pub extern "C" fn bolide_pool_is_active() -> i64 {
-    let ctx = POOL_CONTEXT.lock().unwrap();
-    if ctx.is_some() {
+    if !current_pool().is_null() {
         1
     } else {
         0
@@ -464,9 +460,9 @@ pub extern "C" fn bolide_pool_spawn_int(func_ptr: extern "C" fn() -> i64) -> *mu
     let result_clone = Arc::clone(&result);
     let completed_clone = Arc::clone(&completed);
 
-    let ctx = POOL_CONTEXT.lock().unwrap();
-    if let Some(ref send_ptr) = *ctx {
-        let pool = unsafe { &*send_ptr.0 };
+    let pool_ptr = current_pool();
+    if !pool_ptr.is_null() {
+        let pool = unsafe { &*pool_ptr };
 
         let job = Box::new(move || {
             let f: extern "C" fn() -> i64 = unsafe { std::mem::transmute(send_fn) };
@@ -511,9 +507,9 @@ pub extern "C" fn bolide_pool_spawn_float(
     let result_clone = Arc::clone(&result);
     let completed_clone = Arc::clone(&completed);
 
-    let ctx = POOL_CONTEXT.lock().unwrap();
-    if let Some(ref send_ptr) = *ctx {
-        let pool = unsafe { &*send_ptr.0 };
+    let pool_ptr = current_pool();
+    if !pool_ptr.is_null() {
+        let pool = unsafe { &*pool_ptr };
 
         let job = Box::new(move || {
             let f: extern "C" fn() -> f64 = unsafe { std::mem::transmute(send_fn) };
@@ -557,9 +553,9 @@ pub extern "C" fn bolide_pool_spawn_ptr(
     let result_clone = Arc::clone(&result);
     let completed_clone = Arc::clone(&completed);
 
-    let ctx = POOL_CONTEXT.lock().unwrap();
-    if let Some(ref send_ptr) = *ctx {
-        let pool = unsafe { &*send_ptr.0 };
+    let pool_ptr = current_pool();
+    if !pool_ptr.is_null() {
+        let pool = unsafe { &*pool_ptr };
 
         let job = Box::new(move || {
             let f: extern "C" fn() -> *mut c_void = unsafe { std::mem::transmute(send_fn) };
@@ -607,9 +603,9 @@ pub extern "C" fn bolide_pool_spawn_int_with_env(
     let result_clone = Arc::clone(&result);
     let completed_clone = Arc::clone(&completed);
 
-    let ctx = POOL_CONTEXT.lock().unwrap();
-    if let Some(ref send_ptr) = *ctx {
-        let pool = unsafe { &*send_ptr.0 };
+    let pool_ptr = current_pool();
+    if !pool_ptr.is_null() {
+        let pool = unsafe { &*pool_ptr };
 
         let job = Box::new(move || {
             let f: extern "C" fn(*mut c_void) -> i64 = unsafe { std::mem::transmute(send_fn) };
@@ -661,9 +657,9 @@ pub extern "C" fn bolide_pool_spawn_float_with_env(
     let result_clone = Arc::clone(&result);
     let completed_clone = Arc::clone(&completed);
 
-    let ctx = POOL_CONTEXT.lock().unwrap();
-    if let Some(ref send_ptr) = *ctx {
-        let pool = unsafe { &*send_ptr.0 };
+    let pool_ptr = current_pool();
+    if !pool_ptr.is_null() {
+        let pool = unsafe { &*pool_ptr };
 
         let job = Box::new(move || {
             let f: extern "C" fn(*mut c_void) -> f64 = unsafe { std::mem::transmute(send_fn) };
@@ -715,9 +711,9 @@ pub extern "C" fn bolide_pool_spawn_ptr_with_env(
     let result_clone = Arc::clone(&result);
     let completed_clone = Arc::clone(&completed);
 
-    let ctx = POOL_CONTEXT.lock().unwrap();
-    if let Some(ref send_ptr) = *ctx {
-        let pool = unsafe { &*send_ptr.0 };
+    let pool_ptr = current_pool();
+    if !pool_ptr.is_null() {
+        let pool = unsafe { &*pool_ptr };
 
         let job = Box::new(move || {
             let f: extern "C" fn(*mut c_void) -> *mut c_void =

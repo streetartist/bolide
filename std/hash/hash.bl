@@ -1,0 +1,25 @@
+// Bolide hashing and checksum helpers.
+// Usage: import "std/hash/hash.bl" as hash;
+
+extern "bolide" {
+    fn bolide_hash_fnv1a(text: str) -> i64;
+    fn bolide_hash_fnv1a_bytes(data: bytes) -> i64;
+    fn bolide_hash_crc32(text: str) -> i64;
+    fn bolide_hash_crc32_bytes(data: bytes) -> i64;
+}
+
+fn fnv1a(text: str) -> int {
+    return bolide_hash_fnv1a(text);
+}
+
+fn fnv1a(data: bytes) -> int {
+    return bolide_hash_fnv1a_bytes(data);
+}
+
+fn crc32(text: str) -> int {
+    return bolide_hash_crc32(text);
+}
+
+fn crc32(data: bytes) -> int {
+    return bolide_hash_crc32_bytes(data);
+}

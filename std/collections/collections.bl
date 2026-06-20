@@ -1,0 +1,291 @@
+// Bolide collection helpers.
+// Usage: import "std/collections/collections.bl" as collections;
+
+class IntSet {
+    items: dict<int, bool>;
+
+    fn add(value: int) {
+        self.items[value] = true;
+    }
+
+    fn remove(value: int) -> bool {
+        if self.items.contains(value) {
+            self.items.remove(value);
+            return true;
+        }
+        return false;
+    }
+
+    fn contains(value: int) -> bool {
+        return self.items.contains(value);
+    }
+
+    fn len() -> int {
+        return self.items.len();
+    }
+
+    fn is_empty() -> bool {
+        return self.items.len() == 0;
+    }
+
+    fn values() -> list<int> {
+        return self.items.keys();
+    }
+
+    fn clear() {
+        self.items.clear();
+    }
+}
+
+class StringSet {
+    items: dict<str, bool>;
+
+    fn add(value: str) {
+        self.items[value] = true;
+    }
+
+    fn remove(value: str) -> bool {
+        if self.items.contains(value) {
+            self.items.remove(value);
+            return true;
+        }
+        return false;
+    }
+
+    fn contains(value: str) -> bool {
+        return self.items.contains(value);
+    }
+
+    fn len() -> int {
+        return self.items.len();
+    }
+
+    fn is_empty() -> bool {
+        return self.items.len() == 0;
+    }
+
+    fn values() -> list<str> {
+        return self.items.keys();
+    }
+
+    fn clear() {
+        self.items.clear();
+    }
+}
+
+class Queue {
+    items: list<dynamic>;
+    head: int;
+
+    fn push(value: dynamic) {
+        self.items.push(value);
+    }
+
+    fn pop() -> dynamic {
+        if self.head >= self.items.len() {
+            return none;
+        }
+        let value: dynamic = self.items[self.head];
+        self.head = self.head + 1;
+        if self.head > 32 and self.head * 2 > self.items.len() {
+            var next: list<dynamic> = [];
+            for i in range(self.head, self.items.len()) {
+                next.push(self.items[i]);
+            }
+            self.items = next;
+            self.head = 0;
+        }
+        return value;
+    }
+
+    fn peek() -> dynamic {
+        if self.head >= self.items.len() {
+            return none;
+        }
+        return self.items[self.head];
+    }
+
+    fn len() -> int {
+        return self.items.len() - self.head;
+    }
+
+    fn is_empty() -> bool {
+        return self.len() == 0;
+    }
+
+    fn clear() {
+        self.items.clear();
+        self.head = 0;
+    }
+}
+
+class Stack {
+    items: list<dynamic>;
+
+    fn push(value: dynamic) {
+        self.items.push(value);
+    }
+
+    fn pop() -> dynamic {
+        if self.items.len() == 0 {
+            return none;
+        }
+        return self.items.pop();
+    }
+
+    fn peek() -> dynamic {
+        if self.items.len() == 0 {
+            return none;
+        }
+        return self.items[self.items.len() - 1];
+    }
+
+    fn len() -> int {
+        return self.items.len();
+    }
+
+    fn is_empty() -> bool {
+        return self.items.len() == 0;
+    }
+
+    fn clear() {
+        self.items.clear();
+    }
+}
+
+class Counter {
+    counts: dict<str, int>;
+
+    fn add(key: str) -> int {
+        return self.add_by(key, 1);
+    }
+
+    fn add_by(key: str, delta: int) -> int {
+        var next: int = delta;
+        if self.counts.contains(key) {
+            next = self.counts[key] + delta;
+        }
+        self.counts[key] = next;
+        return next;
+    }
+
+    fn get(key: str) -> int {
+        if self.counts.contains(key) {
+            return self.counts[key];
+        }
+        return 0;
+    }
+
+    fn remove(key: str) -> bool {
+        if self.counts.contains(key) {
+            self.counts.remove(key);
+            return true;
+        }
+        return false;
+    }
+
+    fn keys() -> list<str> {
+        return self.counts.keys();
+    }
+
+    fn len() -> int {
+        return self.counts.len();
+    }
+
+    fn clear() {
+        self.counts.clear();
+    }
+}
+
+class IntPriorityQueue {
+    values: list<int>;
+
+    fn push(value: int) {
+        self.values.push(value);
+        var i: int = self.values.len() - 1;
+        while i > 0 {
+            let parent: int = (i - 1) / 2;
+            if self.values[parent] <= self.values[i] {
+                return;
+            }
+            let tmp: int = self.values[parent];
+            self.values[parent] = self.values[i];
+            self.values[i] = tmp;
+            i = parent;
+        }
+    }
+
+    fn pop() -> int {
+        if self.values.len() == 0 {
+            return 0;
+        }
+        let result: int = self.values[0];
+        let last: int = self.values.pop();
+        if self.values.len() > 0 {
+            self.values[0] = last;
+            var i: int = 0;
+            while true {
+                let left: int = i * 2 + 1;
+                let right: int = left + 1;
+                var smallest: int = i;
+                if left < self.values.len() and self.values[left] < self.values[smallest] {
+                    smallest = left;
+                }
+                if right < self.values.len() and self.values[right] < self.values[smallest] {
+                    smallest = right;
+                }
+                if smallest == i {
+                    return result;
+                }
+                let tmp: int = self.values[i];
+                self.values[i] = self.values[smallest];
+                self.values[smallest] = tmp;
+                i = smallest;
+            }
+        }
+        return result;
+    }
+
+    fn peek() -> int {
+        if self.values.len() == 0 {
+            return 0;
+        }
+        return self.values[0];
+    }
+
+    fn len() -> int {
+        return self.values.len();
+    }
+
+    fn is_empty() -> bool {
+        return self.values.len() == 0;
+    }
+
+    fn clear() {
+        self.values.clear();
+    }
+}
+
+fn int_set() -> IntSet {
+    return IntSet({});
+}
+
+fn string_set() -> StringSet {
+    return StringSet({});
+}
+
+fn queue() -> Queue {
+    return Queue([], 0);
+}
+
+fn stack() -> Stack {
+    return Stack([]);
+}
+
+fn counter() -> Counter {
+    return Counter({});
+}
+
+fn int_priority_queue() -> IntPriorityQueue {
+    return IntPriorityQueue([]);
+}

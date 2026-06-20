@@ -1,0 +1,20 @@
+fn mutate_copy(xs: list<int>) -> int {
+    xs.push(99);
+    return xs.len();
+}
+
+fn check_int(name: str, got: int, want: int) {
+    if got == want {
+        print("ok " + name + "\n");
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want) + "\n");
+    }
+}
+
+let xs: list<int> = [1, 2];
+let task: Task<int> = spawn mutate_copy(xs);
+let copied_len: int = await task;
+
+check_int("spawn copy len", copied_len, 3);
+check_int("original unchanged", xs.len(), 2);
+print("send immutable done\n");

@@ -339,6 +339,105 @@ pub extern "C" fn bolide_string_concat_many(
     unsafe { BolideString::concat_ptrs(parts, count) }
 }
 
+/// 格式化字符串。`{}` 消耗位置参数，`{name}` 使用命名参数，`{{` 和 `}}` 输出字面量花括号。
+#[no_mangle]
+pub extern "C" fn bolide_string_format(
+    template: *const BolideString,
+    pos_args: *const *const BolideString,
+    pos_count: i64,
+    names: *const *const BolideString,
+    named_args: *const *const BolideString,
+    named_count: i64,
+) -> *mut BolideString {
+    let src = if template.is_null() {
+        ""
+    } else {
+        unsafe { (*template).as_str() }
+    };
+    let positional: &[*const BolideString] = if pos_args.is_null() || pos_count <= 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(pos_args, pos_count as usize) }
+    };
+    let named_names: &[*const BolideString] = if names.is_null() || named_count <= 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(names, named_count as usize) }
+    };
+    let named_values: &[*const BolideString] = if named_args.is_null() || named_count <= 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(named_args, named_count as usize) }
+    };
+
+    let mut out = String::with_capacity(src.len());
+    let mut arg_index = 0usize;
+    let mut chars = src.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '{' {
+            if chars.peek() == Some(&'{') {
+                chars.next();
+                out.push('{');
+            } else if chars.peek() == Some(&'}') {
+                chars.next();
+                if let Some(&value) = positional.get(arg_index) {
+                    if !value.is_null() {
+                        out.push_str(unsafe { (*value).as_str() });
+                    }
+                    arg_index += 1;
+                } else {
+                    out.push_str("{}");
+                }
+            } else {
+                let mut name = String::new();
+                while let Some(&next) = chars.peek() {
+                    if next == '}' {
+                        break;
+                    }
+                    name.push(next);
+                    chars.next();
+                }
+                if chars.peek() == Some(&'}') {
+                    chars.next();
+                    let mut replaced = false;
+                    for (i, &key) in named_names.iter().enumerate() {
+                        if key.is_null() {
+                            continue;
+                        }
+                        if unsafe { (*key).as_str() } == name {
+                            if let Some(&value) = named_values.get(i) {
+                                if !value.is_null() {
+                                    out.push_str(unsafe { (*value).as_str() });
+                                }
+                            }
+                            replaced = true;
+                            break;
+                        }
+                    }
+                    if !replaced {
+                        out.push('{');
+                        out.push_str(&name);
+                        out.push('}');
+                    }
+                } else {
+                    out.push('{');
+                    out.push_str(&name);
+                }
+            }
+        } else if ch == '}' {
+            if chars.peek() == Some(&'}') {
+                chars.next();
+                out.push('}');
+            } else {
+                out.push(ch);
+            }
+        } else {
+            out.push(ch);
+        }
+    }
+    BolideString::new(&out)
+}
+
 /// 字符串比较
 #[no_mangle]
 pub extern "C" fn bolide_string_eq(a: *const BolideString, b: *const BolideString) -> i64 {
@@ -361,6 +460,25 @@ pub extern "C" fn bolide_string_eq(a: *const BolideString, b: *const BolideStrin
         1
     } else {
         0
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn bolide_string_compare(a: *const BolideString, b: *const BolideString) -> i64 {
+    let a = if a.is_null() {
+        ""
+    } else {
+        unsafe { (*a).as_str() }
+    };
+    let b = if b.is_null() {
+        ""
+    } else {
+        unsafe { (*b).as_str() }
+    };
+    match a.cmp(b) {
+        std::cmp::Ordering::Less => -1,
+        std::cmp::Ordering::Equal => 0,
+        std::cmp::Ordering::Greater => 1,
     }
 }
 

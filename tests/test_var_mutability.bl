@@ -1,0 +1,22 @@
+fn check_int(name: str, got: int, want: int) {
+    if got == want {
+        print("ok " + name + "\n");
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want) + "\n");
+    }
+}
+
+var total: int = 1;
+total = total + 4;
+check_int("var reassign", total, 5);
+
+var items: list<int> = [1, 2];
+items.push(3);
+items[0] = 7;
+check_int("var list len", items.len(), 3);
+check_int("var list set", items.get(0), 7);
+
+let frozen: list<int> = [10, 20, 30];
+check_int("let list read", frozen.get(1), 20);
+
+print("var mutability done\n");

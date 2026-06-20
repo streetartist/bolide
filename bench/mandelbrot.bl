@@ -1,0 +1,56 @@
+// Mandelbrot escape-count benchmark for Bolide.
+//
+// Workload: single-threaded Mandelbrot set iteration count over a grid.
+// Isolates a tight scalar float loop (mul/add/compare) with a data-dependent
+// branch and almost no memory traffic. The result is a checksum of escape
+// counts so the work cannot be optimized away.
+
+import "std/env/env.bl" as env;
+import "std/time/time.bl" as time;
+
+fn arg_or(args: list<str>, index: int, fallback: int) -> int {
+    if args.len() > index {
+        return int(args[index]);
+    }
+    return fallback;
+}
+
+fn iter_at(px: int, py: int, width: int, height: int, max_iter: int) -> int {
+    let cx: float = (float(px) / float(width)) * 3.5 - 2.5;
+    let cy: float = (float(py) / float(height)) * 2.0 - 1.0;
+    var x: float = 0.0;
+    var y: float = 0.0;
+    var iter: int = 0;
+    while x * x + y * y <= 4.0 and iter < max_iter {
+        let next_x: float = x * x - y * y + cx;
+        y = 2.0 * x * y + cy;
+        x = next_x;
+        iter = iter + 1;
+    }
+    return iter;
+}
+
+fn render(width: int, height: int, max_iter: int) -> int {
+    var sum: int = 0;
+    var py: int = 0;
+    while py < height {
+        var px: int = 0;
+        while px < width {
+            sum = sum + iter_at(px, py, width, height, max_iter);
+            px = px + 1;
+        }
+        py = py + 1;
+    }
+    return sum;
+}
+
+let args: list<str> = env.args();
+let width: int = arg_or(args, 1, 1200);
+let height: int = arg_or(args, 2, 1200);
+let max_iter: int = arg_or(args, 3, 256);
+
+let start: int = time.monotonic_ms();
+let sum: int = render(width, height, max_iter);
+let elapsed: int = time.monotonic_ms() - start;
+
+print("bolide mandelbrot w={} h={} max_iter={} ms={} checksum={}\n".format(width, height, max_iter, elapsed, sum));

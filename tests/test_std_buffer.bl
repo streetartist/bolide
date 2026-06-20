@@ -1,0 +1,45 @@
+import "std/buffer/buffer.bl" as buffer;
+
+fn check_str(name: str, got: str, want: str) {
+    if got == want {
+        print("ok " + name + "\n");
+    } else {
+        print("FAIL " + name + " got=" + got + " want=" + want + "\n");
+    }
+}
+
+fn check_bool(name: str, got: bool, want: bool) {
+    if got == want {
+        print("ok " + name + "\n");
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want) + "\n");
+    }
+}
+
+let b: buffer.Buffer = buffer.with_capacity(32);
+b.push("hello");
+b.push(" ");
+b.push(42);
+b.push(" ");
+b.push(1.5);
+b.push(" ");
+b.push(true);
+b.line("");
+b.line("done");
+
+check_str("content", b.to_string(), "hello 42 1.5 true\ndone\n");
+check_bool("len positive", b.len() > 0, true);
+check_bool("capacity positive", b.capacity() >= b.len(), true);
+
+b.clear();
+check_str("clear", b.to_string(), "");
+
+b.push("again");
+check_str("reuse", b.to_string(), "again");
+b.close();
+
+let c: buffer.Buffer = buffer.from("seed");
+check_str("from", c.to_string(), "seed");
+c.close();
+
+print("std buffer done\n");

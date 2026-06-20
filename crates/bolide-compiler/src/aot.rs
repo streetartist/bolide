@@ -81,6 +81,7 @@ struct BindingSnapshot {
     name: String,
     variable: Option<Variable>,
     var_type: Option<BolideType>,
+    var_mutable: Option<bool>,
     scope_depth: Option<usize>,
     borrowed: Option<(String, usize)>,
     weak: bool,
@@ -106,6 +107,71 @@ fn funcsig_adapter_name(params: &[BolideType], ret: &Option<Box<BolideType>>) ->
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     format!("{:?}->{:?}", params, ret).hash(&mut hasher);
     format!("@_funcsig_raw_adapter_{:016x}", hasher.finish())
+}
+
+fn type_mangle(ty: &BolideType) -> String {
+    match ty {
+        BolideType::Int => "int".to_string(),
+        BolideType::Float => "float".to_string(),
+        BolideType::Bool => "bool".to_string(),
+        BolideType::Str => "str".to_string(),
+        BolideType::Bytes => "bytes".to_string(),
+        BolideType::BigInt => "bigint".to_string(),
+        BolideType::Decimal => "decimal".to_string(),
+        BolideType::Dynamic => "dynamic".to_string(),
+        BolideType::Ptr => "ptr".to_string(),
+        BolideType::Channel(inner) => format!("channel_{}", type_mangle(inner)),
+        BolideType::Future => "future".to_string(),
+        BolideType::Func => "func".to_string(),
+        BolideType::FuncSig(params, ret) => {
+            let mut out = "funcsig".to_string();
+            for param in params {
+                out.push('_');
+                out.push_str(&type_mangle(param));
+            }
+            if let Some(ret) = ret {
+                out.push_str("_ret_");
+                out.push_str(&type_mangle(ret));
+            }
+            out
+        }
+        BolideType::List(inner) => format!("list_{}", type_mangle(inner)),
+        BolideType::Dict(key, value) => format!("dict_{}_{}", type_mangle(key), type_mangle(value)),
+        BolideType::Tuple(items) => {
+            let mut out = "tuple".to_string();
+            for item in items {
+                out.push('_');
+                out.push_str(&type_mangle(item));
+            }
+            out
+        }
+        BolideType::Generic(name) | BolideType::Custom(name) => name
+            .chars()
+            .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
+            .collect(),
+        BolideType::Adt(name, args) => {
+            let mut out: String = name
+                .chars()
+                .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
+                .collect();
+            for arg in args {
+                out.push('_');
+                out.push_str(&type_mangle(arg));
+            }
+            out
+        }
+        BolideType::Weak(inner) => format!("weak_{}", type_mangle(inner)),
+        BolideType::Unowned(inner) => format!("unowned_{}", type_mangle(inner)),
+    }
+}
+
+fn method_overload_name(class_name: &str, method_name: &str, params: &[Param]) -> String {
+    let mut name = format!("{}_{}_{}", class_name, method_name, params.len());
+    for param in params {
+        name.push('_');
+        name.push_str(&type_mangle(&param.ty));
+    }
+    name
 }
 
 #[derive(Clone)]
@@ -193,6 +259,8 @@ pub struct AotCompiler {
     global_data_ids: HashMap<String, DataId>,
     /// 全局变量名 -> Bolide 类型
     global_var_types: HashMap<String, BolideType>,
+    /// 全局变量可变性映射；let=false, var=true
+    global_var_mutability: HashMap<String, bool>,
     /// 全局 Future 变量名 -> 对应 async 函数名（用于两步式 await 的类型推断）
     global_spawn_funcs: HashMap<String, String>,
     /// 标记了 export 的用户函数（裸名导出，供 C 互调 + 头文件生成）
@@ -310,7 +378,10 @@ pub const RUNTIME_SYMBOLS: &[&str] = &[
     "string_as_cstr",
     "string_concat",
     "string_concat_many",
+    "string_format",
+    "string_new",
     "string_eq",
+    "bolide_string_compare",
     "string_from_int",
     "string_from_float",
     "string_from_bool",
@@ -334,6 +405,17 @@ pub const RUNTIME_SYMBOLS: &[&str] = &[
     "string_split",
     // Bytes
     "bytes_new",
+    "bolide_bytes_new",
+    "bolide_bytes_with_capacity",
+    "bolide_bytes_from_string",
+    "bolide_bytes_capacity",
+    "bolide_bytes_reserve",
+    "bolide_bytes_clear",
+    "bolide_bytes_extend",
+    "bolide_bytes_get",
+    "bolide_bytes_set",
+    "bolide_bytes_push",
+    "bolide_bytes_to_string_lossy",
     "bytes_retain",
     "bytes_release",
     "bytes_clone",
@@ -676,6 +758,57 @@ pub const RUNTIME_SYMBOLS: &[&str] = &[
     "bolide_regex_replace",
     "bolide_regex_replace_all",
     "bolide_regex_split",
+    // Buffer
+    "bolide_buffer_new",
+    "bolide_buffer_with_capacity",
+    "bolide_buffer_free",
+    "bolide_buffer_len",
+    "bolide_buffer_capacity",
+    "bolide_buffer_reserve",
+    "bolide_buffer_clear",
+    "bolide_buffer_push",
+    "bolide_buffer_push_line",
+    "bolide_buffer_push_int",
+    "bolide_buffer_push_float",
+    "bolide_buffer_push_bool",
+    "bolide_buffer_to_string",
+    // Atomic
+    "bolide_atomic_int_new",
+    "bolide_atomic_int_free",
+    "bolide_atomic_int_get",
+    "bolide_atomic_int_set",
+    "bolide_atomic_int_swap",
+    "bolide_atomic_int_add",
+    "bolide_atomic_int_sub",
+    "bolide_atomic_int_compare_exchange",
+    "bolide_atomic_bool_new",
+    "bolide_atomic_bool_free",
+    "bolide_atomic_bool_get",
+    "bolide_atomic_bool_set",
+    "bolide_atomic_bool_swap",
+    "bolide_atomic_bool_compare_exchange",
+    // Sync
+    "bolide_sync_mutex_new",
+    "bolide_sync_mutex_free",
+    "bolide_sync_mutex_get",
+    "bolide_sync_mutex_set",
+    "bolide_sync_mutex_swap",
+    "bolide_sync_mutex_add_int",
+    "bolide_sync_rwlock_new",
+    "bolide_sync_rwlock_free",
+    "bolide_sync_rwlock_get",
+    "bolide_sync_rwlock_set",
+    "bolide_sync_rwlock_add_int",
+    "bolide_sync_once_new",
+    "bolide_sync_once_free",
+    "bolide_sync_once_check",
+    "bolide_sync_once_try_begin",
+    "bolide_sync_once_reset",
+    // Hash
+    "bolide_hash_fnv1a",
+    "bolide_hash_fnv1a_bytes",
+    "bolide_hash_crc32",
+    "bolide_hash_crc32_bytes",
     // Env
     "bolide_env_get",
     "bolide_env_get_or",
@@ -692,6 +825,14 @@ pub const RUNTIME_SYMBOLS: &[&str] = &[
     "bolide_env_family",
     "bolide_env_exe_suffix",
     "bolide_env_exit",
+    // IO
+    "bolide_io_open_write",
+    "bolide_io_open_append",
+    "bolide_io_write",
+    "bolide_io_write_line",
+    "bolide_io_write_bytes",
+    "bolide_io_flush",
+    "bolide_io_close",
     // Process
     "bolide_process_run",
     "bolide_process_run_shell",
@@ -837,6 +978,7 @@ impl AotCompiler {
             string_data: HashMap::new(),
             global_data_ids: HashMap::new(),
             global_var_types: HashMap::new(),
+            global_var_mutability: HashMap::new(),
             global_spawn_funcs: HashMap::new(),
             export_funcs: Vec::new(),
             lib_mode: false,
@@ -1039,7 +1181,11 @@ impl AotCompiler {
                     self.collect_strings_from_expr(a, strings);
                 }
             }
-            Expr::NamedArg(_, value) | Expr::SpreadArg(value) | Expr::KwSpreadArg(value) => {
+            Expr::NamedArg(name, value) => {
+                strings.insert(format!("{}\0", name));
+                self.collect_strings_from_expr(value, strings);
+            }
+            Expr::SpreadArg(value) | Expr::KwSpreadArg(value) => {
                 self.collect_strings_from_expr(value, strings);
             }
             Expr::BinOp(l, _, r) => {
@@ -1250,6 +1396,8 @@ impl AotCompiler {
                     })
                     .unwrap_or(BolideType::Int);
                 self.global_var_types.insert(decl.name.clone(), gvar_ty);
+                self.global_var_mutability
+                    .insert(decl.name.clone(), decl.mutable);
             }
         }
 
@@ -1590,7 +1738,7 @@ impl AotCompiler {
                             },
                             Some(BolideType::Str) => match method.as_str() {
                                 "upper" | "lower" | "trim" | "strip" | "replace" | "repeat"
-                                | "substring" | "char_at" => Some(BolideType::Str),
+                                | "format" | "substring" | "char_at" => Some(BolideType::Str),
                                 "split" => Some(BolideType::List(Box::new(BolideType::Str))),
                                 "contains" | "includes" | "starts_with" | "ends_with" => {
                                     Some(BolideType::Bool)
@@ -2594,6 +2742,12 @@ impl AotCompiler {
                 vec![p, i64t],
                 Some(p),
             ),
+            (
+                "@_string_format",
+                "bolide_string_format",
+                vec![p, p, i64t, p, p, i64t],
+                Some(p),
+            ),
             ("@_string_eq", "bolide_string_eq", vec![p, p], Some(i64t)),
             (
                 "@_string_from_int",
@@ -2687,6 +2841,12 @@ impl AotCompiler {
                 "@_string_repeat",
                 "bolide_string_repeat",
                 vec![p, i64t],
+                Some(p),
+            ),
+            (
+                "@_string_format",
+                "bolide_string_format",
+                vec![p, p, i64t, p, p, i64t],
                 Some(p),
             ),
             (
@@ -3876,7 +4036,7 @@ impl AotCompiler {
                     let is_overloaded = name_counts.get(&method.name).copied().unwrap_or(0) > 1;
                     let param_count = method.params.len();
                     let method_name = if is_overloaded {
-                        format!("{}_{}_{}", class.name, method.name, param_count)
+                        method_overload_name(&class.name, &method.name, &method.params)
                     } else {
                         format!("{}_{}", class.name, method.name)
                     };
@@ -3955,9 +4115,8 @@ impl AotCompiler {
                         ) {
                             let is_overloaded =
                                 name_counts.get(&method.name).copied().unwrap_or(0) > 1;
-                            let param_count = method.params.len();
                             let method_full_name = if is_overloaded {
-                                format!("{}_{}_{}", class_def.name, method.name, param_count)
+                                method_overload_name(&class_def.name, &method.name, &method.params)
                             } else {
                                 format!("{}_{}", class_def.name, method.name)
                             };
@@ -4397,9 +4556,8 @@ impl AotCompiler {
 
                     for method in &class_def.methods {
                         let is_overloaded = name_counts.get(&method.name).copied().unwrap_or(0) > 1;
-                        let param_count = method.params.len();
                         let method_full_name = if is_overloaded {
-                            format!("{}_{}_{}", class_def.name, method.name, param_count)
+                            method_overload_name(&class_def.name, &method.name, &method.params)
                         } else {
                             format!("{}_{}", class_def.name, method.name)
                         };
@@ -5428,10 +5586,8 @@ impl AotCompiler {
 
                 for method in &class.methods {
                     let is_overloaded = name_counts.get(&method.name).copied().unwrap_or(0) > 1;
-                    let param_count = method.params.len();
-
                     let method_name = if is_overloaded {
-                        format!("{}_{}_{}", class.name, method.name, param_count)
+                        method_overload_name(&class.name, &method.name, &method.params)
                     } else {
                         format!("{}_{}", class.name, method.name)
                     };
@@ -5558,6 +5714,7 @@ impl AotCompiler {
                 self.extern_funcs.clone(),
                 global_refs,
                 self.global_var_types.clone(),
+                self.global_var_mutability.clone(),
                 method_name.to_string(),
                 method.lifetime_deps.clone(),
                 self.lifetime_funcs.clone(),
@@ -5747,6 +5904,7 @@ impl AotCompiler {
                 self.extern_funcs.clone(),
                 global_refs,
                 self.global_var_types.clone(),
+                self.global_var_mutability.clone(),
                 func.name.clone(),
                 func.lifetime_deps.clone(),
                 self.lifetime_funcs.clone(),
@@ -5909,6 +6067,7 @@ impl AotCompiler {
                 self.extern_funcs.clone(),
                 global_refs,
                 self.global_var_types.clone(),
+                self.global_var_mutability.clone(),
                 job.name.clone(),
                 None,
                 self.lifetime_funcs.clone(),
@@ -5995,6 +6154,7 @@ struct AotCompileContext<'a, 'b> {
     func_refs: HashMap<String, FuncRef>,
     variables: HashMap<String, Variable>,
     var_types: HashMap<String, BolideType>,
+    var_mutability: HashMap<String, bool>,
     var_counter: usize,
     ptr_type: types::Type,
     classes: HashMap<String, ClassInfo>,
@@ -6046,6 +6206,8 @@ struct AotCompileContext<'a, 'b> {
     global_refs: HashMap<String, cranelift_codegen::ir::GlobalValue>,
     /// 全局变量类型映射
     global_var_types: HashMap<String, BolideType>,
+    /// 全局变量可变性映射
+    global_var_mutability: HashMap<String, bool>,
     /// 当前函数的生命周期依赖（from x, y）；None 表示非生命周期函数
     lifetime_deps: Option<Vec<String>>,
     /// 使用生命周期模式的函数集合（返回借用而非拥有的值）
@@ -6099,6 +6261,7 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         extern_funcs: HashMap<String, (String, bolide_parser::ExternFunc)>,
         global_refs: HashMap<String, cranelift_codegen::ir::GlobalValue>,
         global_var_types: HashMap<String, BolideType>,
+        global_var_mutability: HashMap<String, bool>,
         current_func: String,
         lifetime_deps: Option<Vec<String>>,
         lifetime_funcs: HashSet<String>,
@@ -6112,6 +6275,7 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             func_refs,
             variables: HashMap::new(),
             var_types: HashMap::new(),
+            var_mutability: HashMap::new(),
             var_counter: 0,
             ptr_type,
             classes,
@@ -6141,6 +6305,7 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             caller_owned_params: HashSet::new(),
             global_refs,
             global_var_types,
+            global_var_mutability,
             lifetime_deps,
             lifetime_funcs,
             funcsig_return_sources,
@@ -6383,6 +6548,7 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
                     name,
                     variable,
                     var_type,
+                    var_mutable,
                     scope_depth,
                     borrowed,
                     weak,
@@ -6409,6 +6575,14 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
                     }
                     None => {
                         self.var_types.remove(&name);
+                    }
+                }
+                match var_mutable {
+                    Some(mutable) => {
+                        self.var_mutability.insert(name.clone(), mutable);
+                    }
+                    None => {
+                        self.var_mutability.remove(&name);
                     }
                 }
                 match scope_depth {
@@ -6522,6 +6696,7 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             name: name.to_string(),
             variable: self.variables.get(name).copied(),
             var_type: self.var_types.get(name).cloned(),
+            var_mutable: self.var_mutability.get(name).copied(),
             scope_depth: self.var_scope_depth.get(name).copied(),
             borrowed: self.borrowed_vars.get(name).cloned(),
             weak: self.weak_variables.contains(name),
@@ -6533,6 +6708,72 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             force_thread_task: self.force_thread_tasks.contains(name),
             lifetime_source: self.var_lifetime_source.get(name).cloned(),
         });
+    }
+
+    fn binding_is_mutable(&self, name: &str) -> bool {
+        if let Some(mutable) = self.var_mutability.get(name) {
+            return *mutable;
+        }
+        if self.variables.contains_key(name) {
+            return true;
+        }
+        let resolved_global = self.resolved_global_name(name);
+        self.global_var_mutability
+            .get(&resolved_global)
+            .copied()
+            .unwrap_or(true)
+    }
+
+    fn mutation_root<'expr>(expr: &'expr Expr) -> Option<&'expr str> {
+        match expr {
+            Expr::Ident(name) => Some(name.as_str()),
+            Expr::Member(base, _) | Expr::Index(base, _) => Self::mutation_root(base),
+            _ => None,
+        }
+    }
+
+    fn ensure_mutable_binding(&self, name: &str, action: &str) -> Result<(), String> {
+        if self.binding_is_mutable(name) {
+            Ok(())
+        } else {
+            Err(format!(
+                "Cannot {} immutable binding '{}'; declare it with var to make it mutable",
+                action, name
+            ))
+        }
+    }
+
+    fn ensure_mutable_target(&self, expr: &Expr, action: &str) -> Result<(), String> {
+        if let Some(root) = Self::mutation_root(expr) {
+            self.ensure_mutable_binding(root, action)?;
+        }
+        Ok(())
+    }
+
+    fn is_mutating_method(ty: &BolideType, method_name: &str) -> bool {
+        match ty {
+            BolideType::List(_) => matches!(
+                method_name,
+                "push" | "append"
+                    | "pop"
+                    | "set"
+                    | "insert"
+                    | "remove"
+                    | "clear"
+                    | "reverse"
+                    | "extend"
+                    | "sort"
+            ),
+            BolideType::Dict(_, _) => matches!(
+                method_name,
+                "set" | "insert" | "remove" | "delete" | "clear" | "update"
+            ),
+            BolideType::Bytes => matches!(
+                method_name,
+                "push" | "append" | "set" | "insert" | "remove" | "clear" | "extend"
+            ),
+            _ => false,
+        }
     }
 
     fn current_finally_depth(&self) -> usize {
@@ -8465,6 +8706,95 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         Ok(result)
     }
 
+    fn compile_string_ptr_array(&mut self, values: &[Value]) -> Result<Value, String> {
+        if values.is_empty() {
+            return Ok(self.builder.ins().iconst(self.ptr_type, 0));
+        }
+        let array_size = values
+            .len()
+            .checked_mul(8)
+            .and_then(|n| u32::try_from(n).ok())
+            .ok_or("string pointer array is too large")?;
+        let slot = self.builder.create_sized_stack_slot(StackSlotData::new(
+            StackSlotKind::ExplicitSlot,
+            array_size,
+            0,
+        ));
+        let array_ptr = self.builder.ins().stack_addr(self.ptr_type, slot, 0);
+        for (i, value) in values.iter().enumerate() {
+            self.builder
+                .ins()
+                .store(MemFlags::new(), *value, array_ptr, (i * 8) as i32);
+        }
+        Ok(array_ptr)
+    }
+
+    fn compile_format_name_string(&mut self, name: &str) -> Result<Value, String> {
+        let c_name = self.create_c_string_constant(name)?;
+        let func_ref = *self
+            .func_refs
+            .get("@_string_new")
+            .ok_or("string_new not found")?;
+        let call = self.builder.ins().call(func_ref, &[c_name]);
+        let result = self.builder.inst_results(call)[0];
+        self.track_temp_rc_value(result, &BolideType::Str);
+        Ok(result)
+    }
+
+    fn compile_string_format(&mut self, template: Value, args: &[Expr]) -> Result<Value, String> {
+        let mut positional = Vec::new();
+        let mut named_names = Vec::new();
+        let mut named_values = Vec::new();
+        for arg in args {
+            match arg {
+                Expr::NamedArg(name, value) => {
+                    let name_value = self.compile_format_name_string(name)?;
+                    let formatted_value =
+                        self.compile_to_str(std::slice::from_ref(value.as_ref()))?;
+                    named_names.push(name_value);
+                    named_values.push(formatted_value);
+                }
+                Expr::SpreadArg(_) | Expr::KwSpreadArg(_) => {
+                    return Err("str.format does not support *args or **kwargs yet".to_string());
+                }
+                expr => {
+                    positional.push(self.compile_to_str(std::slice::from_ref(expr))?);
+                }
+            }
+        }
+
+        let pos_ptr = self.compile_string_ptr_array(&positional)?;
+        let names_ptr = self.compile_string_ptr_array(&named_names)?;
+        let named_ptr = self.compile_string_ptr_array(&named_values)?;
+
+        let func_ref = *self
+            .func_refs
+            .get("@_string_format")
+            .ok_or("string_format not found")?;
+        let pos_count = self
+            .builder
+            .ins()
+            .iconst(types::I64, positional.len() as i64);
+        let named_count = self
+            .builder
+            .ins()
+            .iconst(types::I64, named_values.len() as i64);
+        let call = self.builder.ins().call(
+            func_ref,
+            &[
+                template,
+                pos_ptr,
+                pos_count,
+                names_ptr,
+                named_ptr,
+                named_count,
+            ],
+        );
+        let result = self.builder.inst_results(call)[0];
+        self.track_temp_rc_value(result, &BolideType::Str);
+        Ok(result)
+    }
+
     /// 编译 BigInt 二元运算
     fn compile_bigint_binop(
         &mut self,
@@ -8791,6 +9121,11 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         args: &[Expr],
     ) -> Result<Value, String> {
         let base_type = self.infer_expr_type(base);
+        if let Some(ref ty) = base_type {
+            if Self::is_mutating_method(ty, method_name) {
+                self.ensure_mutable_target(base, "call mutating method on")?;
+            }
+        }
 
         // 处理列表方法
         if let Some(BolideType::List(_)) = &base_type {
@@ -8822,8 +9157,15 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         if let Some(BolideType::Custom(class_name)) = base_type {
             let is_super_call = matches!(base, Expr::Ident(name) if name == "super");
             let base_val = self.compile_expr(base)?;
+            let arg_types: Option<Vec<BolideType>> =
+                args.iter().map(|arg| self.infer_expr_type(arg)).collect();
             let method_full_name = self
-                .find_method_with_arg_count(&class_name, method_name, Some(args.len()))
+                .find_method_with_arg_types(
+                    &class_name,
+                    method_name,
+                    Some(args.len()),
+                    arg_types.as_deref(),
+                )
                 .unwrap_or_else(|| format!("{}_{}", class_name, method_name));
             let prepared_args = if let Some(params) = self.func_params.get(&method_full_name) {
                 let user_params = params.get(1..).unwrap_or(&[]);
@@ -8929,7 +9271,12 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
 
                 self.builder.switch_to_block(match_block);
                 let dispatch_name = self
-                    .find_method_with_arg_count(&class_name, method_name, Some(args.len()))
+                    .find_method_with_arg_types(
+                        &class_name,
+                        method_name,
+                        Some(args.len()),
+                        arg_types.as_deref(),
+                    )
                     .unwrap_or_else(|| method_full_name.clone());
                 let result =
                     self.emit_class_method_call(&dispatch_name, base_val, &user_arg_vals)?;
@@ -9028,16 +9375,9 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
                     .func_refs
                     .get("@_list_push")
                     .ok_or("list_push not found")?;
-                let mut val = self.compile_expr(&args[0])?;
                 let list_elem_ty = self.infer_expr_type_from_list(base);
-                if list_elem_ty == BolideType::Dynamic {
-                    let actual_ty = self.normalize_bolide_type(
-                        &self.infer_expr_type(&args[0]).unwrap_or(BolideType::Int),
-                    );
-                    if actual_ty != BolideType::Dynamic {
-                        val = self.convert_to_dynamic(val, &actual_ty)?;
-                    }
-                }
+                let val = self.compile_expr(&args[0])?;
+                let val = self.prepare_list_runtime_value(val, &args[0], &list_elem_ty)?;
                 self.builder.ins().call(f, &[list_val, val]);
                 Ok(self.builder.ins().iconst(types::I64, 0))
             }
@@ -9056,16 +9396,9 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
                     .get("@_list_set")
                     .ok_or("list_set not found")?;
                 let idx = self.compile_expr(&args[0])?;
-                let mut value = self.compile_expr(&args[1])?;
                 let list_elem_ty = self.infer_expr_type_from_list(base);
-                if list_elem_ty == BolideType::Dynamic {
-                    let actual_ty = self.normalize_bolide_type(
-                        &self.infer_expr_type(&args[1]).unwrap_or(BolideType::Int),
-                    );
-                    if actual_ty != BolideType::Dynamic {
-                        value = self.convert_to_dynamic(value, &actual_ty)?;
-                    }
-                }
+                let value = self.compile_expr(&args[1])?;
+                let value = self.prepare_list_runtime_value(value, &args[1], &list_elem_ty)?;
                 let call = self.builder.ins().call(f, &[list_val, idx, value]);
                 Ok(self.builder.inst_results(call)[0])
             }
@@ -9076,16 +9409,9 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
                     .get("@_list_insert")
                     .ok_or("list_insert not found")?;
                 let idx = self.compile_expr(&args[0])?;
-                let mut value = self.compile_expr(&args[1])?;
                 let list_elem_ty = self.infer_expr_type_from_list(base);
-                if list_elem_ty == BolideType::Dynamic {
-                    let actual_ty = self.normalize_bolide_type(
-                        &self.infer_expr_type(&args[1]).unwrap_or(BolideType::Int),
-                    );
-                    if actual_ty != BolideType::Dynamic {
-                        value = self.convert_to_dynamic(value, &actual_ty)?;
-                    }
-                }
+                let value = self.compile_expr(&args[1])?;
+                let value = self.prepare_list_runtime_value(value, &args[1], &list_elem_ty)?;
                 self.builder.ins().call(f, &[list_val, idx, value]);
                 Ok(self.builder.ins().iconst(types::I64, 0))
             }
@@ -9113,6 +9439,8 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
                     .get("@_list_contains")
                     .ok_or("list_contains not found")?;
                 let val = self.compile_expr(&args[0])?;
+                let list_elem_ty = self.infer_expr_type_from_list(base);
+                let val = self.prepare_list_runtime_value(val, &args[0], &list_elem_ty)?;
                 let call = self.builder.ins().call(f, &[list_val, val]);
                 Ok(self.builder.inst_results(call)[0])
             }
@@ -9122,6 +9450,8 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
                     .get("@_list_index_of")
                     .ok_or("list_index_of not found")?;
                 let val = self.compile_expr(&args[0])?;
+                let list_elem_ty = self.infer_expr_type_from_list(base);
+                let val = self.prepare_list_runtime_value(val, &args[0], &list_elem_ty)?;
                 let call = self.builder.ins().call(f, &[list_val, val]);
                 Ok(self.builder.inst_results(call)[0])
             }
@@ -9131,6 +9461,8 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
                     .get("@_list_count")
                     .ok_or("list_count not found")?;
                 let val = self.compile_expr(&args[0])?;
+                let list_elem_ty = self.infer_expr_type_from_list(base);
+                let val = self.prepare_list_runtime_value(val, &args[0], &list_elem_ty)?;
                 let call = self.builder.ins().call(f, &[list_val, val]);
                 Ok(self.builder.inst_results(call)[0])
             }
@@ -9321,6 +9653,7 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
                 self.track_temp_rc_value(result, &BolideType::Str);
                 Ok(result)
             }
+            "format" => self.compile_string_format(str_val, args),
             "substring" | "substr" => {
                 // substring(a, b) 复用切片：step=1, flags=both
                 let a = self.compile_expr(args.first().ok_or("substring expects 2 arguments")?)?;
@@ -9441,7 +9774,7 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
 
     /// 沿继承链查找类方法，返回已声明的全名（如 `Parent_get_age`）
     fn find_class_method(&self, class_name: &str, method_name: &str) -> Option<String> {
-        self.find_method_with_arg_count(class_name, method_name, None)
+        self.find_method_with_arg_types(class_name, method_name, None, None)
     }
 
     fn method_accepts_arg_count(&self, full_name: &str, arg_count: Option<usize>) -> bool {
@@ -9466,6 +9799,34 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         count >= required_count && (has_variadic || count <= fixed_count)
     }
 
+    fn method_accepts_arg_types(&self, full_name: &str, arg_types: Option<&[BolideType]>) -> bool {
+        let Some(arg_types) = arg_types else {
+            return true;
+        };
+        if !self.method_accepts_arg_count(full_name, Some(arg_types.len())) {
+            return false;
+        }
+        let Some(params) = self.func_params.get(full_name) else {
+            return true;
+        };
+        let user_params = params.get(1..).unwrap_or(&[]);
+        for (index, arg_ty) in arg_types.iter().enumerate() {
+            let Some(param) = user_params.get(index) else {
+                return false;
+            };
+            if param.is_kw_variadic {
+                return true;
+            }
+            if param.is_variadic {
+                return param.ty == BolideType::Dynamic || param.ty == *arg_ty;
+            }
+            if param.ty != BolideType::Dynamic && param.ty != *arg_ty {
+                return false;
+            }
+        }
+        true
+    }
+
     /// 在继承链中查找方法，支持重载（按参数数量匹配）
     fn find_method_with_arg_count(
         &self,
@@ -9473,12 +9834,24 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         method_name: &str,
         arg_count: Option<usize>,
     ) -> Option<String> {
+        self.find_method_with_arg_types(class_name, method_name, arg_count, None)
+    }
+
+    /// 在继承链中查找方法，支持重载（优先按实参类型匹配，退回参数数量匹配）
+    fn find_method_with_arg_types(
+        &self,
+        class_name: &str,
+        method_name: &str,
+        arg_count: Option<usize>,
+        arg_types: Option<&[BolideType]>,
+    ) -> Option<String> {
         let mut current = self.normalize_type_name(class_name);
         loop {
             // 先检查非重载的精确匹配
             let full_name = format!("{}_{}", current, method_name);
             if self.func_refs.contains_key(&full_name)
                 && self.method_accepts_arg_count(&full_name, arg_count)
+                && self.method_accepts_arg_types(&full_name, arg_types)
             {
                 return Some(full_name);
             }
@@ -9486,6 +9859,14 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             // 检查重载
             let key = format!("{}:{}", current, method_name);
             if let Some(variants) = self.overloaded_methods.get(&key) {
+                if let Some(types) = arg_types {
+                    if let Some((_, name)) = variants
+                        .iter()
+                        .find(|(_, name)| self.method_accepts_arg_types(name, Some(types)))
+                    {
+                        return Some(name.clone());
+                    }
+                }
                 if let Some(count) = arg_count {
                     // 按实参数量匹配，包含默认参数 / variadic 的可调用性。
                     if let Some((_, name)) = variants
@@ -12022,7 +12403,7 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
                         // 字符串方法返回类型
                         Some(BolideType::Str) => match method.as_str() {
                             "upper" | "lower" | "trim" | "strip" | "replace" | "repeat"
-                            | "substring" | "char_at" => Some(BolideType::Str),
+                            | "format" | "substring" | "char_at" => Some(BolideType::Str),
                             "split" => Some(BolideType::List(Box::new(BolideType::Str))),
                             "contains" | "includes" | "starts_with" | "ends_with" => {
                                 Some(BolideType::Bool)
@@ -12487,6 +12868,28 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         }
     }
 
+    fn prepare_list_runtime_value(
+        &mut self,
+        mut value: Value,
+        expr: &Expr,
+        list_elem_ty: &BolideType,
+    ) -> Result<Value, String> {
+        value = self.prepare_funcsig_for_container_storage(value, expr, list_elem_ty)?;
+        if *list_elem_ty == BolideType::Dynamic {
+            let actual_ty = self
+                .normalize_bolide_type(&self.infer_expr_type(expr).unwrap_or(BolideType::Int));
+            if actual_ty != BolideType::Dynamic {
+                value = self.convert_to_dynamic(value, &actual_ty)?;
+            }
+        }
+        if matches!(list_elem_ty, BolideType::Float)
+            && self.builder.func.dfg.value_type(value) == types::F64
+        {
+            value = self.builder.ins().bitcast(types::I64, MemFlags::new(), value);
+        }
+        Ok(value)
+    }
+
     /// 推断作为 map/filter 回调的函数表达式的返回类型。
     fn func_ptr_return_type(&self, expr: &Expr) -> Option<BolideType> {
         if let Expr::Ident(name) = expr {
@@ -12846,6 +13249,7 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         args: &[Expr],
         force_thread: bool,
     ) -> Result<Value, String> {
+        self.check_spawn_args_thread_safe(name, args)?;
         let prepared_args = self.prepare_call_args(name, args)?;
         let param_types: Vec<BolideType> = self
             .func_params
@@ -13033,7 +13437,36 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             .unwrap_or(BolideType::Int))
     }
 
+    fn is_unsafe_spawn_arg_type(ty: &BolideType) -> bool {
+        matches!(
+            ty,
+            BolideType::List(_) | BolideType::Dict(_, _) | BolideType::Bytes | BolideType::Dynamic
+        )
+    }
+
+    fn check_spawn_args_thread_safe(&self, func_name: &str, args: &[Expr]) -> Result<(), String> {
+        for (index, arg) in args.iter().enumerate() {
+            if let Some(ty) = self.infer_expr_type(arg) {
+                if Self::is_unsafe_spawn_arg_type(&ty) {
+                    if let Expr::Ident(name) = arg {
+                        if !self.binding_is_mutable(name) {
+                            continue;
+                        }
+                    }
+                    return Err(format!(
+                        "spawn argument {} for '{}' has mutable/shared type {:?}; pass an immutable let binding or use std/sync, std/atomic, or channel",
+                        index + 1,
+                        func_name,
+                        ty
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn compile_pool_spawn(&mut self, name: &str, args: &[Expr]) -> Result<Value, String> {
+        self.check_spawn_args_thread_safe(name, args)?;
         let prepared_args = self.prepare_call_args(name, args)?;
         let param_types: Vec<BolideType> = self
             .func_params
@@ -14352,6 +14785,10 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             return Ok(());
         }
 
+        // 借用来源检查：在借用存活期间不允许对来源重新声明/释放旧绑定
+        self.check_borrow_source_assign(&decl.name)?;
+        self.snapshot_binding_for_scope(&decl.name);
+
         let declared_bolide_ty = decl.ty.as_ref().map(|t| self.normalize_bolide_type(t));
         let inferred_bolide_ty = if declared_bolide_ty.is_none() {
             decl.value
@@ -14416,6 +14853,7 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         };
         self.var_types
             .insert(decl.name.clone(), stored_var_ty.clone());
+        self.var_mutability.insert(decl.name.clone(), decl.mutable);
         self.spawn_func_map.remove(&decl.name);
         self.task_func_map.remove(&decl.name);
         self.force_thread_tasks.remove(&decl.name);
@@ -14518,9 +14956,6 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             self.track_rc_variable(&decl.name, &ty);
         }
 
-        // 借用来源检查：在借用存活期间不允许对来源重新赋值
-        self.check_borrow_source_assign(&decl.name)?;
-
         // 数据流追踪：如果值来自生命周期参数，记录变量的来源
         if self.uses_lifetime_mode() {
             if let Some(ref value) = decl.value {
@@ -14554,6 +14989,7 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
     fn compile_assign(&mut self, assign: &bolide_parser::Assign) -> Result<(), String> {
         match &assign.target {
             Expr::Ident(var_name) => {
+                self.ensure_mutable_binding(var_name, "assign to")?;
                 let resolved_global = self.resolved_global_name(var_name);
                 // 检查是否是全局变量（局部变量优先）
                 let is_global = !self.variables.contains_key(var_name)
@@ -14765,10 +15201,12 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
                 }
             }
             Expr::Member(base, member) => {
+                self.ensure_mutable_target(base, "mutate")?;
                 self.check_borrow_escape(&assign.value, "field assignment")?;
                 self.compile_member_assign(base, member, &assign.value)?;
             }
             Expr::Index(base, index) => {
+                self.ensure_mutable_target(base, "mutate")?;
                 self.check_borrow_escape(&assign.value, "index assignment")?;
                 self.compile_index_assign(base, index, &assign.value)?;
             }

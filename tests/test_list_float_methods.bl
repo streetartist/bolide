@@ -1,0 +1,41 @@
+fn check_bool(name: str, got: bool, want: bool) {
+    if got == want {
+        print("ok " + name + "\n");
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want) + "\n");
+    }
+}
+
+fn check_float(name: str, got: float, want: float) {
+    if got == want {
+        print("ok " + name + "\n");
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want) + "\n");
+    }
+}
+
+fn check_int(name: str, got: int, want: int) {
+    if got == want {
+        print("ok " + name + "\n");
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want) + "\n");
+    }
+}
+
+var xs: list<float> = [];
+xs.push(1.5);
+xs.append(2.5);
+xs.insert(1, 7.25);
+check_int("len", xs.len(), 3);
+check_float("push", xs[0], 1.5);
+check_float("insert", xs[1], 7.25);
+check_float("append", xs[2], 2.5);
+
+check_bool("contains", xs.contains(7.25), true);
+check_int("index", xs.index_of(2.5), 2);
+check_int("count", xs.count(1.5), 1);
+
+check_bool("set", xs.set(0, 9.75), true);
+check_float("after set", xs[0], 9.75);
+
+print("list float methods done\n");

@@ -91,6 +91,7 @@ struct BindingSnapshot {
     name: String,
     variable: Option<Variable>,
     var_type: Option<BolideType>,
+    var_mutable: Option<bool>,
     scope_depth: Option<usize>,
     borrowed: Option<(String, usize)>,
     weak: bool,
@@ -116,6 +117,71 @@ fn funcsig_adapter_name(params: &[BolideType], ret: &Option<Box<BolideType>>) ->
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     format!("{:?}->{:?}", params, ret).hash(&mut hasher);
     format!("@_funcsig_raw_adapter_{:016x}", hasher.finish())
+}
+
+fn type_mangle(ty: &BolideType) -> String {
+    match ty {
+        BolideType::Int => "int".to_string(),
+        BolideType::Float => "float".to_string(),
+        BolideType::Bool => "bool".to_string(),
+        BolideType::Str => "str".to_string(),
+        BolideType::Bytes => "bytes".to_string(),
+        BolideType::BigInt => "bigint".to_string(),
+        BolideType::Decimal => "decimal".to_string(),
+        BolideType::Dynamic => "dynamic".to_string(),
+        BolideType::Ptr => "ptr".to_string(),
+        BolideType::Channel(inner) => format!("channel_{}", type_mangle(inner)),
+        BolideType::Future => "future".to_string(),
+        BolideType::Func => "func".to_string(),
+        BolideType::FuncSig(params, ret) => {
+            let mut out = "funcsig".to_string();
+            for param in params {
+                out.push('_');
+                out.push_str(&type_mangle(param));
+            }
+            if let Some(ret) = ret {
+                out.push_str("_ret_");
+                out.push_str(&type_mangle(ret));
+            }
+            out
+        }
+        BolideType::List(inner) => format!("list_{}", type_mangle(inner)),
+        BolideType::Dict(key, value) => format!("dict_{}_{}", type_mangle(key), type_mangle(value)),
+        BolideType::Tuple(items) => {
+            let mut out = "tuple".to_string();
+            for item in items {
+                out.push('_');
+                out.push_str(&type_mangle(item));
+            }
+            out
+        }
+        BolideType::Generic(name) | BolideType::Custom(name) => name
+            .chars()
+            .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
+            .collect(),
+        BolideType::Adt(name, args) => {
+            let mut out: String = name
+                .chars()
+                .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
+                .collect();
+            for arg in args {
+                out.push('_');
+                out.push_str(&type_mangle(arg));
+            }
+            out
+        }
+        BolideType::Weak(inner) => format!("weak_{}", type_mangle(inner)),
+        BolideType::Unowned(inner) => format!("unowned_{}", type_mangle(inner)),
+    }
+}
+
+fn method_overload_name(class_name: &str, method_name: &str, params: &[Param]) -> String {
+    let mut name = format!("{}_{}_{}", class_name, method_name, params.len());
+    for param in params {
+        name.push('_');
+        name.push_str(&type_mangle(&param.ty));
+    }
+    name
 }
 
 #[derive(Clone)]
@@ -210,6 +276,8 @@ pub struct JitCompiler {
     dependency_manifest: Option<crate::deps::DependencyManifest>,
     /// 全局变量类型映射
     global_var_types: HashMap<String, BolideType>,
+    /// 全局变量可变性映射；let=false, var=true
+    global_var_mutability: HashMap<String, bool>,
     /// 闭包计数器（生成唯一 lifted 函数名）
     closure_counter: usize,
     /// 待编译的 lifted 闭包函数（创建点入队，主函数后统一编译）
@@ -543,7 +611,15 @@ impl JitCompiler {
             "@_string_concat_many",
             bolide_runtime::bolide_string_concat_many as *const u8,
         );
+        builder.symbol(
+            "@_string_format",
+            bolide_runtime::bolide_string_format as *const u8,
+        );
         builder.symbol("@_string_eq", bolide_runtime::bolide_string_eq as *const u8);
+        builder.symbol(
+            "bolide_string_compare",
+            bolide_runtime::bolide_string_compare as *const u8,
+        );
 
         // 注册类型转换函数
         builder.symbol(
@@ -1119,6 +1195,194 @@ impl JitCompiler {
             bolide_runtime::bolide_regex_split as *const u8,
         );
         builder.symbol(
+            "bolide_buffer_new",
+            bolide_runtime::bolide_buffer_new as *const u8,
+        );
+        builder.symbol(
+            "bolide_buffer_with_capacity",
+            bolide_runtime::bolide_buffer_with_capacity as *const u8,
+        );
+        builder.symbol(
+            "bolide_buffer_free",
+            bolide_runtime::bolide_buffer_free as *const u8,
+        );
+        builder.symbol(
+            "bolide_buffer_len",
+            bolide_runtime::bolide_buffer_len as *const u8,
+        );
+        builder.symbol(
+            "bolide_buffer_capacity",
+            bolide_runtime::bolide_buffer_capacity as *const u8,
+        );
+        builder.symbol(
+            "bolide_buffer_reserve",
+            bolide_runtime::bolide_buffer_reserve as *const u8,
+        );
+        builder.symbol(
+            "bolide_buffer_clear",
+            bolide_runtime::bolide_buffer_clear as *const u8,
+        );
+        builder.symbol(
+            "bolide_buffer_push",
+            bolide_runtime::bolide_buffer_push as *const u8,
+        );
+        builder.symbol(
+            "bolide_buffer_push_line",
+            bolide_runtime::bolide_buffer_push_line as *const u8,
+        );
+        builder.symbol(
+            "bolide_buffer_push_int",
+            bolide_runtime::bolide_buffer_push_int as *const u8,
+        );
+        builder.symbol(
+            "bolide_buffer_push_float",
+            bolide_runtime::bolide_buffer_push_float as *const u8,
+        );
+        builder.symbol(
+            "bolide_buffer_push_bool",
+            bolide_runtime::bolide_buffer_push_bool as *const u8,
+        );
+        builder.symbol(
+            "bolide_buffer_to_string",
+            bolide_runtime::bolide_buffer_to_string as *const u8,
+        );
+        builder.symbol(
+            "bolide_atomic_int_new",
+            bolide_runtime::bolide_atomic_int_new as *const u8,
+        );
+        builder.symbol(
+            "bolide_atomic_int_free",
+            bolide_runtime::bolide_atomic_int_free as *const u8,
+        );
+        builder.symbol(
+            "bolide_atomic_int_get",
+            bolide_runtime::bolide_atomic_int_get as *const u8,
+        );
+        builder.symbol(
+            "bolide_atomic_int_set",
+            bolide_runtime::bolide_atomic_int_set as *const u8,
+        );
+        builder.symbol(
+            "bolide_atomic_int_swap",
+            bolide_runtime::bolide_atomic_int_swap as *const u8,
+        );
+        builder.symbol(
+            "bolide_atomic_int_add",
+            bolide_runtime::bolide_atomic_int_add as *const u8,
+        );
+        builder.symbol(
+            "bolide_atomic_int_sub",
+            bolide_runtime::bolide_atomic_int_sub as *const u8,
+        );
+        builder.symbol(
+            "bolide_atomic_int_compare_exchange",
+            bolide_runtime::bolide_atomic_int_compare_exchange as *const u8,
+        );
+        builder.symbol(
+            "bolide_atomic_bool_new",
+            bolide_runtime::bolide_atomic_bool_new as *const u8,
+        );
+        builder.symbol(
+            "bolide_atomic_bool_free",
+            bolide_runtime::bolide_atomic_bool_free as *const u8,
+        );
+        builder.symbol(
+            "bolide_atomic_bool_get",
+            bolide_runtime::bolide_atomic_bool_get as *const u8,
+        );
+        builder.symbol(
+            "bolide_atomic_bool_set",
+            bolide_runtime::bolide_atomic_bool_set as *const u8,
+        );
+        builder.symbol(
+            "bolide_atomic_bool_swap",
+            bolide_runtime::bolide_atomic_bool_swap as *const u8,
+        );
+        builder.symbol(
+            "bolide_atomic_bool_compare_exchange",
+            bolide_runtime::bolide_atomic_bool_compare_exchange as *const u8,
+        );
+        builder.symbol(
+            "bolide_sync_mutex_new",
+            bolide_runtime::bolide_sync_mutex_new as *const u8,
+        );
+        builder.symbol(
+            "bolide_sync_mutex_free",
+            bolide_runtime::bolide_sync_mutex_free as *const u8,
+        );
+        builder.symbol(
+            "bolide_sync_mutex_get",
+            bolide_runtime::bolide_sync_mutex_get as *const u8,
+        );
+        builder.symbol(
+            "bolide_sync_mutex_set",
+            bolide_runtime::bolide_sync_mutex_set as *const u8,
+        );
+        builder.symbol(
+            "bolide_sync_mutex_swap",
+            bolide_runtime::bolide_sync_mutex_swap as *const u8,
+        );
+        builder.symbol(
+            "bolide_sync_mutex_add_int",
+            bolide_runtime::bolide_sync_mutex_add_int as *const u8,
+        );
+        builder.symbol(
+            "bolide_sync_rwlock_new",
+            bolide_runtime::bolide_sync_rwlock_new as *const u8,
+        );
+        builder.symbol(
+            "bolide_sync_rwlock_free",
+            bolide_runtime::bolide_sync_rwlock_free as *const u8,
+        );
+        builder.symbol(
+            "bolide_sync_rwlock_get",
+            bolide_runtime::bolide_sync_rwlock_get as *const u8,
+        );
+        builder.symbol(
+            "bolide_sync_rwlock_set",
+            bolide_runtime::bolide_sync_rwlock_set as *const u8,
+        );
+        builder.symbol(
+            "bolide_sync_rwlock_add_int",
+            bolide_runtime::bolide_sync_rwlock_add_int as *const u8,
+        );
+        builder.symbol(
+            "bolide_sync_once_new",
+            bolide_runtime::bolide_sync_once_new as *const u8,
+        );
+        builder.symbol(
+            "bolide_sync_once_free",
+            bolide_runtime::bolide_sync_once_free as *const u8,
+        );
+        builder.symbol(
+            "bolide_sync_once_check",
+            bolide_runtime::bolide_sync_once_check as *const u8,
+        );
+        builder.symbol(
+            "bolide_sync_once_try_begin",
+            bolide_runtime::bolide_sync_once_try_begin as *const u8,
+        );
+        builder.symbol(
+            "bolide_sync_once_reset",
+            bolide_runtime::bolide_sync_once_reset as *const u8,
+        );
+        builder.symbol(
+            "bolide_hash_fnv1a",
+            bolide_runtime::bolide_hash_fnv1a as *const u8,
+        );
+        builder.symbol(
+            "bolide_hash_fnv1a_bytes",
+            bolide_runtime::bolide_hash_fnv1a_bytes as *const u8,
+        );
+        builder.symbol(
+            "bolide_hash_crc32",
+            bolide_runtime::bolide_hash_crc32 as *const u8,
+        );
+        builder.symbol(
+            "bolide_hash_crc32_bytes",
+            bolide_runtime::bolide_hash_crc32_bytes as *const u8,
+        );
+        builder.symbol(
             "bolide_env_get",
             bolide_runtime::bolide_env_get as *const u8,
         );
@@ -1170,6 +1434,34 @@ impl JitCompiler {
         builder.symbol(
             "bolide_env_exe_suffix",
             bolide_runtime::bolide_env_exe_suffix as *const u8,
+        );
+        builder.symbol(
+            "bolide_io_open_write",
+            bolide_runtime::bolide_io_open_write as *const u8,
+        );
+        builder.symbol(
+            "bolide_io_open_append",
+            bolide_runtime::bolide_io_open_append as *const u8,
+        );
+        builder.symbol(
+            "bolide_io_write",
+            bolide_runtime::bolide_io_write as *const u8,
+        );
+        builder.symbol(
+            "bolide_io_write_line",
+            bolide_runtime::bolide_io_write_line as *const u8,
+        );
+        builder.symbol(
+            "bolide_io_write_bytes",
+            bolide_runtime::bolide_io_write_bytes as *const u8,
+        );
+        builder.symbol(
+            "bolide_io_flush",
+            bolide_runtime::bolide_io_flush as *const u8,
+        );
+        builder.symbol(
+            "bolide_io_close",
+            bolide_runtime::bolide_io_close as *const u8,
         );
         builder.symbol(
             "bolide_env_exit",
@@ -2150,6 +2442,50 @@ impl JitCompiler {
         );
         builder.symbol("@_bytes_new", bolide_runtime::bolide_bytes_new as *const u8);
         builder.symbol(
+            "bolide_bytes_new",
+            bolide_runtime::bolide_bytes_new as *const u8,
+        );
+        builder.symbol(
+            "bolide_bytes_with_capacity",
+            bolide_runtime::bolide_bytes_with_capacity as *const u8,
+        );
+        builder.symbol(
+            "bolide_bytes_from_string",
+            bolide_runtime::bolide_bytes_from_string as *const u8,
+        );
+        builder.symbol(
+            "bolide_bytes_capacity",
+            bolide_runtime::bolide_bytes_capacity as *const u8,
+        );
+        builder.symbol(
+            "bolide_bytes_reserve",
+            bolide_runtime::bolide_bytes_reserve as *const u8,
+        );
+        builder.symbol(
+            "bolide_bytes_clear",
+            bolide_runtime::bolide_bytes_clear as *const u8,
+        );
+        builder.symbol(
+            "bolide_bytes_extend",
+            bolide_runtime::bolide_bytes_extend as *const u8,
+        );
+        builder.symbol(
+            "bolide_bytes_get",
+            bolide_runtime::bolide_bytes_get as *const u8,
+        );
+        builder.symbol(
+            "bolide_bytes_set",
+            bolide_runtime::bolide_bytes_set as *const u8,
+        );
+        builder.symbol(
+            "bolide_bytes_push",
+            bolide_runtime::bolide_bytes_push as *const u8,
+        );
+        builder.symbol(
+            "bolide_bytes_to_string_lossy",
+            bolide_runtime::bolide_bytes_to_string_lossy as *const u8,
+        );
+        builder.symbol(
             "@_bytes_retain",
             bolide_runtime::bolide_bytes_retain as *const u8,
         );
@@ -2425,6 +2761,7 @@ impl JitCompiler {
             lifetime_funcs: HashSet::new(),
             global_data_ids: HashMap::new(),
             global_var_types: HashMap::new(),
+            global_var_mutability: HashMap::new(),
             base_dir: None,
             dependency_manifest: None,
             pending_closures: Vec::new(),
@@ -3360,6 +3697,8 @@ impl JitCompiler {
                 // 记录全局变量
                 self.global_data_ids.insert(decl.name.clone(), data_id);
                 self.global_var_types.insert(decl.name.clone(), var_type);
+                self.global_var_mutability
+                    .insert(decl.name.clone(), decl.mutable);
 
                 // 记录全局 Future 变量对应的 async 函数，供后续 await 类型推断
                 if let Some(ref val) = decl.value {
@@ -3546,7 +3885,7 @@ impl JitCompiler {
                         BolideType::Str => {
                             return match member.as_str() {
                                 "upper" | "lower" | "trim" | "strip" | "replace" | "repeat"
-                                | "substring" | "char_at" => BolideType::Str,
+                                | "format" | "substring" | "char_at" => BolideType::Str,
                                 "split" => BolideType::List(Box::new(BolideType::Str)),
                                 "contains" | "includes" | "starts_with" | "ends_with" => {
                                     BolideType::Bool
@@ -5248,6 +5587,7 @@ impl JitCompiler {
                 ("@_string_trim", &[ptr], Some(ptr)),
                 ("@_string_replace", &[ptr, ptr, ptr], Some(ptr)),
                 ("@_string_repeat", &[ptr, i], Some(ptr)),
+                ("@_string_format", &[ptr, ptr, i, ptr, ptr, i], Some(ptr)),
                 ("@_string_find", &[ptr, ptr], Some(i)),
                 ("@_string_contains", &[ptr, ptr], Some(i)),
                 ("@_string_starts_with", &[ptr, ptr], Some(i)),
@@ -6221,6 +6561,7 @@ impl JitCompiler {
             &mut self.module,
             &self.global_data_ids,
             &self.global_var_types,
+            &self.global_var_mutability,
             func_refs,
             func_return_types,
             func_params,
@@ -6428,6 +6769,7 @@ impl JitCompiler {
             &mut self.module,
             &self.global_data_ids,
             &self.global_var_types,
+            &self.global_var_mutability,
             func_refs,
             func_return_types,
             func_params,
@@ -7261,9 +7603,9 @@ impl JitCompiler {
                     let is_overloaded = name_counts.get(&method.name).copied().unwrap_or(0) > 1;
                     let param_count = method.params.len();
 
-                    // 内部函数名：重载时加参数数量后缀
+                    // 内部函数名：重载时加参数数量和类型签名后缀
                     let method_name = if is_overloaded {
-                        format!("{}_{}_{}", class_def.name, method.name, param_count)
+                        method_overload_name(&class_def.name, &method.name, &method.params)
                     } else {
                         format!("{}_{}", class_def.name, method.name)
                     };
@@ -8427,10 +8769,8 @@ impl JitCompiler {
 
                 for method in &class_def.methods {
                     let is_overloaded = name_counts.get(&method.name).copied().unwrap_or(0) > 1;
-                    let param_count = method.params.len();
-
                     let method_name = if is_overloaded {
-                        format!("{}_{}_{}", class_def.name, method.name, param_count)
+                        method_overload_name(&class_def.name, &method.name, &method.params)
                     } else {
                         format!("{}_{}", class_def.name, method.name)
                     };
@@ -8523,10 +8863,13 @@ struct CompileContext<'a, 'b> {
     module: &'a mut JITModule,
     global_data_ids: &'a HashMap<String, cranelift_module::DataId>,
     global_var_types: &'a HashMap<String, BolideType>,
+    global_var_mutability: &'a HashMap<String, bool>,
     func_refs: HashMap<String, FuncRef>,
     variables: HashMap<String, Variable>,
     /// 变量的 Bolide 类型（用于类型推断）
     var_types: HashMap<String, BolideType>,
+    /// 局部变量可变性；显式 let=false, var=true。没有记录的内部/参数绑定按可变处理。
+    var_mutability: HashMap<String, bool>,
     /// 函数返回类型（用于 spawn/await 类型处理）
     func_return_types: HashMap<String, Option<BolideType>>,
     /// 函数参数信息（用于参数模式处理）
@@ -8711,6 +9054,7 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         module: &'a mut JITModule,
         global_data_ids: &'a HashMap<String, cranelift_module::DataId>,
         global_var_types: &'a HashMap<String, BolideType>,
+        global_var_mutability: &'a HashMap<String, bool>,
         func_refs: HashMap<String, FuncRef>,
         func_return_types: HashMap<String, Option<BolideType>>,
         func_params: HashMap<String, Vec<Param>>,
@@ -8736,9 +9080,11 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             module,
             global_data_ids,
             global_var_types,
+            global_var_mutability,
             func_refs,
             variables: HashMap::new(),
             var_types: HashMap::new(),
+            var_mutability: HashMap::new(),
             func_return_types,
             func_params,
             spawn_func_map: HashMap::new(),
@@ -8957,6 +9303,7 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                     name,
                     variable,
                     var_type,
+                    var_mutable,
                     scope_depth,
                     borrowed,
                     weak,
@@ -8983,6 +9330,14 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                     }
                     None => {
                         self.var_types.remove(&name);
+                    }
+                }
+                match var_mutable {
+                    Some(mutable) => {
+                        self.var_mutability.insert(name.clone(), mutable);
+                    }
+                    None => {
+                        self.var_mutability.remove(&name);
                     }
                 }
                 match scope_depth {
@@ -9068,6 +9423,7 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             name: name.to_string(),
             variable: self.variables.get(name).copied(),
             var_type: self.var_types.get(name).cloned(),
+            var_mutable: self.var_mutability.get(name).copied(),
             scope_depth: self.var_scope_depth.get(name).copied(),
             borrowed: self.borrowed_vars.get(name).cloned(),
             weak: self.weak_variables.contains(name),
@@ -9079,6 +9435,72 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             force_thread_task: self.force_thread_tasks.contains(name),
             lifetime_source: self.var_lifetime_source.get(name).cloned(),
         });
+    }
+
+    fn binding_is_mutable(&self, name: &str) -> bool {
+        if let Some(mutable) = self.var_mutability.get(name) {
+            return *mutable;
+        }
+        if self.variables.contains_key(name) {
+            return true;
+        }
+        let resolved_global = self.resolved_global_name(name);
+        self.global_var_mutability
+            .get(&resolved_global)
+            .copied()
+            .unwrap_or(true)
+    }
+
+    fn mutation_root<'expr>(expr: &'expr Expr) -> Option<&'expr str> {
+        match expr {
+            Expr::Ident(name) => Some(name.as_str()),
+            Expr::Member(base, _) | Expr::Index(base, _) => Self::mutation_root(base),
+            _ => None,
+        }
+    }
+
+    fn ensure_mutable_binding(&self, name: &str, action: &str) -> Result<(), String> {
+        if self.binding_is_mutable(name) {
+            Ok(())
+        } else {
+            Err(format!(
+                "Cannot {} immutable binding '{}'; declare it with var to make it mutable",
+                action, name
+            ))
+        }
+    }
+
+    fn ensure_mutable_target(&self, expr: &Expr, action: &str) -> Result<(), String> {
+        if let Some(root) = Self::mutation_root(expr) {
+            self.ensure_mutable_binding(root, action)?;
+        }
+        Ok(())
+    }
+
+    fn is_mutating_method(ty: &BolideType, method_name: &str) -> bool {
+        match ty {
+            BolideType::List(_) => matches!(
+                method_name,
+                "push" | "append"
+                    | "pop"
+                    | "set"
+                    | "insert"
+                    | "remove"
+                    | "clear"
+                    | "reverse"
+                    | "extend"
+                    | "sort"
+            ),
+            BolideType::Dict(_, _) => matches!(
+                method_name,
+                "set" | "insert" | "remove" | "delete" | "clear" | "update"
+            ),
+            BolideType::Bytes => matches!(
+                method_name,
+                "push" | "append" | "set" | "insert" | "remove" | "clear" | "extend"
+            ),
+            _ => false,
+        }
     }
 
     /// 推断 await 一个 Future/Task 表达式后得到的类型
@@ -10585,9 +11007,18 @@ impl<'a, 'b> CompileContext<'a, 'b> {
     fn compile_assign(&mut self, assign: &Assign) -> Result<(), String> {
         // 根据 target 类型分派
         match &assign.target {
-            Expr::Ident(var_name) => self.compile_var_assign(var_name, &assign.value),
-            Expr::Member(base, member) => self.compile_member_assign(base, member, &assign.value),
-            Expr::Index(base, index) => self.compile_index_assign(base, index, &assign.value),
+            Expr::Ident(var_name) => {
+                self.ensure_mutable_binding(var_name, "assign to")?;
+                self.compile_var_assign(var_name, &assign.value)
+            }
+            Expr::Member(base, member) => {
+                self.ensure_mutable_target(base, "mutate")?;
+                self.compile_member_assign(base, member, &assign.value)
+            }
+            Expr::Index(base, index) => {
+                self.ensure_mutable_target(base, "mutate")?;
+                self.compile_index_assign(base, index, &assign.value)
+            }
             _ => Err("Invalid assignment target".to_string()),
         }
     }
@@ -11084,6 +11515,7 @@ impl<'a, 'b> CompileContext<'a, 'b> {
 
         // 记录局部变量的 Bolide 类型（需要规范化类型名称）
         self.var_types.insert(decl.name.clone(), bolide_ty.clone());
+        self.var_mutability.insert(decl.name.clone(), decl.mutable);
 
         let var = if let Some(v) = existing_var {
             // 变量已存在（循环中预初始化过），release 旧值
@@ -13547,6 +13979,84 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         Ok(result)
     }
 
+    fn compile_string_ptr_array(&mut self, values: &[Value]) -> Result<Value, String> {
+        if values.is_empty() {
+            return Ok(self.builder.ins().iconst(self.ptr_type, 0));
+        }
+        let array_size = values
+            .len()
+            .checked_mul(8)
+            .and_then(|n| u32::try_from(n).ok())
+            .ok_or("string pointer array is too large")?;
+        let slot = self.builder.create_sized_stack_slot(StackSlotData::new(
+            StackSlotKind::ExplicitSlot,
+            array_size,
+            0,
+        ));
+        let array_ptr = self.builder.ins().stack_addr(self.ptr_type, slot, 0);
+        for (i, value) in values.iter().enumerate() {
+            self.builder
+                .ins()
+                .store(MemFlags::new(), *value, array_ptr, (i * 8) as i32);
+        }
+        Ok(array_ptr)
+    }
+
+    fn compile_string_format(&mut self, template: Value, args: &[Expr]) -> Result<Value, String> {
+        let mut positional = Vec::new();
+        let mut named_names = Vec::new();
+        let mut named_values = Vec::new();
+        for arg in args {
+            match arg {
+                Expr::NamedArg(name, value) => {
+                    let name_value = self.compile_expr(&Expr::String(name.clone()))?;
+                    let formatted_value =
+                        self.compile_type_conversion_to_str(std::slice::from_ref(value.as_ref()))?;
+                    named_names.push(name_value);
+                    named_values.push(formatted_value);
+                }
+                Expr::SpreadArg(_) | Expr::KwSpreadArg(_) => {
+                    return Err("str.format does not support *args or **kwargs yet".to_string());
+                }
+                expr => {
+                    positional
+                        .push(self.compile_type_conversion_to_str(std::slice::from_ref(expr))?);
+                }
+            }
+        }
+
+        let pos_ptr = self.compile_string_ptr_array(&positional)?;
+        let names_ptr = self.compile_string_ptr_array(&named_names)?;
+        let named_ptr = self.compile_string_ptr_array(&named_values)?;
+
+        let func_ref = *self
+            .func_refs
+            .get("@_string_format")
+            .ok_or("string_format not found")?;
+        let pos_count = self
+            .builder
+            .ins()
+            .iconst(types::I64, positional.len() as i64);
+        let named_count = self
+            .builder
+            .ins()
+            .iconst(types::I64, named_values.len() as i64);
+        let call = self.builder.ins().call(
+            func_ref,
+            &[
+                template,
+                pos_ptr,
+                pos_count,
+                names_ptr,
+                named_ptr,
+                named_count,
+            ],
+        );
+        let result = self.builder.inst_results(call)[0];
+        self.track_temp_rc_value(result, &BolideType::Str);
+        Ok(result)
+    }
+
     /// 编译 BigInt 二元操作
     fn compile_bigint_binop(
         &mut self,
@@ -15314,7 +15824,7 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                         BolideType::Str => match method.as_str() {
                             // 返回新串的方法
                             "upper" | "lower" | "trim" | "strip" | "replace" | "repeat"
-                            | "substring" | "char_at" => BolideType::Str,
+                            | "format" | "substring" | "char_at" => BolideType::Str,
                             // 返回 list<str>
                             "split" => BolideType::List(Box::new(BolideType::Str)),
                             "contains" | "includes" | "starts_with" | "ends_with" => {
@@ -15864,6 +16374,7 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         args: &[Expr],
         force_thread: bool,
     ) -> Result<Value, String> {
+        self.check_spawn_args_thread_safe(func_name, args)?;
         let prepared_args = self.prepare_call_args(func_name, args)?;
 
         // 获取目标函数的返回类型，确定 spawn 函数后缀
@@ -16801,7 +17312,35 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             .unwrap_or(BolideType::Int))
     }
 
+    fn is_unsafe_spawn_arg_type(ty: &BolideType) -> bool {
+        matches!(
+            ty,
+            BolideType::List(_) | BolideType::Dict(_, _) | BolideType::Bytes | BolideType::Dynamic
+        )
+    }
+
+    fn check_spawn_args_thread_safe(&self, func_name: &str, args: &[Expr]) -> Result<(), String> {
+        for (index, arg) in args.iter().enumerate() {
+            let ty = self.infer_expr_type(arg);
+            if Self::is_unsafe_spawn_arg_type(&ty) {
+                if let Expr::Ident(name) = arg {
+                    if !self.binding_is_mutable(name) {
+                        continue;
+                    }
+                }
+                return Err(format!(
+                    "spawn argument {} for '{}' has mutable/shared type {:?}; pass an immutable let binding or use std/sync, std/atomic, or channel",
+                    index + 1,
+                    func_name,
+                    ty
+                ));
+            }
+        }
+        Ok(())
+    }
+
     fn compile_pool_spawn(&mut self, func_name: &str, args: &[Expr]) -> Result<Value, String> {
+        self.check_spawn_args_thread_safe(func_name, args)?;
         let prepared_args = self.prepare_call_args(func_name, args)?;
         let return_type = self
             .func_return_types
@@ -17588,7 +18127,7 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                         },
                         BolideType::Str => match member.as_str() {
                             "upper" | "lower" | "trim" | "strip" | "replace" | "repeat"
-                            | "substring" | "substr" | "char_at" => Ok(BolideType::Str),
+                            | "format" | "substring" | "substr" | "char_at" => Ok(BolideType::Str),
                             "split" => Ok(BolideType::List(Box::new(BolideType::Str))),
                             "contains" | "includes" | "starts_with" | "ends_with" => {
                                 Ok(BolideType::Bool)
@@ -17760,6 +18299,9 @@ impl<'a, 'b> CompileContext<'a, 'b> {
     ) -> Result<Value, String> {
         // 获取对象类型
         let class_name = self.get_expr_type(base)?;
+        if Self::is_mutating_method(&class_name, method_name) {
+            self.ensure_mutable_target(base, "call mutating method on")?;
+        }
 
         // 检查是否是 Future 类型的方法调用
         if matches!(class_name, BolideType::Future) {
@@ -17825,8 +18367,13 @@ impl<'a, 'b> CompileContext<'a, 'b> {
 
         // 查找方法（支持继承链）
         let self_val = self.compile_expr(base)?;
-        let full_method_name =
-            self.find_method_with_arg_count(&class_name, method_name, Some(args.len()))?;
+        let arg_types: Vec<BolideType> = args.iter().map(|arg| self.infer_expr_type(arg)).collect();
+        let full_method_name = self.find_method_with_arg_types(
+            &class_name,
+            method_name,
+            Some(args.len()),
+            Some(&arg_types),
+        )?;
 
         // 编译其他参数
         let user_params = self
@@ -17934,7 +18481,12 @@ impl<'a, 'b> CompileContext<'a, 'b> {
 
             self.builder.switch_to_block(match_block);
             let dispatch_name = self
-                .find_method_with_arg_count(&class_name, method_name, Some(args.len()))
+                .find_method_with_arg_types(
+                    &class_name,
+                    method_name,
+                    Some(args.len()),
+                    Some(&arg_types),
+                )
                 .unwrap_or_else(|_| full_method_name.clone());
             let result = self.emit_class_method_call(&dispatch_name, self_val, &user_arg_values)?;
             self.builder.ins().jump(result_block, &[result]);
@@ -18004,6 +18556,7 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             "lower" => call_str(self, "@_string_lower", 0, true),
             "trim" | "strip" => call_str(self, "@_string_trim", 0, true),
             "replace" => call_str(self, "@_string_replace", 2, true),
+            "format" => self.compile_string_format(str_ptr, args),
             "find" | "index_of" => call_str(self, "@_string_find", 1, false),
             "contains" | "includes" => call_str(self, "@_string_contains", 1, false),
             "starts_with" => call_str(self, "@_string_starts_with", 1, false),
@@ -18175,6 +18728,27 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         }
     }
 
+    fn prepare_list_runtime_value(
+        &mut self,
+        mut value: Value,
+        expr: &Expr,
+        list_elem_ty: &BolideType,
+    ) -> Result<Value, String> {
+        value = self.prepare_funcsig_for_container_storage(value, expr, list_elem_ty)?;
+        if *list_elem_ty == BolideType::Dynamic {
+            let actual_ty = self.normalize_bolide_type(&self.infer_expr_type(expr));
+            if actual_ty != BolideType::Dynamic {
+                value = self.convert_to_dynamic(value, &actual_ty)?;
+            }
+        }
+        if matches!(list_elem_ty, BolideType::Float)
+            && self.builder.func.dfg.value_type(value) == types::F64
+        {
+            value = self.builder.ins().bitcast(types::I64, MemFlags::new(), value);
+        }
+        Ok(value)
+    }
+
     /// 推断作为 map/filter 回调的函数表达式的返回类型。
     fn func_ptr_return_type(&self, expr: &Expr) -> Option<BolideType> {
         if let Expr::Ident(name) = expr {
@@ -18215,13 +18789,8 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                 if args.len() != 1 {
                     return Err(format!("{} expects 1 argument", method_name));
                 }
-                let mut val = self.compile_expr(&args[0])?;
-                if list_elem_ty == BolideType::Dynamic {
-                    let actual_ty = self.normalize_bolide_type(&self.infer_expr_type(&args[0]));
-                    if actual_ty != BolideType::Dynamic {
-                        val = self.convert_to_dynamic(val, &actual_ty)?;
-                    }
-                }
+                let val = self.compile_expr(&args[0])?;
+                let val = self.prepare_list_runtime_value(val, &args[0], &list_elem_ty)?;
                 let func_ref = *self
                     .func_refs
                     .get("@_list_push")
@@ -18266,13 +18835,8 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                     return Err("set expects 2 arguments".to_string());
                 }
                 let index = self.compile_expr(&args[0])?;
-                let mut value = self.compile_expr(&args[1])?;
-                if list_elem_ty == BolideType::Dynamic {
-                    let actual_ty = self.normalize_bolide_type(&self.infer_expr_type(&args[1]));
-                    if actual_ty != BolideType::Dynamic {
-                        value = self.convert_to_dynamic(value, &actual_ty)?;
-                    }
-                }
+                let value = self.compile_expr(&args[1])?;
+                let value = self.prepare_list_runtime_value(value, &args[1], &list_elem_ty)?;
                 let func_ref = *self
                     .func_refs
                     .get("@_list_set")
@@ -18286,13 +18850,8 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                     return Err("insert expects 2 arguments".to_string());
                 }
                 let index = self.compile_expr(&args[0])?;
-                let mut value = self.compile_expr(&args[1])?;
-                if list_elem_ty == BolideType::Dynamic {
-                    let actual_ty = self.normalize_bolide_type(&self.infer_expr_type(&args[1]));
-                    if actual_ty != BolideType::Dynamic {
-                        value = self.convert_to_dynamic(value, &actual_ty)?;
-                    }
-                }
+                let value = self.compile_expr(&args[1])?;
+                let value = self.prepare_list_runtime_value(value, &args[1], &list_elem_ty)?;
                 let func_ref = *self
                     .func_refs
                     .get("@_list_insert")
@@ -18350,6 +18909,7 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                     return Err(format!("{} expects 1 argument", method_name));
                 }
                 let value = self.compile_expr(&args[0])?;
+                let value = self.prepare_list_runtime_value(value, &args[0], &list_elem_ty)?;
                 let func_ref = *self
                     .func_refs
                     .get("@_list_contains")
@@ -18363,6 +18923,7 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                     return Err(format!("{} expects 1 argument", method_name));
                 }
                 let value = self.compile_expr(&args[0])?;
+                let value = self.prepare_list_runtime_value(value, &args[0], &list_elem_ty)?;
                 let func_ref = *self
                     .func_refs
                     .get("@_list_index_of")
@@ -18376,6 +18937,7 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                     return Err("count expects 1 argument".to_string());
                 }
                 let value = self.compile_expr(&args[0])?;
+                let value = self.prepare_list_runtime_value(value, &args[0], &list_elem_ty)?;
                 let func_ref = *self
                     .func_refs
                     .get("@_list_count")
@@ -18668,7 +19230,7 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             .insert("super".to_string(), BolideType::Custom(parent));
     }
     fn find_method(&self, class_name: &str, method_name: &str) -> Result<String, String> {
-        self.find_method_with_arg_count(class_name, method_name, None)
+        self.find_method_with_arg_types(class_name, method_name, None, None)
     }
 
     fn method_accepts_arg_count(&self, full_name: &str, arg_count: Option<usize>) -> bool {
@@ -18693,6 +19255,34 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         count >= required_count && (has_variadic || count <= fixed_count)
     }
 
+    fn method_accepts_arg_types(&self, full_name: &str, arg_types: Option<&[BolideType]>) -> bool {
+        let Some(arg_types) = arg_types else {
+            return true;
+        };
+        if !self.method_accepts_arg_count(full_name, Some(arg_types.len())) {
+            return false;
+        }
+        let Some(params) = self.func_params.get(full_name) else {
+            return true;
+        };
+        let user_params = params.get(1..).unwrap_or(&[]);
+        for (index, arg_ty) in arg_types.iter().enumerate() {
+            let Some(param) = user_params.get(index) else {
+                return false;
+            };
+            if param.is_kw_variadic {
+                return true;
+            }
+            if param.is_variadic {
+                return param.ty == BolideType::Dynamic || param.ty == *arg_ty;
+            }
+            if param.ty != BolideType::Dynamic && param.ty != *arg_ty {
+                return false;
+            }
+        }
+        true
+    }
+
     /// 在继承链中查找方法，支持重载（按参数数量匹配）
     fn find_method_with_arg_count(
         &self,
@@ -18700,12 +19290,24 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         method_name: &str,
         arg_count: Option<usize>,
     ) -> Result<String, String> {
+        self.find_method_with_arg_types(class_name, method_name, arg_count, None)
+    }
+
+    /// 在继承链中查找方法，支持重载（优先按实参类型匹配，退回参数数量匹配）
+    fn find_method_with_arg_types(
+        &self,
+        class_name: &str,
+        method_name: &str,
+        arg_count: Option<usize>,
+        arg_types: Option<&[BolideType]>,
+    ) -> Result<String, String> {
         let mut current = self.normalize_type_name(class_name);
         loop {
             // 先检查非重载的精确匹配
             let full_name = format!("{}_{}", current, method_name);
             if self.func_refs.contains_key(&full_name)
                 && self.method_accepts_arg_count(&full_name, arg_count)
+                && self.method_accepts_arg_types(&full_name, arg_types)
             {
                 return Ok(full_name);
             }
@@ -18713,6 +19315,14 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             // 检查重载
             let key = format!("{}:{}", current, method_name);
             if let Some(variants) = self.overloaded_methods.get(&key) {
+                if let Some(types) = arg_types {
+                    if let Some((_, name)) = variants
+                        .iter()
+                        .find(|(_, name)| self.method_accepts_arg_types(name, Some(types)))
+                    {
+                        return Ok(name.clone());
+                    }
+                }
                 if let Some(count) = arg_count {
                     // 按实参数量匹配，包含默认参数 / variadic 的可调用性。
                     if let Some((_, name)) = variants

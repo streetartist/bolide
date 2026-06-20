@@ -1,0 +1,60 @@
+import "std/arena/arena.bl" as arena;
+
+fn check_bool(name: str, got: bool, want: bool) {
+    if got == want {
+        print("ok " + name + "\n");
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want) + "\n");
+    }
+}
+
+fn check_int(name: str, got: int, want: int) {
+    if got == want {
+        print("ok " + name + "\n");
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want) + "\n");
+    }
+}
+
+fn check_str(name: str, got: str, want: str) {
+    if got == want {
+        print("ok " + name + "\n");
+    } else {
+        print("FAIL " + name + " got=" + got + " want=" + want + "\n");
+    }
+}
+
+let a: arena.Arena = arena.new();
+let n: int = a.keep(42);
+let text: str = a.keep("hello");
+let xs: list<int> = a.keep([1, 2, 3]);
+
+check_int("keep int", n, 42);
+check_str("keep str", text, "hello");
+check_int("keep list", xs.len(), 3);
+check_int("arena len", a.len(), 3);
+
+a.clear();
+check_int("arena clear", a.len(), 0);
+a.keep(true);
+check_int("arena reuse", a.len(), 1);
+a.close();
+check_bool("arena closed", a.is_closed(), true);
+a.keep(99);
+check_int("arena closed keep ignored", a.len(), 0);
+
+let b: arena.BufferArena = arena.buffer_arena(16);
+b.push("count=");
+b.push(7);
+b.push(" ok=");
+b.push(true);
+b.line("");
+check_str("buffer arena text", b.to_string(), "count=7 ok=true\n");
+check_bool("buffer arena len", b.len() > 0, true);
+b.clear();
+check_str("buffer arena clear", b.to_string(), "");
+b.close();
+check_bool("buffer arena closed", b.is_closed(), true);
+check_str("buffer arena closed text", b.to_string(), "");
+
+print("std arena done\n");

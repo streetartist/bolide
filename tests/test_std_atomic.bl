@@ -1,0 +1,60 @@
+import "std/atomic/atomic.bl" as atomic;
+
+fn check_bool(name: str, got: bool, want: bool) {
+    if got == want {
+        print("ok " + name + "\n");
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want) + "\n");
+    }
+}
+
+fn check_int(name: str, got: int, want: int) {
+    if got == want {
+        print("ok " + name + "\n");
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want) + "\n");
+    }
+}
+
+fn bump(counter: atomic.AtomicInt, count: int) -> int {
+    for i in range(count) {
+        counter.inc();
+    }
+    return 0;
+}
+
+let counter: atomic.AtomicInt = atomic.new_int(1);
+check_bool("int ok", counter.ok(), true);
+check_int("get", counter.get(), 1);
+check_int("add", counter.add(4), 5);
+check_int("sub", counter.sub(2), 3);
+check_int("swap", counter.swap(10), 3);
+check_int("after swap", counter.get(), 10);
+check_bool("cas success", counter.compare_exchange(10, 11), true);
+check_bool("cas fail", counter.compare_exchange(10, 12), false);
+check_int("after cas", counter.get(), 11);
+counter.set(0);
+
+let flags: atomic.AtomicBool = atomic.new_bool(false);
+check_bool("bool ok", flags.ok(), true);
+check_bool("bool get", flags.get(), false);
+flags.set(true);
+check_bool("bool set", flags.get(), true);
+check_bool("bool swap", flags.swap(false), true);
+check_bool("bool after swap", flags.get(), false);
+check_bool("bool cas", flags.compare_exchange(false, true), true);
+check_bool("bool after cas", flags.get(), true);
+
+let done: (int, int, int, int) = spawn all {
+    bump(counter, 1000),
+    bump(counter, 1000),
+    bump(counter, 1000),
+    bump(counter, 1000)
+};
+
+check_int("parallel count", counter.get(), 4000);
+
+counter.close();
+flags.close();
+
+print("std atomic done\n");

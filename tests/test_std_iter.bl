@@ -1,0 +1,47 @@
+import "std/iter/iter.bl" as iter;
+
+fn check_int(name: str, got: int, want: int) {
+    if got == want {
+        print("ok " + name + "\n");
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want) + "\n");
+    }
+}
+
+fn check_str(name: str, got: str, want: str) {
+    if got == want {
+        print("ok " + name + "\n");
+    } else {
+        print("FAIL " + name + " got=" + got + " want=" + want + "\n");
+    }
+}
+
+let values: list<int> = iter.ints(2, 6);
+check_int("ints len", values.len(), 4);
+check_int("ints first", values[0], 2);
+check_int("sum", iter.sum(values), 14);
+check_int("min", iter.min([4, 2, 8]), 2);
+check_int("max", iter.max([4, 2, 8]), 8);
+
+let down: list<int> = iter.ints_step(5, 0, -2);
+check_int("down len", down.len(), 3);
+check_int("down last", down[2], 1);
+
+let taken: list<int> = iter.take(values, 2);
+check_int("take len", taken.len(), 2);
+check_int("take last", taken[1], 3);
+
+let dropped: list<int> = iter.drop(values, 2);
+check_int("drop first", dropped[0], 4);
+
+let chunks: list<list<int>> = iter.chunk([1, 2, 3, 4, 5], 2);
+check_int("chunk len", chunks.len(), 3);
+check_int("chunk inner", chunks[1][0], 3);
+
+let pairs: list<iter.IntPair> = iter.zip([1, 2], [10, 20, 30]);
+check_int("zip len", pairs.len(), 2);
+check_int("zip value", pairs[1].second, 20);
+
+check_str("join", iter.join(["a", "b", "c"], ","), "a,b,c");
+
+print("std iter done\n");
