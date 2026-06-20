@@ -1,0 +1,155 @@
+// Bolide JSON helper library.
+// Usage: import "std/json/json.bl" as json;
+//
+// This module intentionally starts with safe JSON generation. A full parser is
+// a larger piece of work; these helpers remove the common need to hand-roll
+// fragile JSON string concatenation in web handlers.
+
+class Pair {
+    key: str;
+    value: str;
+}
+
+fn escape(value: str) -> str {
+    return value
+        .replace("\\", "\\\\")
+        .replace("\"", "\\\"")
+        .replace("\r", "\\r")
+        .replace("\n", "\\n")
+        .replace("\t", "\\t");
+}
+
+fn quote(value: str) -> str {
+    return "\"" + escape(value) + "\"";
+}
+
+fn null() -> str {
+    return "null";
+}
+
+fn bool_value(value: bool) -> str {
+    if value {
+        return "true";
+    }
+    return "false";
+}
+
+fn int_value(value: int) -> str {
+    return str(value);
+}
+
+fn float_value(value: float) -> str {
+    return str(value);
+}
+
+fn string(value: str) -> str {
+    return quote(value);
+}
+
+fn from_int(value: int) -> str {
+    return int_value(value);
+}
+
+fn from_float(value: float) -> str {
+    return float_value(value);
+}
+
+fn from_bool(value: bool) -> str {
+    return bool_value(value);
+}
+
+fn pair(key: str, value_json: str) -> Pair {
+    return Pair(key, value_json);
+}
+
+fn raw_array(items: list<str>) -> str {
+    let out: str = "[";
+    let first: bool = true;
+    for item in items {
+        if first {
+            first = false;
+        } else {
+            out = out + ",";
+        }
+        out = out + item;
+    }
+    return out + "]";
+}
+
+fn string_array(items: list<str>) -> str {
+    let values: list<str> = [];
+    for item in items {
+        values.push(quote(item));
+    }
+    return raw_array(values);
+}
+
+fn int_array(items: list<int>) -> str {
+    let values: list<str> = [];
+    for item in items {
+        values.push(str(item));
+    }
+    return raw_array(values);
+}
+
+fn float_array(items: list<float>) -> str {
+    let values: list<str> = [];
+    for item in items {
+        values.push(str(item));
+    }
+    return raw_array(values);
+}
+
+fn bool_array(items: list<bool>) -> str {
+    let values: list<str> = [];
+    for item in items {
+        values.push(bool_value(item));
+    }
+    return raw_array(values);
+}
+
+fn object(pairs: list<Pair>) -> str {
+    let out: str = "{";
+    let first: bool = true;
+    for item in pairs {
+        if first {
+            first = false;
+        } else {
+            out = out + ",";
+        }
+        out = out + quote(item.key) + ":" + item.value;
+    }
+    return out + "}";
+}
+
+fn dict_str(values: dict<str, str>) -> str {
+    let pairs: list<Pair> = [];
+    for key in values.keys() {
+        pairs.push(pair(key, quote(values[key])));
+    }
+    return object(pairs);
+}
+
+fn dict_int(values: dict<str, int>) -> str {
+    let pairs: list<Pair> = [];
+    for key in values.keys() {
+        pairs.push(pair(key, str(values[key])));
+    }
+    return object(pairs);
+}
+
+fn dict_bool(values: dict<str, bool>) -> str {
+    let pairs: list<Pair> = [];
+    for key in values.keys() {
+        pairs.push(pair(key, bool_value(values[key])));
+    }
+    return object(pairs);
+}
+
+fn dict_json(values: dict<str, str>) -> str {
+    let pairs: list<Pair> = [];
+    for key in values.keys() {
+        pairs.push(pair(key, values[key]));
+    }
+    return object(pairs);
+}

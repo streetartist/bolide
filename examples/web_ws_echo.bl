@@ -1,0 +1,24 @@
+import "std/web/web.bl";
+
+fn ws_echo(req: web.Request, ws: web.WebSocket) -> int {
+    ws.set_read_timeout(30000);
+    while ws.is_open() {
+        let msg: web.Message = ws.recv();
+        if msg.kind() == 1 {
+            ws.send_text(msg.text());
+        } elif msg.kind() == 2 {
+            ws.send_binary(msg.bytes());
+        } else {
+            msg.free();
+            break;
+        }
+        msg.free();
+    }
+    return 0;
+}
+
+let app: web.App = web.app();
+web.websocket(app, "/ws", ws_echo);
+
+print("WebSocket echo example: ws://127.0.0.1:8011/ws");
+app.run("127.0.0.1", 8011);

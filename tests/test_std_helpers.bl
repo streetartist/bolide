@@ -1,0 +1,22 @@
+import "std/json/json.bl" as json;
+import "std/path/path.bl" as path;
+import "std/config/config.bl" as config;
+import "std/log/log.bl" as log;
+
+let obj: str = json.object([
+    json.pair("name", json.string("Bolide \"std\"")),
+    json.pair("ok", json.from_bool(true)),
+    json.pair("count", json.from_int(3)),
+    json.pair("tags", json.string_array(["web", "json"]))
+]);
+
+print(obj + "\n");
+print(path.normalize("a/./b/../c") + "\n");
+
+let cfg: config.Config = config.parse("port=8080\ndebug=true\nname=\"demo\"\n");
+print(cfg.get("name") + "\n");
+print(str(cfg.get_int("port", 0)) + "\n");
+print(str(cfg.get_bool("debug", false)) + "\n");
+
+log.set_debug();
+log.debug("std helpers loaded");

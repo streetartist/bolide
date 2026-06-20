@@ -300,7 +300,7 @@ fn db_value_from_raw(elem_type: ElementType, raw: i64) -> DbValue {
         ElementType::BigInt | ElementType::Decimal | ElementType::List | ElementType::Dict => {
             DbValue::String("{...}".to_string())
         }
-        ElementType::Ptr | ElementType::Closure => DbValue::None,
+        ElementType::Ptr | ElementType::Closure | ElementType::Object => DbValue::None,
     }
 }
 

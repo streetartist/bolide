@@ -1,0 +1,57 @@
+import "std/log/log.bl" as log;
+import "std/fs/fs.bl" as fs;
+
+fn check_bool(name: str, got: bool, want: bool) {
+    if got == want {
+        print("ok " + name + "\n");
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want) + "\n");
+    }
+}
+
+fn check_str(name: str, got: str, want: str) {
+    if got == want {
+        print("ok " + name + "\n");
+    } else {
+        print("FAIL " + name + " got=" + got + " want=" + want + "\n");
+    }
+}
+
+let path: str = "tmp/test_std_log.txt";
+if fs.exists(path) {
+    fs.remove_file(path);
+}
+fs.write_text(path, "");
+
+log.set_file(path);
+log.set_info();
+log.debug("hidden");
+log.info("hello");
+log.set_warn();
+log.info("skip");
+log.warn("warn-one");
+log.set_error();
+log.warn("skip-two");
+log.error("boom");
+
+let first_pass: str = fs.read_text(path);
+check_str(
+    "file output filtered",
+    first_pass,
+    "[INFO] hello\n[WARN] warn-one\n[ERROR] boom\n"
+);
+
+fs.write_text(path, "");
+log.set_debug();
+log.debug("dbg");
+check_str("debug writes", fs.read_text(path), "[DEBUG] dbg\n");
+
+log.clear_file();
+log.info("console-only");
+check_str("clear file stops append", fs.read_text(path), "[DEBUG] dbg\n");
+
+if fs.exists(path) {
+    fs.remove_file(path);
+}
+
+print("std log done\n");

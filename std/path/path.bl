@@ -1,0 +1,116 @@
+// Bolide path helper library.
+// Usage: import "std/path/path.bl" as path;
+
+import "std/fs/fs.bl" as fs;
+
+fn normalize_separators(path: str) -> str {
+    return path.replace("\\", "/");
+}
+
+fn is_absolute(path: str) -> bool {
+    let p: str = normalize_separators(path);
+    if p.starts_with("/") {
+        return true;
+    }
+    if p.len() >= 2 and p.char_at(1) == ":" {
+        return true;
+    }
+    return false;
+}
+
+fn normalize(path: str) -> str {
+    let p: str = normalize_separators(path);
+    let absolute: bool = p.starts_with("/");
+    let parts: list<str> = p.split("/");
+    let stack: list<str> = [];
+
+    for part in parts {
+        if part != "" and part != "." {
+            if part == ".." {
+                if stack.len() > 0 and stack.last() != ".." {
+                    let removed: str = stack.pop();
+                } elif not absolute {
+                    stack.push(part);
+                }
+            } else {
+                stack.push(part);
+            }
+        }
+    }
+
+    let out: str = "";
+    for part in stack {
+        if out == "" {
+            out = part;
+        } else {
+            out = out + "/" + part;
+        }
+    }
+    if absolute {
+        return "/" + out;
+    }
+    if out == "" {
+        return ".";
+    }
+    return out;
+}
+
+fn join(base: str, child: str) -> str {
+    if child == "" {
+        return normalize(base);
+    }
+    if is_absolute(child) {
+        return normalize(child);
+    }
+    return normalize(fs.join(base, child));
+}
+
+fn join3(a: str, b: str, c: str) -> str {
+    return join(join(a, b), c);
+}
+
+fn file_name(path: str) -> str {
+    return fs.file_name(path);
+}
+
+fn parent(path: str) -> str {
+    return normalize(fs.parent(path));
+}
+
+fn extension(path: str) -> str {
+    return fs.extension(path);
+}
+
+fn stem(path: str) -> str {
+    return fs.stem(path);
+}
+
+fn with_extension(path: str, ext: str) -> str {
+    let dir: str = parent(path);
+    let name: str = stem(path);
+    let clean_ext: str = ext;
+    if clean_ext.starts_with(".") {
+        clean_ext = clean_ext.substring(1, clean_ext.len());
+    }
+    if dir == "" or dir == "." {
+        return name + "." + clean_ext;
+    }
+    return join(dir, name + "." + clean_ext);
+}
+
+fn without_extension(path: str) -> str {
+    let dir: str = parent(path);
+    let name: str = stem(path);
+    if dir == "" or dir == "." {
+        return name;
+    }
+    return join(dir, name);
+}
+
+fn current_dir() -> str {
+    return normalize(fs.current_dir());
+}
+
+fn canonicalize(path: str) -> str {
+    return normalize(fs.canonicalize(path));
+}

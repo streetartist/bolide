@@ -1,0 +1,586 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Bolide 聊天室</title>
+  <style>
+    :root {
+      --bg: #101814;
+      --paper: #f5ead2;
+      --paper-soft: #fff7e6;
+      --ink: #17211c;
+      --muted: #6f7a70;
+      --line: rgba(23, 33, 28, .14);
+      --green: #5ce0a0;
+      --green-deep: #0f8d5f;
+      --orange: #ff7247;
+      --yellow: #ffd166;
+      --blue: #2f8cff;
+      --shadow: 0 28px 90px rgba(0, 0, 0, .34);
+      --round-xl: 34px;
+      --round-lg: 24px;
+      --sans: "LXGW WenKai Screen", "霞鹜文楷", "Noto Sans SC", "Microsoft YaHei UI", sans-serif;
+      --display: "Source Han Serif SC", "Noto Serif SC", "Songti SC", Georgia, serif;
+      --mono: "Cascadia Code", "JetBrains Mono", ui-monospace, monospace;
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body { height: 100%; }
+
+    body {
+      margin: 0;
+      color: var(--paper);
+      font-family: var(--sans);
+      background:
+        radial-gradient(circle at 18% 8%, rgba(92, 224, 160, .22), transparent 24rem),
+        radial-gradient(circle at 86% 16%, rgba(255, 114, 71, .24), transparent 27rem),
+        radial-gradient(circle at 54% 100%, rgba(47, 140, 255, .20), transparent 28rem),
+        linear-gradient(135deg, #101814 0%, #1a2118 54%, #2c1d17 100%);
+      overflow: hidden;
+    }
+
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background:
+        linear-gradient(rgba(245, 234, 210, .055) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(245, 234, 210, .055) 1px, transparent 1px);
+      background-size: 42px 42px;
+      mask-image: linear-gradient(to bottom, black, transparent 78%);
+    }
+
+    .orb {
+      position: fixed;
+      width: 18rem;
+      height: 18rem;
+      border-radius: 999px;
+      filter: blur(2px);
+      opacity: .9;
+      pointer-events: none;
+      animation: float 10s ease-in-out infinite alternate;
+    }
+
+    .orb.one {
+      left: -7rem;
+      bottom: 6rem;
+      background: radial-gradient(circle, rgba(255, 209, 102, .24), transparent 66%);
+    }
+
+    .orb.two {
+      right: -6rem;
+      top: 8rem;
+      background: radial-gradient(circle, rgba(92, 224, 160, .22), transparent 66%);
+      animation-delay: -3s;
+    }
+
+    .app {
+      position: relative;
+      z-index: 1;
+      width: min(1240px, calc(100vw - 32px));
+      height: 100vh;
+      margin: 0 auto;
+      padding: 28px 0;
+      display: grid;
+      grid-template-columns: 390px 1fr;
+      gap: 22px;
+    }
+
+    .panel {
+      border: 1px solid rgba(245, 234, 210, .20);
+      background: rgba(245, 234, 210, .10);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(22px);
+    }
+
+    .side {
+      min-height: 0;
+      border-radius: var(--round-xl);
+      padding: 28px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      overflow: hidden;
+    }
+
+    .badge {
+      width: fit-content;
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 14px;
+      border-radius: 999px;
+      color: #dfffee;
+      border: 1px solid rgba(92, 224, 160, .26);
+      background: rgba(92, 224, 160, .10);
+      font: 800 12px/1 var(--mono);
+      letter-spacing: .12em;
+    }
+
+    .dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #8b8f88;
+      box-shadow: 0 0 0 6px rgba(139, 143, 136, .16);
+    }
+
+    .dot.online {
+      background: var(--green);
+      box-shadow: 0 0 0 6px rgba(92, 224, 160, .18), 0 0 22px rgba(92, 224, 160, .75);
+    }
+
+    h1 {
+      margin: 30px 0 0;
+      font-family: var(--display);
+      font-size: clamp(54px, 8vw, 94px);
+      line-height: .86;
+      letter-spacing: -.08em;
+    }
+
+    .lead {
+      margin: 20px 0 0;
+      max-width: 31rem;
+      color: rgba(245, 234, 210, .72);
+      font-size: 16px;
+      line-height: 1.8;
+    }
+
+    .stats {
+      margin-top: 28px;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+
+    .stat {
+      min-height: 96px;
+      padding: 16px;
+      border-radius: 22px;
+      color: var(--ink);
+      background: var(--paper);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .stat::after {
+      content: "";
+      position: absolute;
+      width: 82px;
+      height: 82px;
+      right: -24px;
+      bottom: -24px;
+      border-radius: 50%;
+      background: rgba(255, 114, 71, .22);
+    }
+
+    .stat:nth-child(2)::after { background: rgba(47, 140, 255, .18); }
+
+    .stat-label {
+      color: var(--muted);
+      font: 900 11px/1 var(--mono);
+      letter-spacing: .1em;
+    }
+
+    .stat-value {
+      margin-top: 12px;
+      font-size: 24px;
+      font-weight: 950;
+    }
+
+    .status {
+      margin: 24px 0 0;
+      color: rgba(245, 234, 210, .68);
+      font-size: 14px;
+      line-height: 1.7;
+    }
+
+    .chat {
+      min-height: 0;
+      border-radius: var(--round-xl);
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      overflow: hidden;
+      background: rgba(255, 247, 230, .90);
+      color: var(--ink);
+      border-color: rgba(255, 247, 230, .40);
+    }
+
+    .topbar {
+      padding: 18px;
+      border-bottom: 1px solid var(--line);
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 12px;
+      align-items: center;
+      background:
+        linear-gradient(90deg, rgba(255, 255, 255, .62), rgba(255, 255, 255, .18)),
+        rgba(255, 247, 230, .78);
+    }
+
+    .field {
+      position: relative;
+    }
+
+    .field span {
+      position: absolute;
+      top: 9px;
+      left: 17px;
+      color: var(--muted);
+      font: 800 11px/1 var(--mono);
+      letter-spacing: .08em;
+    }
+
+    input, button {
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      font-family: var(--sans);
+    }
+
+    input {
+      width: 100%;
+      height: 58px;
+      padding: 23px 17px 10px;
+      color: var(--ink);
+      background: rgba(255, 253, 247, .82);
+      outline: none;
+      font-size: 16px;
+    }
+
+    input:focus {
+      border-color: rgba(15, 141, 95, .55);
+      box-shadow: 0 0 0 4px rgba(15, 141, 95, .12);
+    }
+
+    button {
+      height: 58px;
+      padding: 0 22px;
+      cursor: pointer;
+      border: 0;
+      color: white;
+      background: linear-gradient(135deg, var(--green-deep), #0a6f67);
+      font-size: 16px;
+      font-weight: 950;
+      white-space: nowrap;
+      box-shadow: 0 12px 28px rgba(10, 111, 103, .22);
+      transition: transform .16s ease, filter .16s ease, box-shadow .16s ease;
+    }
+
+    button:hover {
+      transform: translateY(-1px);
+      filter: brightness(1.04);
+      box-shadow: 0 16px 32px rgba(10, 111, 103, .28);
+    }
+
+    button:disabled {
+      cursor: not-allowed;
+      opacity: .56;
+      transform: none;
+      box-shadow: none;
+    }
+
+    .messages {
+      min-height: 0;
+      padding: 24px;
+      overflow: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      background:
+        radial-gradient(circle at 12% 0%, rgba(255, 209, 102, .18), transparent 18rem),
+        linear-gradient(#fff7e6, #f5ead2);
+      scroll-behavior: smooth;
+    }
+
+    .empty {
+      margin: auto;
+      width: min(440px, 100%);
+      padding: 28px;
+      text-align: center;
+      border: 1px dashed rgba(23, 33, 28, .22);
+      border-radius: 28px;
+      color: var(--muted);
+      background: rgba(255, 253, 247, .72);
+    }
+
+    .empty strong {
+      display: block;
+      margin-bottom: 8px;
+      color: var(--ink);
+      font-size: 20px;
+    }
+
+    .message {
+      max-width: min(76%, 660px);
+      padding: 13px 15px;
+      border-radius: 22px 22px 22px 8px;
+      border: 1px solid rgba(23, 33, 28, .10);
+      background: rgba(255, 253, 247, .94);
+      box-shadow: 0 10px 30px rgba(23, 33, 28, .07);
+      animation: pop .2s ease-out;
+    }
+
+    .message.mine {
+      align-self: flex-end;
+      border-radius: 22px 22px 8px 22px;
+      border-color: rgba(255, 114, 71, .24);
+      background: linear-gradient(135deg, #ffe0d0, #fff1cf);
+    }
+
+    .name {
+      margin-bottom: 8px;
+      color: var(--green-deep);
+      font: 950 12px/1 var(--mono);
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+
+    .text {
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      font-size: 16px;
+      line-height: 1.62;
+    }
+
+    .composer {
+      padding: 18px;
+      border-top: 1px solid var(--line);
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 12px;
+      background: rgba(255, 247, 230, .88);
+    }
+
+    .send {
+      min-width: 120px;
+      background: linear-gradient(135deg, var(--orange), #db4f28);
+      box-shadow: 0 12px 28px rgba(219, 79, 40, .22);
+    }
+
+    @keyframes float {
+      from { transform: translate3d(0, 0, 0) scale(1); }
+      to { transform: translate3d(22px, -18px, 0) scale(1.08); }
+    }
+
+    @keyframes pop {
+      from { opacity: 0; transform: translateY(8px) scale(.985); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+
+    @media (max-width: 900px) {
+      body { overflow: auto; }
+
+      .app {
+        height: auto;
+        min-height: 100vh;
+        grid-template-columns: 1fr;
+        padding: 16px 0;
+      }
+
+      .side {
+        padding: 22px;
+      }
+
+      .stats {
+        grid-template-columns: 1fr;
+      }
+
+      .chat {
+        min-height: 72vh;
+      }
+
+      .topbar, .composer {
+        grid-template-columns: 1fr;
+      }
+
+      button {
+        width: 100%;
+      }
+
+      .message {
+        max-width: 92%;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="orb one"></div>
+  <div class="orb two"></div>
+
+  <main class="app">
+    <aside class="side panel">
+      <section>
+        <div class="badge"><span id="dot" class="dot"></span><span id="state">连接中</span></div>
+        <h1>今晚<br>聊点什么</h1>
+        <p class="lead">这是 Bolide 写的在线聊天室。前端 HTML 由 Bolide 程序读取并返回，后端 API 负责消息发送和同步。</p>
+
+        <div class="stats">
+          <div class="stat">
+            <div class="stat-label">消息数</div>
+            <div class="stat-value" id="messageCount">0</div>
+          </div>
+          <div class="stat">
+            <div class="stat-label">昵称</div>
+            <div class="stat-value" id="currentName">访客</div>
+          </div>
+        </div>
+      </section>
+
+      <p class="status" id="status">正在连接服务器...</p>
+    </aside>
+
+    <section class="chat panel">
+      <div class="topbar">
+        <label class="field">
+          <span>你的昵称</span>
+          <input id="name" maxlength="32" placeholder="比如：阿文">
+        </label>
+        <button id="saveName" type="button">保存昵称</button>
+      </div>
+
+      <div id="messages" class="messages" aria-live="polite">
+        <div id="empty" class="empty">
+          <strong>还没有消息</strong>
+          打开另一个窗口，或者先发送第一句话。
+        </div>
+      </div>
+
+      <form id="composer" class="composer">
+        <label class="field">
+          <span>消息内容</span>
+          <input id="text" maxlength="800" autocomplete="off" placeholder="按 Enter 发送">
+        </label>
+        <button id="send" class="send" type="submit">发送</button>
+      </form>
+    </section>
+  </main>
+
+  <script>
+    const els = {
+      dot: document.querySelector("#dot"),
+      state: document.querySelector("#state"),
+      status: document.querySelector("#status"),
+      messageCount: document.querySelector("#messageCount"),
+      currentName: document.querySelector("#currentName"),
+      name: document.querySelector("#name"),
+      saveName: document.querySelector("#saveName"),
+      messages: document.querySelector("#messages"),
+      empty: document.querySelector("#empty"),
+      composer: document.querySelector("#composer"),
+      text: document.querySelector("#text"),
+      send: document.querySelector("#send")
+    };
+
+    let latest = 0;
+    let polling = false;
+    const seen = new Set();
+
+    els.name.value = localStorage.getItem("bolide-chat-name") || randomName();
+    syncName();
+
+    function randomName() {
+      return "访客-" + Math.floor(1000 + Math.random() * 9000);
+    }
+
+    function syncName() {
+      els.currentName.textContent = els.name.value.trim() || "访客";
+    }
+
+    function setOnline(ok, detail) {
+      els.dot.classList.toggle("online", ok);
+      els.state.textContent = ok ? "在线" : "离线";
+      els.status.textContent = detail;
+    }
+
+    function render(message) {
+      if (seen.has(message.id)) return;
+      seen.add(message.id);
+      els.empty.hidden = true;
+      els.messageCount.textContent = seen.size;
+
+      const node = document.createElement("article");
+      node.className = "message";
+      if (message.name === els.name.value.trim()) node.classList.add("mine");
+
+      const name = document.createElement("div");
+      name.className = "name";
+      name.textContent = message.name;
+
+      const text = document.createElement("div");
+      text.className = "text";
+      text.textContent = message.text;
+
+      node.append(name, text);
+      els.messages.append(node);
+      els.messages.scrollTop = els.messages.scrollHeight;
+    }
+
+    async function poll() {
+      if (polling) return;
+      polling = true;
+      try {
+        const res = await fetch(`/api/messages?after=${latest}`, { cache: "no-store" });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        for (const message of data.messages) {
+          render(message);
+          latest = Math.max(latest, message.id);
+        }
+        if (typeof data.latest === "number") latest = Math.max(latest, data.latest);
+        setOnline(true, `已同步 ${seen.size} 条消息。`);
+      } catch (err) {
+        setOnline(false, `连接异常：${err.message}`);
+      } finally {
+        polling = false;
+      }
+    }
+
+    els.saveName.addEventListener("click", () => {
+      const value = els.name.value.trim() || randomName();
+      els.name.value = value;
+      localStorage.setItem("bolide-chat-name", value);
+      syncName();
+      els.status.textContent = `昵称已保存：${value}`;
+    });
+
+    els.name.addEventListener("input", syncName);
+
+    els.composer.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const text = els.text.value.trim();
+      const name = els.name.value.trim() || randomName();
+      if (!text) return;
+
+      els.name.value = name;
+      syncName();
+      localStorage.setItem("bolide-chat-name", name);
+      els.send.disabled = true;
+
+      try {
+        const body = new URLSearchParams({ name, text });
+        const res = await fetch("/api/send", {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        els.text.value = "";
+        const data = await res.json();
+        for (const message of data.messages) render(message);
+        await poll();
+      } catch (err) {
+        setOnline(false, `发送失败：${err.message}`);
+      } finally {
+        els.send.disabled = false;
+        els.text.focus();
+      }
+    });
+
+    poll();
+    setInterval(poll, 1000);
+  </script>
+</body>
+</html>

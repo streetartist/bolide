@@ -1,0 +1,12 @@
+// Test: does the dict correctly use str keys?
+let d: dict<str, int> = {"hello": 1, "world": 2};
+print(d);
+print(d["hello"]);
+
+// Test: empty dict with hint
+let e: dict<str, int> = {};
+e["hello"] = 1;
+e["world"] = 2;
+print(e);
+print(e["hello"]);
+print("ok");

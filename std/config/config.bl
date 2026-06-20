@@ -1,0 +1,98 @@
+// Bolide config helper library.
+// Usage: import "std/config/config.bl" as config;
+
+import "std/fs/fs.bl" as fs;
+
+class Config {
+    values: dict<str, str>;
+
+    fn contains(key: str) -> bool {
+        return self.values.contains(key);
+    }
+
+    fn get(key: str) -> str {
+        if self.values.contains(key) {
+            return self.values[key];
+        }
+        return "";
+    }
+
+    fn get_or(key: str, fallback: str) -> str {
+        if self.values.contains(key) {
+            return self.values[key];
+        }
+        return fallback;
+    }
+
+    fn get_int(key: str, fallback: int) -> int {
+        if self.values.contains(key) {
+            return int(self.values[key]);
+        }
+        return fallback;
+    }
+
+    fn get_bool(key: str, fallback: bool) -> bool {
+        if not self.values.contains(key) {
+            return fallback;
+        }
+        let value: str = self.values[key].lower().trim();
+        return value == "1" or value == "true" or value == "yes" or value == "on";
+    }
+}
+
+fn strip_quotes(value: str) -> str {
+    let v: str = value.trim();
+    if v.len() >= 2 and v.starts_with("\"") and v.ends_with("\"") {
+        return v.substring(1, v.len() - 1);
+    }
+    if v.len() >= 2 and v.starts_with("'") and v.ends_with("'") {
+        return v.substring(1, v.len() - 1);
+    }
+    return v;
+}
+
+fn parse(text: str) -> Config {
+    let values: dict<str, str> = {};
+    for raw in text.split("\n") {
+        let line: str = raw.trim();
+        if line != "" and not line.starts_with("#") and not line.starts_with(";") {
+            let pos: int = line.find("=");
+            if pos >= 0 {
+                let key: str = line.substring(0, pos).trim();
+                let value: str = line.substring(pos + 1, line.len()).trim();
+                if key != "" {
+                    values[key] = strip_quotes(value);
+                }
+            }
+        }
+    }
+    return Config(values);
+}
+
+fn load(path: str) -> Config {
+    if not fs.exists(path) {
+        let empty: dict<str, str> = {};
+        return Config(empty);
+    }
+    return parse(fs.read_text(path));
+}
+
+fn load_env(path: str) -> Config {
+    return load(path);
+}
+
+fn get(cfg: Config, key: str) -> str {
+    return cfg.get(key);
+}
+
+fn get_or(cfg: Config, key: str, fallback: str) -> str {
+    return cfg.get_or(key, fallback);
+}
+
+fn get_int(cfg: Config, key: str, fallback: int) -> int {
+    return cfg.get_int(key, fallback);
+}
+
+fn get_bool(cfg: Config, key: str, fallback: bool) -> bool {
+    return cfg.get_bool(key, fallback);
+}

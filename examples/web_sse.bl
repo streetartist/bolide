@@ -1,0 +1,15 @@
+import "std/web/web.bl";
+
+fn events(req: web.Request, stream: web.Stream) -> int {
+    stream.comment("Bolide SSE stream");
+    stream.sse("hello", "connected to " + req.path());
+    stream.sse_event("1", "message", "first event");
+    stream.end();
+    return 0;
+}
+
+let app: web.App = web.app();
+web.sse(app, "/events", events);
+
+print("SSE example: curl -N http://127.0.0.1:8010/events");
+app.run("127.0.0.1", 8010);

@@ -1,0 +1,24 @@
+import "std/web/web.bl";
+
+fn before(req: web.Request) -> web.Response {
+    if req.path() == "/blocked" {
+        return web.text("blocked");
+    }
+    return web.next();
+}
+
+fn after(req: web.Request, res: web.Response) {
+    res.set_header("X-After", req.method());
+}
+
+fn hello(req: web.Request) -> web.Response {
+    return web.text("bolide-web-e2e:" + "abcdef0123456789".repeat(40));
+}
+
+let app: web.App = web.app();
+app.use_before(before);
+app.use_after(after);
+app.enable_compression(true);
+app.enable_cors("*", "GET, POST, OPTIONS", "*", false, 600);
+app.get("/hello", hello);
+print("min ok");

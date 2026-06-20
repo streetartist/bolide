@@ -1,0 +1,45 @@
+import "std/path/path.bl" as path;
+
+fn check_bool(name: str, got: bool, want: bool) {
+    if got == want {
+        print("ok " + name + "\n");
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want) + "\n");
+    }
+}
+
+fn check_str(name: str, got: str, want: str) {
+    if got == want {
+        print("ok " + name + "\n");
+    } else {
+        print("FAIL " + name + " got=" + got + " want=" + want + "\n");
+    }
+}
+
+check_bool("abs drive", path.is_absolute("C:\\work\\demo.bl"), true);
+check_bool("abs slash", path.is_absolute("/tmp/demo.bl"), true);
+check_bool("abs relative", path.is_absolute("tmp/demo.bl"), false);
+
+check_str("normalize rel", path.normalize("a/./b/../c"), "a/c");
+check_str("normalize abs", path.normalize("/a/b/../c"), "/a/c");
+check_str("normalize drive", path.normalize("C:\\work\\.\\demo\\..\\file.bl"), "C:/work/file.bl");
+check_str("normalize empty", path.normalize(""), ".");
+check_str("join rel", path.join("a/b", "../c"), "a/c");
+check_str("join empty", path.join("a/b", ""), "a/b");
+check_str("join absolute", path.join("a/b", "C:\\x\\y"), "C:/x/y");
+check_str("join3", path.join3("a", "b", "c.txt"), "a/b/c.txt");
+check_str("file name", path.file_name("dir/sub/demo.txt"), "demo.txt");
+check_str("parent", path.parent("dir/sub/demo.txt"), "dir/sub");
+check_str("extension", path.extension("dir/sub/demo.txt"), "txt");
+check_str("stem", path.stem("dir/sub/demo.txt"), "demo");
+check_str("with extension", path.with_extension("dir/sub/demo.txt", ".json"), "dir/sub/demo.json");
+check_str("without extension", path.without_extension("dir/sub/demo.txt"), "dir/sub/demo");
+
+let cwd: str = path.current_dir();
+check_bool("current dir set", cwd != "", true);
+
+let canon: str = path.canonicalize("tests/test_std_path.bl");
+check_bool("canonicalize set", canon != "", true);
+check_bool("canonicalize suffix", canon.find("tests/test_std_path.bl") >= 0, true);
+
+print("std path done\n");

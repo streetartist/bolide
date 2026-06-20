@@ -300,6 +300,9 @@ fn retain_raw_static(elem_type: ElementType, raw: i64) {
         ElementType::Closure => {
             crate::bolide_closure_retain(ptr);
         }
+        ElementType::Object => {
+            crate::object_retain(ptr as *mut u8);
+        }
         _ => {}
     }
 }
@@ -333,6 +336,9 @@ fn release_raw_static(elem_type: ElementType, raw: i64) {
         }
         ElementType::Closure => {
             crate::bolide_closure_release(ptr);
+        }
+        ElementType::Object => {
+            crate::object_release(ptr as *mut u8);
         }
         _ => {}
     }

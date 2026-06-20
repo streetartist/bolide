@@ -1,0 +1,80 @@
+// Bolide logging helper library.
+// Usage: import "std/log/log.bl" as log;
+
+import "std/fs/fs.bl" as fs;
+
+let DEBUG: int = 10;
+let INFO: int = 20;
+let WARN: int = 30;
+let ERROR: int = 40;
+
+let current_level: int = 20;
+let output_file: str = "";
+
+fn level_name(level: int) -> str {
+    if level <= DEBUG {
+        return "DEBUG";
+    }
+    if level <= INFO {
+        return "INFO";
+    }
+    if level <= WARN {
+        return "WARN";
+    }
+    return "ERROR";
+}
+
+fn set_level(level: int) {
+    current_level = level;
+}
+
+fn set_debug() {
+    current_level = DEBUG;
+}
+
+fn set_info() {
+    current_level = INFO;
+}
+
+fn set_warn() {
+    current_level = WARN;
+}
+
+fn set_error() {
+    current_level = ERROR;
+}
+
+fn set_file(path: str) {
+    output_file = path;
+}
+
+fn clear_file() {
+    output_file = "";
+}
+
+fn write(level: int, message: str) {
+    if level < current_level {
+        return;
+    }
+    let line: str = "[" + level_name(level) + "] " + message;
+    print(line + "\n");
+    if output_file != "" {
+        fs.append_text(output_file, line + "\n");
+    }
+}
+
+fn debug(message: str) {
+    write(DEBUG, message);
+}
+
+fn info(message: str) {
+    write(INFO, message);
+}
+
+fn warn(message: str) {
+    write(WARN, message);
+}
+
+fn error(message: str) {
+    write(ERROR, message);
+}

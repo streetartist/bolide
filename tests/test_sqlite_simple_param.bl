@@ -1,0 +1,20 @@
+import "../std/sqlite/sqlite.bl";
+
+let db: sqlite.Connection = sqlite.open(":memory:");
+db.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, val INTEGER)");
+db.execute("INSERT INTO t (val) VALUES (10)");
+db.execute("INSERT INTO t (val) VALUES (20)");
+db.execute("INSERT INTO t (val) VALUES (30)");
+
+print("all rows:");
+let all: list<dict<str, dynamic>> = db.query("SELECT * FROM t");
+print(all.len());
+
+print("param query:");
+let p: list<dynamic> = [];
+p.push(20);
+let r: list<dict<str, dynamic>> = db.query_params("SELECT * FROM t WHERE val = ?", p);
+print(r.len());
+
+db.close();
+print("done");

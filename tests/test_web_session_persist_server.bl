@@ -1,0 +1,25 @@
+import "std/web/web.bl";
+
+web.session_config(3600, 1000, "tmp/bolide_web_sessions");
+
+fn set_value(req: web.Request) -> web.Response {
+    let res: web.Response = web.text("set");
+    let s: web.Session = web.session(req, res);
+    let value: dynamic = "persisted";
+    s.set("value", value);
+    s.free();
+    return res;
+}
+
+fn get_value(req: web.Request) -> web.Response {
+    let res: web.Response = web.text("");
+    let s: web.Session = web.session(req, res);
+    let value: dynamic = s.get("value");
+    s.free();
+    return web.text(str(value));
+}
+
+let app: web.App = web.app();
+app.get("/set", set_value);
+app.get("/get", get_value);
+app.serve("127.0.0.1", 18192, 1);

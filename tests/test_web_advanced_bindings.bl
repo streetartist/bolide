@@ -1,0 +1,58 @@
+import "std/web/web.bl";
+
+fn before(req: web.Request) -> web.Response {
+    if req.path() == "/blocked" {
+        return web.text("blocked");
+    }
+    return web.next();
+}
+
+fn after(req: web.Request, res: web.Response) {
+    res.set_header("X-After", req.method());
+}
+
+fn not_found(req: web.Request) -> web.Response {
+    return web.make_response(404, "text/plain", "missing " + req.path());
+}
+
+fn errors(req: web.Request) -> web.Response {
+    return web.make_response(500, "text/plain", "error " + req.path());
+}
+
+fn events(req: web.Request, stream: web.Stream) -> int {
+    stream.sse("ready", req.path());
+    stream.end();
+    return 0;
+}
+
+fn ws(req: web.Request, socket: web.WebSocket) -> int {
+    socket.send_text(req.path());
+    socket.close(1000, "done");
+    return 0;
+}
+
+fn upload(req: web.Request) -> web.Response {
+    let count: int = req.multipart_count();
+    let part: web.Part = req.part(0);
+    if count > 0 {
+        if part.exists() {
+            return web.text(part.name());
+        }
+    }
+    return web.text("none");
+}
+
+let app: web.App = web.app();
+app.use_before(before);
+app.use_after(after);
+app.not_found(not_found);
+app.error_handler(errors);
+app.enable_compression(true);
+app.enable_cors("*", "GET, POST, OPTIONS", "*", false, 600);
+app.sse("/events", events);
+app.websocket("/ws", ws);
+app.post("/upload", upload);
+web.session_config(3600, 1000, "");
+let unused_client: web.ClientResponse = web.fetch_with_options("GET", "http://127.0.0.1:9/", "", "", 1, 0);
+
+print("web advanced bindings ok");

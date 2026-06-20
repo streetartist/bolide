@@ -1,0 +1,39 @@
+import "std/web/web.bl";
+
+fn before(req: web.Request) -> web.Response {
+    if req.path() == "/blocked" {
+        return web.text("blocked");
+    }
+    return web.next();
+}
+
+fn after(req: web.Request, res: web.Response) {
+    res.set_header("X-After", req.method());
+}
+
+fn hello(req: web.Request) -> web.Response {
+    return web.text("bolide-web-e2e:" + "abcdef0123456789".repeat(40));
+}
+
+fn form(req: web.Request) -> web.Response {
+    return web.text("form:" + req.form_param("name"));
+}
+
+fn upload(req: web.Request) -> web.Response {
+    let file: web.Part = req.file("file");
+    if file.exists() {
+        return web.text("upload:" + file.filename() + ":" + str(file.size()) + ":" + file.text());
+    }
+    return web.make_response(400, "text/plain", "missing");
+}
+
+let app: web.App = web.app();
+app.use_before(before);
+app.use_after(after);
+app.enable_compression(true);
+app.enable_cors("*", "GET, POST, OPTIONS", "*", false, 600);
+app.static_files("/static", "D:/Project/bolide/tmp/bolide_web_static");
+app.get("/hello", hello);
+app.post("/form", form);
+app.post("/upload", upload);
+app.serve("127.0.0.1", 18180, 6);

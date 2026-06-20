@@ -24,6 +24,7 @@ pub enum ElementType {
     Dynamic = 9,  // 动态类型
     Bytes = 10,   // 二进制缓冲区
     Closure = 11, // 闭包对象
+    Object = 12,  // Bolide 类/ADT 对象
 }
 
 impl ElementType {
@@ -52,6 +53,7 @@ impl ElementType {
             9 => ElementType::Dynamic,
             10 => ElementType::Bytes,
             11 => ElementType::Closure,
+            12 => ElementType::Object,
             _ => ElementType::Int,
         }
     }
@@ -255,6 +257,9 @@ impl BolideList {
             ElementType::Closure => {
                 crate::bolide_closure_retain(ptr);
             }
+            ElementType::Object => {
+                crate::object_retain(ptr as *mut u8);
+            }
             _ => {}
         }
     }
@@ -289,6 +294,9 @@ impl BolideList {
             }
             ElementType::Closure => {
                 crate::bolide_closure_release(ptr);
+            }
+            ElementType::Object => {
+                crate::object_release(ptr as *mut u8);
             }
             _ => {}
         }
@@ -368,6 +376,7 @@ pub extern "C" fn bolide_list_new(elem_type: u8) -> *mut BolideList {
         9 => ElementType::Dynamic,
         10 => ElementType::Bytes,
         11 => ElementType::Closure,
+        12 => ElementType::Object,
         _ => ElementType::Int,
     };
     BolideList::new(elem_type)
@@ -388,6 +397,7 @@ pub extern "C" fn bolide_list_with_capacity(elem_type: u8, capacity: usize) -> *
         9 => ElementType::Dynamic,
         10 => ElementType::Bytes,
         11 => ElementType::Closure,
+        12 => ElementType::Object,
         _ => ElementType::Ptr,
     };
     BolideList::with_capacity(elem_type, capacity)
@@ -495,6 +505,28 @@ pub extern "C" fn bolide_list_get(list: *const BolideList, index: usize) -> i64 
         return 0;
     }
     unsafe { (*list).get(index).unwrap_or(0) }
+}
+/// Debug: print the raw value at a list index
+#[no_mangle]
+pub extern "C" fn bolide_list_debug_get(list: *const BolideList, index: usize) -> i64 {
+    if list.is_null() {
+        println!("[list_debug] null list");
+        return 0;
+    }
+    let l = unsafe { &*list };
+    match l.get(index) {
+        Some(val) => {
+            println!(
+                "[list_debug] index={} raw=0x{:016x} elem_type={:?}",
+                index, val, l.elem_type
+            );
+            val
+        }
+        None => {
+            println!("[list_debug] index={} out of range (len={})", index, l.len);
+            0
+        }
+    }
 }
 
 /// 设置指定位置的元素
@@ -995,6 +1027,7 @@ pub(crate) fn print_element_inline(elem_type: ElementType, val: i64) {
         }
         ElementType::Bytes => crate::bolide_print_bytes_inline(val as *const crate::BolideBytes),
         ElementType::Closure => print!("<closure 0x{:x}>", val),
+        ElementType::Object => print!("<object 0x{:x}>", val),
         ElementType::Ptr => print!("0x{:x}", val),
     }
 }

@@ -1,0 +1,14 @@
+import "std/web/web.bl";
+
+fn hello(req: web.Request) -> web.Response {
+    return web.text("tls-ok");
+}
+
+let app: web.App = web.app();
+if app.tls_pkcs8("tmp/bolide_tls_cert.pem", "tmp/bolide_tls_key.pem") {
+    print("tls config ok");
+} else {
+    print("tls config failed");
+}
+app.get("/hello", hello);
+app.serve("127.0.0.1", 18193, 1);

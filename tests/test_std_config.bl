@@ -1,0 +1,69 @@
+import "std/config/config.bl" as config;
+import "std/fs/fs.bl" as fs;
+
+fn check_bool(name: str, got: bool, want: bool) {
+    if got == want {
+        print("ok " + name + "\n");
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want) + "\n");
+    }
+}
+
+fn check_int(name: str, got: int, want: int) {
+    if got == want {
+        print("ok " + name + "\n");
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want) + "\n");
+    }
+}
+
+fn check_str(name: str, got: str, want: str) {
+    if got == want {
+        print("ok " + name + "\n");
+    } else {
+        print("FAIL " + name + " got=" + got + " want=" + want + "\n");
+    }
+}
+
+let cfg: config.Config = config.parse(
+    "# comment\n" +
+    "; another comment\n" +
+    "port=8080\n" +
+    "debug=true\n" +
+    "name=\"demo\"\n" +
+    "title='Bolide'\n" +
+    "feature = yes\n" +
+    "disabled = no\n"
+);
+
+check_bool("contains name", cfg.contains("name"), true);
+check_bool("contains missing", cfg.contains("missing"), false);
+check_str("get name", cfg.get("name"), "demo");
+check_str("get title", cfg.get("title"), "Bolide");
+check_str("get missing", cfg.get("missing"), "");
+check_str("get or hit", cfg.get_or("name", "fallback"), "demo");
+check_str("get or miss", cfg.get_or("missing", "fallback"), "fallback");
+check_int("get int", cfg.get_int("port", 0), 8080);
+check_int("get int fallback", cfg.get_int("missing", 9), 9);
+check_bool("get bool true", cfg.get_bool("debug", false), true);
+check_bool("get bool yes", cfg.get_bool("feature", false), true);
+check_bool("get bool no", cfg.get_bool("disabled", true), false);
+check_bool("get bool fallback", cfg.get_bool("missing", true), true);
+
+let path: str = "tmp/test_std_config.env";
+if fs.exists(path) {
+    fs.remove_file(path);
+}
+fs.write_text(path, "mode=prod\nworkers=4\nflag=on\n");
+
+let loaded: config.Config = config.load(path);
+check_str("load get", config.get(loaded, "mode"), "prod");
+check_int("load int", config.get_int(loaded, "workers", 0), 4);
+check_bool("load bool", config.get_bool(loaded, "flag", false), true);
+check_bool("load env alias", config.load_env(path).contains("mode"), true);
+
+let missing: config.Config = config.load("tmp/does_not_exist_config.env");
+check_bool("missing load empty", missing.contains("mode"), false);
+
+fs.remove_file(path);
+print("std config done\n");

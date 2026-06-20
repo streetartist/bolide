@@ -1,0 +1,137 @@
+import "std/web/web.bl";
+import "std/fs/fs.bl" as fs;
+
+let next_id: int = 1;
+let message_ids: list<int> = [];
+let message_names: list<str> = [];
+let message_texts: list<str> = [];
+
+fn json_escape(value: str) -> str {
+    return value
+        .replace("\\", "\\\\")
+        .replace("\"", "\\\"")
+        .replace("\r", "\\r")
+        .replace("\n", "\\n")
+        .replace("\t", "\\t");
+}
+
+fn clean_name(value: str) -> str {
+    if value == "" {
+        return "guest";
+    }
+    return value;
+}
+
+fn clean_text(value: str) -> str {
+    if value == "" {
+        return "(empty)";
+    }
+    return value;
+}
+
+fn remember_message(name: str, text: str) {
+    message_ids.push(next_id);
+    message_names.push(clean_name(name));
+    message_texts.push(clean_text(text));
+    next_id = next_id + 1;
+
+    while message_ids.len() > 200 {
+        let old_id: int = message_ids.remove(0);
+        let old_name: str = message_names.remove(0);
+        let old_text: str = message_texts.remove(0);
+    }
+}
+
+fn message_json(index: int) -> str {
+    return "{\"id\":"
+        + str(message_ids[index])
+        + ",\"name\":\""
+        + json_escape(message_names[index])
+        + "\",\"text\":\""
+        + json_escape(message_texts[index])
+        + "\"}";
+}
+
+fn messages_payload(after: int) -> str {
+    let out: str = "{\"messages\":[";
+    let first: bool = true;
+    for i in range(message_ids.len()) {
+        if message_ids[i] > after {
+            if first {
+                first = false;
+            } else {
+                out = out + ",";
+            }
+            out = out + message_json(i);
+        }
+    }
+    return out + "],\"latest\":" + str(next_id - 1) + "}";
+}
+
+fn parse_after(req: web.Request) -> int {
+    let raw: str = req.query_param("after");
+    if raw == "" {
+        return 0;
+    }
+    return int(raw);
+}
+
+fn index_html_path() -> str {
+    // Repo/dev layout.
+    if fs.exists("examples/chat/public/index.html") {
+        return "examples/chat/public/index.html";
+    }
+    // Distribution layout: put the exe next to a public/ directory.
+    if fs.exists("public/index.html") {
+        return "public/index.html";
+    }
+    // Last useful value for a clear error response.
+    return "examples/chat/public/index.html";
+}
+
+fn index(req: web.Request) -> web.Response {
+    let path: str = index_html_path();
+    if fs.exists(path) {
+        let res: web.Response = web.html(fs.read_text(path));
+        res.set_header("Cache-Control", "no-store");
+        return res;
+    }
+    return web.make_response(
+        500,
+        "text/plain; charset=utf-8",
+        "missing chat frontend: " + path
+    );
+}
+
+fn health(req: web.Request) -> web.Response {
+    return web.json("{\"ok\":true,\"messages\":" + str(message_ids.len()) + "}");
+}
+
+fn messages(req: web.Request) -> web.Response {
+    let res: web.Response = web.json(messages_payload(parse_after(req)));
+    res.set_header("Cache-Control", "no-store");
+    return res;
+}
+
+fn send(req: web.Request) -> web.Response {
+    let name: str = req.form_param("name");
+    let text: str = req.form_param("text");
+    remember_message(name, text);
+    let res: web.Response = web.json(messages_payload(next_id - 2));
+    res.set_header("Cache-Control", "no-store");
+    return res;
+}
+
+remember_message("system", "Bolide chat is online.");
+
+let app: web.App = web.app();
+app.set_workers(1);
+app.enable_compression(true);
+app.get("/", index);
+app.get("/api/health", health);
+app.get("/api/messages", messages);
+app.post("/api/send", send);
+
+print("Bolide chat: http://127.0.0.1:8020");
+let result: int = app.run("127.0.0.1", 8020);
+print("Bolide chat server stopped: " + str(result));

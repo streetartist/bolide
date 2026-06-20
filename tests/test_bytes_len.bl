@@ -1,0 +1,4 @@
+let b = bytes();
+b.push(1);
+b.push(2);
+print(b.len());

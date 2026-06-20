@@ -1,0 +1,63 @@
+// SQLite integration test
+import "../std/sqlite/sqlite.bl";
+
+fn check(name: str, got: int, want: int) {
+    if got == want {
+        print("ok " + name);
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want));
+    }
+}
+
+fn check_str(name: str, got: str, want: str) {
+    if got == want {
+        print("ok " + name);
+    } else {
+        print("FAIL " + name);
+        print("  got:  " + got);
+        print("  want: " + want);
+    }
+}
+
+let db: sqlite.Connection = sqlite.open(":memory:");
+
+// DDL
+check("create table", db.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, age INTEGER)"), 0);
+
+// Insert (no params)
+check("insert alice", db.execute("INSERT INTO users (name, age) VALUES ('Alice', 30)"), 1);
+check("last_insert_rowid", db.last_insert_rowid(), 1);
+
+// Insert (with params) — inline list<dynamic> literal
+check("insert bob", db.execute("INSERT INTO users (name, age) VALUES (?, ?)", ["Bob", 25]), 1);
+check("insert charlie", db.execute("INSERT INTO users (name, age) VALUES (?, ?)", ["Charlie", 35]), 1);
+
+// Query (no params)
+let rows: list<dict<str, dynamic>> = db.query("SELECT * FROM users ORDER BY id");
+check("query count", rows.len(), 3);
+check_str("first name", str(rows[0]["name"]), "Alice");
+check("first age", int(rows[0]["age"]), 30);
+
+// Query (with params)
+let young: list<dict<str, dynamic>> = db.query("SELECT * FROM users WHERE age > ?", [25]);
+check("param query", young.len(), 2);
+
+// Prepare / fetch_all
+let stmt: sqlite.Statement = db.prepare("SELECT name FROM users ORDER BY name");
+let names: list<dict<str, dynamic>> = stmt.fetch_all();
+stmt.finalize();
+check("fetch_all", names.len(), 3);
+check_str("alphabetical", str(names[0]["name"]), "Alice");
+
+// Update / Delete
+check("update", db.execute("UPDATE users SET age = 31 WHERE name = 'Alice'"), 1);
+check("delete", db.execute("DELETE FROM users WHERE name = 'Charlie'"), 1);
+check("remaining", db.query("SELECT * FROM users").len(), 2);
+
+// Error handling
+check("error returns -1", db.execute("INVALID SQL"), -1);
+let err: str = db.last_error();
+if err.len() > 0 { print("ok error message"); } else { print("FAIL no error"); }
+
+db.close();
+print("sqlite tests done");

@@ -1,0 +1,55 @@
+import "std/json/json.bl" as json;
+
+fn check_bool(name: str, got: bool, want: bool) {
+    if got == want {
+        print("ok " + name + "\n");
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want) + "\n");
+    }
+}
+
+fn check_str(name: str, got: str, want: str) {
+    if got == want {
+        print("ok " + name + "\n");
+    } else {
+        print("FAIL " + name + " got=" + got + " want=" + want + "\n");
+    }
+}
+
+check_str("quote quote", json.quote("a\"b"), "\"a\\\"b\"");
+check_str("quote slash", json.quote("a\\b"), "\"a\\\\b\"");
+check_str("quote newline", json.quote("a\nb"), "\"a\\nb\"");
+check_str("null", json.null(), "null");
+check_str("bool true", json.from_bool(true), "true");
+check_str("bool false", json.from_bool(false), "false");
+check_str("int", json.from_int(42), "42");
+check_str("float", json.from_float(1.25), "1.25");
+check_str("string", json.string("Bolide"), "\"Bolide\"");
+check_str("raw array", json.raw_array([json.null(), json.from_int(3)]), "[null,3]");
+check_str("string array", json.string_array(["web", "json"]), "[\"web\",\"json\"]");
+check_str("int array", json.int_array([1, 2, 3]), "[1,2,3]");
+check_str("float array", json.float_array([1.25, 2.5]), "[1.25,2.5]");
+check_str("bool array", json.bool_array([true, false, true]), "[true,false,true]");
+
+let obj: str = json.object([
+    json.pair("name", json.string("Bolide")),
+    json.pair("ok", json.from_bool(true)),
+    json.pair("count", json.from_int(3)),
+    json.pair("tags", json.string_array(["web", "json"]))
+]);
+check_str(
+    "object",
+    obj,
+    "{\"name\":\"Bolide\",\"ok\":true,\"count\":3,\"tags\":[\"web\",\"json\"]}"
+);
+
+let one_str: dict<str, str> = {"name": "Bolide"};
+let one_int: dict<str, int> = {"count": 7};
+let one_bool: dict<str, bool> = {"ok": true};
+let one_json: dict<str, str> = {"payload": json.object([json.pair("id", json.from_int(9))])};
+check_str("dict str", json.dict_str(one_str), "{\"name\":\"Bolide\"}");
+check_str("dict int", json.dict_int(one_int), "{\"count\":7}");
+check_str("dict bool", json.dict_bool(one_bool), "{\"ok\":true}");
+check_str("dict json", json.dict_json(one_json), "{\"payload\":{\"id\":9}}");
+
+print("std json done\n");

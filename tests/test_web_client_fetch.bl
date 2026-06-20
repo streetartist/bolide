@@ -1,0 +1,13 @@
+import "std/web/web.bl";
+
+let res: web.ClientResponse = web.fetch_with_options(
+    "GET",
+    "http://127.0.0.1:18191/redirect",
+    "",
+    "X-Test: bolide\r\n",
+    5000,
+    3
+);
+
+print(str(res.status()) + ":" + res.header("X-Reply") + ":" + res.body_text());
+res.free();

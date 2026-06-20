@@ -1,0 +1,104 @@
+// Bolide SQLite standard library.
+// Usage: import "std/sqlite/sqlite.bl";
+
+extern "bolide" {
+    fn bolide_sqlite_open(path: *char) -> *void;
+    fn bolide_sqlite_close(db: *void);
+    fn bolide_sqlite_last_error(db: *void) -> str;
+    fn bolide_sqlite_execute(db: *void, sql: *char) -> i64;
+    fn bolide_sqlite_exec_p(db: *void, sql: *char, params: *void) -> i64;
+    fn bolide_sqlite_query(db: *void, sql: *char) -> list;
+    fn bolide_sqlite_query_p(db: *void, sql: *char, params: *void) -> list;
+    fn bolide_sqlite_prepare(db: *void, sql: *char) -> *void;
+    fn bolide_sqlite_step(stmt: *void) -> i64;
+    fn bolide_sqlite_column_count(stmt: *void) -> i64;
+    fn bolide_sqlite_column_name(stmt: *void, index: i64) -> str;
+    fn bolide_sqlite_column_value(stmt: *void, index: i64) -> dynamic;
+    fn bolide_sqlite_finalize(stmt: *void);
+    fn bolide_sqlite_last_insert_rowid(db: *void) -> i64;
+}
+
+class Statement {
+    handle: ptr;
+
+    fn step() -> bool {
+        return bolide_sqlite_step(self.handle) == 1;
+    }
+
+    fn column_count() -> int {
+        return bolide_sqlite_column_count(self.handle);
+    }
+
+    fn column_name(index: int) -> str {
+        return bolide_sqlite_column_name(self.handle, index);
+    }
+
+    fn column_value(index: int) -> dynamic {
+        return bolide_sqlite_column_value(self.handle, index);
+    }
+
+    fn row_as_dict() -> dict<str, dynamic> {
+        let count: int = self.column_count();
+        let result: dict<str, dynamic> = {};
+        for i in range(count) {
+            let name: str = self.column_name(i);
+            let value: dynamic = self.column_value(i);
+            result[name] = value;
+        }
+        return result;
+    }
+
+    fn fetch_all() -> list<dict<str, dynamic>> {
+        let rows: list<dict<str, dynamic>> = [];
+        while self.step() {
+            rows.push(self.row_as_dict());
+        }
+        return rows;
+    }
+
+    fn finalize() {
+        bolide_sqlite_finalize(self.handle);
+        self.handle = 0;
+    }
+}
+
+class Connection {
+    handle: ptr;
+
+    fn execute(sql: str) -> int {
+        return bolide_sqlite_execute(self.handle, sql);
+    }
+
+    fn execute(sql: str, params: list<dynamic>) -> int {
+        return bolide_sqlite_exec_p(self.handle, sql, params);
+    }
+
+    fn query(sql: str) -> list<dict<str, dynamic>> {
+        return bolide_sqlite_query(self.handle, sql);
+    }
+
+    fn query(sql: str, params: list<dynamic>) -> list<dict<str, dynamic>> {
+        return bolide_sqlite_query_p(self.handle, sql, params);
+    }
+
+    fn prepare(sql: str) -> Statement {
+        return Statement(bolide_sqlite_prepare(self.handle, sql));
+    }
+
+    fn last_error() -> str {
+        return bolide_sqlite_last_error(self.handle);
+    }
+
+    fn last_insert_rowid() -> int {
+        return bolide_sqlite_last_insert_rowid(self.handle);
+    }
+
+    fn close() {
+        bolide_sqlite_close(self.handle);
+        self.handle = 0;
+    }
+}
+
+fn open(path: str) -> Connection {
+    return Connection(bolide_sqlite_open(path));
+}

@@ -1,0 +1,20 @@
+import "std/web/web.bl";
+
+fn form(req: web.Request) -> web.Response {
+    return web.html("<form method='post' enctype='multipart/form-data' action='/upload'><input type='file' name='file'><button>Upload</button></form>");
+}
+
+fn upload(req: web.Request) -> web.Response {
+    let file: web.Part = req.file("file");
+    if file.exists() {
+        return web.text("uploaded name=" + file.name() + " filename=" + file.filename() + " bytes=" + str(file.size()));
+    }
+    return web.make_response(400, "text/plain", "missing file field");
+}
+
+let app: web.App = web.app();
+web.get(app, "/", form);
+web.post(app, "/upload", upload);
+
+print("Upload example: http://127.0.0.1:8012/");
+app.run("127.0.0.1", 8012);

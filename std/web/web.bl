@@ -87,7 +87,64 @@ extern "bolide" {
     fn bolide_web_session_clear(session: *void);
     fn bolide_web_session_destroy(session: *void, res: *void) -> i64;
     fn bolide_web_session_regenerate(session: *void, res: *void) -> str;
+    fn bolide_web_session_set_ttl(ttl_seconds: i64);
+    fn bolide_web_session_config(ttl_seconds: i64, max_sessions: i64, dir: *char);
     fn bolide_web_session_free(session: *void);
+
+    fn bolide_web_stream_route(app: *void, method: *char, path: *char, handler: fn(*void, *void) -> i64) -> i64;
+    fn bolide_web_sse(app: *void, path: *char, handler: fn(*void, *void) -> i64) -> i64;
+    fn bolide_web_websocket(app: *void, path: *char, handler: fn(*void, *void) -> i64) -> i64;
+    fn bolide_web_app_use_before(app: *void, handler: fn(*void) -> *void) -> i64;
+    fn bolide_web_app_use_after(app: *void, handler: fn(*void, *void)) -> i64;
+    fn bolide_web_app_not_found(app: *void, handler: fn(*void) -> *void) -> i64;
+    fn bolide_web_app_error_handler(app: *void, handler: fn(*void) -> *void) -> i64;
+    fn bolide_web_app_enable_compression(app: *void, enabled: i64);
+    fn bolide_web_app_enable_cors(app: *void, origins: *char, methods: *char, headers: *char, credentials: i64, max_age: i64);
+    fn bolide_web_app_tls(app: *void, pkcs12_path: *char, password: *char) -> i64;
+    fn bolide_web_app_tls_pkcs8(app: *void, cert_path: *char, key_path: *char) -> i64;
+    fn bolide_web_response_cors(res: *void, origin: *char, methods: *char, headers: *char, credentials: i64);
+
+    fn bolide_web_stream_set_status(stream: *void, status: i64);
+    fn bolide_web_stream_set_header_str(stream: *void, name: str, value: str);
+    fn bolide_web_stream_write_str(stream: *void, data: str) -> i64;
+    fn bolide_web_stream_write_bytes(stream: *void, data: bytes) -> i64;
+    fn bolide_web_stream_sse_str(stream: *void, event: str, data: str) -> i64;
+    fn bolide_web_stream_sse_event(stream: *void, id: str, event: str, data: str) -> i64;
+    fn bolide_web_stream_sse_comment(stream: *void, text: str) -> i64;
+    fn bolide_web_stream_flush(stream: *void) -> i64;
+    fn bolide_web_stream_end(stream: *void);
+    fn bolide_web_stream_is_open(stream: *void) -> i64;
+
+    fn bolide_web_ws_recv(ws: *void) -> *void;
+    fn bolide_web_ws_recv_text(ws: *void) -> str;
+    fn bolide_web_ws_message_kind(msg: *void) -> i64;
+    fn bolide_web_ws_message_text(msg: *void) -> str;
+    fn bolide_web_ws_message_bytes(msg: *void) -> bytes;
+    fn bolide_web_ws_message_free(msg: *void);
+    fn bolide_web_ws_send_text_str(ws: *void, text: str) -> i64;
+    fn bolide_web_ws_send_binary(ws: *void, data: bytes) -> i64;
+    fn bolide_web_ws_ping(ws: *void) -> i64;
+    fn bolide_web_ws_close(ws: *void, code: i64, reason: *char) -> i64;
+    fn bolide_web_ws_is_open(ws: *void) -> i64;
+    fn bolide_web_ws_set_read_timeout(ws: *void, millis: i64);
+
+    fn bolide_web_request_multipart_count(req: *void) -> i64;
+    fn bolide_web_request_multipart_name(req: *void, index: i64) -> str;
+    fn bolide_web_request_multipart_filename(req: *void, index: i64) -> str;
+    fn bolide_web_request_multipart_content_type(req: *void, index: i64) -> str;
+    fn bolide_web_request_multipart_text(req: *void, index: i64) -> str;
+    fn bolide_web_request_multipart_bytes(req: *void, index: i64) -> bytes;
+    fn bolide_web_request_multipart_len(req: *void, index: i64) -> i64;
+    fn bolide_web_request_multipart_index(req: *void, field: str) -> i64;
+    fn bolide_web_request_multipart_save(req: *void, index: i64, path: *char) -> i64;
+
+    fn bolide_web_fetch_str(method: str, url: str, body: str, headers: str) -> *void;
+    fn bolide_web_fetch_with_options_str(method: str, url: str, body: str, headers: str, timeout_ms: i64, max_redirects: i64) -> *void;
+    fn bolide_web_client_response_status(res: *void) -> i64;
+    fn bolide_web_client_response_header(res: *void, name: str) -> str;
+    fn bolide_web_client_response_body_text(res: *void) -> str;
+    fn bolide_web_client_response_body_bytes(res: *void) -> bytes;
+    fn bolide_web_client_response_free(res: *void);
 }
 
 class Request {
@@ -144,6 +201,156 @@ class Request {
     fn body_len() -> int {
         return bolide_web_request_body_len(self.handle);
     }
+
+    fn multipart_count() -> int {
+        return bolide_web_request_multipart_count(self.handle);
+    }
+
+    fn part(index: int) -> Part {
+        return Part(self.handle, index);
+    }
+
+    fn file(field: str) -> Part {
+        return Part(self.handle, bolide_web_request_multipart_index(self.handle, field));
+    }
+}
+
+class Part {
+    req: ptr;
+    index: int;
+
+    fn exists() -> bool {
+        return self.index >= 0;
+    }
+
+    fn name() -> str {
+        return bolide_web_request_multipart_name(self.req, self.index);
+    }
+
+    fn filename() -> str {
+        return bolide_web_request_multipart_filename(self.req, self.index);
+    }
+
+    fn content_type() -> str {
+        return bolide_web_request_multipart_content_type(self.req, self.index);
+    }
+
+    fn text() -> str {
+        return bolide_web_request_multipart_text(self.req, self.index);
+    }
+
+    fn bytes() -> bytes {
+        return bolide_web_request_multipart_bytes(self.req, self.index);
+    }
+
+    fn size() -> int {
+        return bolide_web_request_multipart_len(self.req, self.index);
+    }
+
+    fn save(path: str) -> bool {
+        return bolide_web_request_multipart_save(self.req, self.index, path) != 0;
+    }
+}
+
+class Stream {
+    handle: ptr;
+
+    fn status(status: int) {
+        bolide_web_stream_set_status(self.handle, status);
+    }
+
+    fn header(name: str, value: str) {
+        bolide_web_stream_set_header_str(self.handle, name, value);
+    }
+
+    fn write(data: str) -> bool {
+        return bolide_web_stream_write_str(self.handle, data) != 0;
+    }
+
+    fn write_bytes(data: bytes) -> bool {
+        return bolide_web_stream_write_bytes(self.handle, data) != 0;
+    }
+
+    fn sse(event: str, data: str) -> bool {
+        return bolide_web_stream_sse_str(self.handle, event, data) != 0;
+    }
+
+    fn sse_event(id: str, event: str, data: str) -> bool {
+        return bolide_web_stream_sse_event(self.handle, id, event, data) != 0;
+    }
+
+    fn comment(text: str) -> bool {
+        return bolide_web_stream_sse_comment(self.handle, text) != 0;
+    }
+
+    fn flush() -> bool {
+        return bolide_web_stream_flush(self.handle) != 0;
+    }
+
+    fn end() {
+        bolide_web_stream_end(self.handle);
+    }
+
+    fn is_open() -> bool {
+        return bolide_web_stream_is_open(self.handle) != 0;
+    }
+}
+
+class Message {
+    handle: ptr;
+
+    fn kind() -> int {
+        return bolide_web_ws_message_kind(self.handle);
+    }
+
+    fn text() -> str {
+        return bolide_web_ws_message_text(self.handle);
+    }
+
+    fn bytes() -> bytes {
+        return bolide_web_ws_message_bytes(self.handle);
+    }
+
+    fn free() {
+        bolide_web_ws_message_free(self.handle);
+        self.handle = 0;
+    }
+}
+
+class WebSocket {
+    handle: ptr;
+
+    fn recv() -> Message {
+        return Message(bolide_web_ws_recv(self.handle));
+    }
+
+    fn recv_text() -> str {
+        return bolide_web_ws_recv_text(self.handle);
+    }
+
+    fn send_text(text: str) -> bool {
+        return bolide_web_ws_send_text_str(self.handle, text) != 0;
+    }
+
+    fn send_binary(data: bytes) -> bool {
+        return bolide_web_ws_send_binary(self.handle, data) != 0;
+    }
+
+    fn ping() -> bool {
+        return bolide_web_ws_ping(self.handle) != 0;
+    }
+
+    fn close(code: int, reason: str) -> bool {
+        return bolide_web_ws_close(self.handle, code, reason) != 0;
+    }
+
+    fn is_open() -> bool {
+        return bolide_web_ws_is_open(self.handle) != 0;
+    }
+
+    fn set_read_timeout(millis: int) {
+        bolide_web_ws_set_read_timeout(self.handle, millis);
+    }
 }
 
 class Response {
@@ -171,6 +378,14 @@ class Response {
 
     fn delete_cookie(name: str, path: str) {
         bolide_web_response_delete_cookie(self.handle, name, path);
+    }
+
+    fn cors(origin: str, methods: str, headers: str, credentials: bool) {
+        if credentials {
+            bolide_web_response_cors(self.handle, origin, methods, headers, 1);
+        } else {
+            bolide_web_response_cors(self.handle, origin, methods, headers, 0);
+        }
     }
 
     fn header(name: str) -> str {
@@ -208,6 +423,58 @@ class App {
 
     fn static_files(url_prefix: str, dir: str) -> bool {
         return bolide_web_static(self.handle, url_prefix, dir) != 0;
+    }
+
+    fn stream(method: str, path: str, handler: func(Request, Stream) -> int) -> bool {
+        return bolide_web_stream_route(self.handle, method, path, handler) != 0;
+    }
+
+    fn sse(path: str, handler: func(Request, Stream) -> int) -> bool {
+        return bolide_web_sse(self.handle, path, handler) != 0;
+    }
+
+    fn websocket(path: str, handler: func(Request, WebSocket) -> int) -> bool {
+        return bolide_web_websocket(self.handle, path, handler) != 0;
+    }
+
+    fn use_before(handler: func(Request) -> Response) -> bool {
+        return bolide_web_app_use_before(self.handle, handler) != 0;
+    }
+
+    fn use_after(handler: func(Request, Response)) -> bool {
+        return bolide_web_app_use_after(self.handle, handler) != 0;
+    }
+
+    fn not_found(handler: func(Request) -> Response) -> bool {
+        return bolide_web_app_not_found(self.handle, handler) != 0;
+    }
+
+    fn error_handler(handler: func(Request) -> Response) -> bool {
+        return bolide_web_app_error_handler(self.handle, handler) != 0;
+    }
+
+    fn enable_compression(enabled: bool) {
+        if enabled {
+            bolide_web_app_enable_compression(self.handle, 1);
+        } else {
+            bolide_web_app_enable_compression(self.handle, 0);
+        }
+    }
+
+    fn enable_cors(origins: str, methods: str, headers: str, credentials: bool, max_age: int) {
+        if credentials {
+            bolide_web_app_enable_cors(self.handle, origins, methods, headers, 1, max_age);
+        } else {
+            bolide_web_app_enable_cors(self.handle, origins, methods, headers, 0, max_age);
+        }
+    }
+
+    fn tls(pkcs12_path: str, password: str) -> bool {
+        return bolide_web_app_tls(self.handle, pkcs12_path, password) != 0;
+    }
+
+    fn tls_pkcs8(cert_path: str, key_path: str) -> bool {
+        return bolide_web_app_tls_pkcs8(self.handle, cert_path, key_path) != 0;
     }
 
     fn get(path: str, handler: func(Request) -> Response) -> bool {
@@ -353,6 +620,31 @@ class Session {
     }
 }
 
+class ClientResponse {
+    handle: ptr;
+
+    fn status() -> int {
+        return bolide_web_client_response_status(self.handle);
+    }
+
+    fn header(name: str) -> str {
+        return bolide_web_client_response_header(self.handle, name);
+    }
+
+    fn body_text() -> str {
+        return bolide_web_client_response_body_text(self.handle);
+    }
+
+    fn body_bytes() -> bytes {
+        return bolide_web_client_response_body_bytes(self.handle);
+    }
+
+    fn free() {
+        bolide_web_client_response_free(self.handle);
+        self.handle = 0;
+    }
+}
+
 fn app() -> App {
     return App(bolide_web_app_new());
 }
@@ -367,6 +659,54 @@ fn route_async(app: App, method: str, path: str, handler: func(Request) -> Respo
 
 fn static_files(app: App, url_prefix: str, dir: str) -> bool {
     return bolide_web_static(app.handle, url_prefix, dir) != 0;
+}
+
+fn stream(app: App, method: str, path: str, handler: func(Request, Stream) -> int) -> bool {
+    return bolide_web_stream_route(app.handle, method, path, handler) != 0;
+}
+
+fn sse(app: App, path: str, handler: func(Request, Stream) -> int) -> bool {
+    return bolide_web_sse(app.handle, path, handler) != 0;
+}
+
+fn websocket(app: App, path: str, handler: func(Request, WebSocket) -> int) -> bool {
+    return bolide_web_websocket(app.handle, path, handler) != 0;
+}
+
+fn use_before(app: App, handler: func(Request) -> Response) -> bool {
+    return bolide_web_app_use_before(app.handle, handler) != 0;
+}
+
+fn use_after(app: App, handler: func(Request, Response)) -> bool {
+    return bolide_web_app_use_after(app.handle, handler) != 0;
+}
+
+fn not_found(app: App, handler: func(Request) -> Response) -> bool {
+    return bolide_web_app_not_found(app.handle, handler) != 0;
+}
+
+fn error_handler(app: App, handler: func(Request) -> Response) -> bool {
+    return bolide_web_app_error_handler(app.handle, handler) != 0;
+}
+
+fn next() -> Response {
+    return Response(0);
+}
+
+fn enable_compression(app: App, enabled: bool) {
+    app.enable_compression(enabled);
+}
+
+fn enable_cors(app: App, origins: str, methods: str, headers: str, credentials: bool, max_age: int) {
+    app.enable_cors(origins, methods, headers, credentials, max_age);
+}
+
+fn tls(app: App, pkcs12_path: str, password: str) -> bool {
+    return app.tls(pkcs12_path, password);
+}
+
+fn tls_pkcs8(app: App, cert_path: str, key_path: str) -> bool {
+    return app.tls_pkcs8(cert_path, key_path);
 }
 
 fn get(app: App, path: str, handler: func(Request) -> Response) -> bool {
@@ -447,6 +787,22 @@ fn cookie_pair(set_cookie: str) -> str {
 
 fn session(req: Request, res: Response) -> Session {
     return Session(bolide_web_session(req.handle, res.handle));
+}
+
+fn session_set_ttl(ttl_seconds: int) {
+    bolide_web_session_set_ttl(ttl_seconds);
+}
+
+fn session_config(ttl_seconds: int, max_sessions: int, dir: str) {
+    bolide_web_session_config(ttl_seconds, max_sessions, dir);
+}
+
+fn fetch(method: str, url: str, body: str, headers: str) -> ClientResponse {
+    return ClientResponse(bolide_web_fetch_str(method, url, body, headers));
+}
+
+fn fetch_with_options(method: str, url: str, body: str, headers: str, timeout_ms: int, max_redirects: int) -> ClientResponse {
+    return ClientResponse(bolide_web_fetch_with_options_str(method, url, body, headers, timeout_ms, max_redirects));
 }
 
 fn text(body: str) -> Response {

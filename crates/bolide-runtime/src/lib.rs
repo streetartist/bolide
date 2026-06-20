@@ -16,6 +16,7 @@
 //! - `web`: HTTP 服务
 //! - `template`: HTML 模板渲染
 //! - `db`: 嵌入式文件数据库
+//! - `sqlite`: SQLite 数据库绑定
 //! - `gui`: 跨平台 egui 桌面界面
 //! - `thread`: 线程和线程池
 //! - `channel`: 线程安全通道
@@ -37,6 +38,7 @@ pub mod list;
 mod object;
 mod print;
 mod rc;
+mod sqlite;
 mod string;
 mod template;
 mod thread;
@@ -60,6 +62,7 @@ pub use list::*;
 pub use object::*;
 pub use print::*;
 pub use rc::*;
+pub use sqlite::*;
 pub use string::*;
 pub use template::*;
 pub use thread::*;
