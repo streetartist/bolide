@@ -1,0 +1,54 @@
+// Bolide random standard library.
+// Usage: import "std/random/random.bl" as random;
+
+extern "bolide" {
+    fn bolide_random_seed(seed: i64);
+    fn bolide_random_int(max: i64) -> i64;
+    fn bolide_random_range(min: i64, max: i64) -> i64;
+    fn bolide_random_float() -> c_double;
+    fn bolide_random_bool() -> i64;
+}
+
+fn seed(value: int) {
+    bolide_random_seed(value);
+}
+
+fn rand_int(max: int) -> int {
+    return bolide_random_int(max);
+}
+
+fn range(min: int, max: int) -> int {
+    return bolide_random_range(min, max);
+}
+
+fn rand_float() -> float {
+    return bolide_random_float();
+}
+
+fn rand_bool() -> bool {
+    return bolide_random_bool() != 0;
+}
+
+fn chance(probability: float) -> bool {
+    if probability <= 0.0 {
+        return false;
+    }
+    if probability >= 1.0 {
+        return true;
+    }
+    return rand_float() < probability;
+}
+
+fn choice_int(items: list<int>) -> int {
+    if items.len() == 0 {
+        return 0;
+    }
+    return items[rand_int(items.len())];
+}
+
+fn choice_str(items: list<str>) -> str {
+    if items.len() == 0 {
+        return "";
+    }
+    return items[rand_int(items.len())];
+}

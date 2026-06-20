@@ -1,0 +1,24 @@
+import "std/time/time.bl" as time;
+
+fn check_bool(name: str, got: bool, want: bool) {
+    if got == want {
+        print("ok " + name + "\n");
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want) + "\n");
+    }
+}
+
+let unix: int = time.now();
+let before_ms: int = time.now_ms();
+let before_mono: int = time.monotonic_ms();
+time.sleep_ms(5);
+let after_ms: int = time.now_ms();
+let after_mono: int = time.monotonic_ms();
+
+check_bool("unix seconds positive", unix > 0, true);
+check_bool("now ms positive", before_ms > 0, true);
+check_bool("now us >= now ms", time.now_us() >= before_ms * 1000, true);
+check_bool("wall clock nondecreasing", after_ms >= before_ms, true);
+check_bool("monotonic nondecreasing", after_mono >= before_mono, true);
+
+print("std time done\n");

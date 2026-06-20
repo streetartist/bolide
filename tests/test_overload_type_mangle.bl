@@ -1,0 +1,20 @@
+fn pick(x: int) -> int {
+    return x + 1;
+}
+
+fn pick(x: float) -> float {
+    return x + 0.5;
+}
+
+fn check_bool(name: str, got: bool, want: bool) {
+    if got == want {
+        print("ok " + name + "\n");
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want) + "\n");
+    }
+}
+
+check_bool("int overload", pick(1) == 2, true);
+check_bool("float overload", pick(1.0) == 1.5, true);
+
+print("overload type mangle done\n");

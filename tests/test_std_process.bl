@@ -1,0 +1,18 @@
+import "std/process/process.bl" as process;
+
+fn check_bool(name: str, got: bool, want: bool) {
+    if got == want {
+        print("ok " + name + "\n");
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want) + "\n");
+    }
+}
+
+let res: process.Result = process.shell("echo bolide-process-ok");
+check_bool("success", res.success(), true);
+check_bool("status", res.status() == 0, true);
+check_bool("stdout", res.stdout().contains("bolide-process-ok"), true);
+check_bool("stderr empty", res.stderr().len() == 0, true);
+res.close();
+
+print("std process done\n");

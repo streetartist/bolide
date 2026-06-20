@@ -333,10 +333,16 @@ fn parse_func_def(pair: Pair<Rule>) -> Result<FuncDef, String> {
 }
 
 fn parse_param(pair: Pair<Rule>) -> Result<Param, String> {
-    let inner_pair = pair
+    let mut inner_pair = pair
         .into_inner()
         .next()
         .ok_or("Parameter is missing body")?;
+    if inner_pair.as_rule() == Rule::normal_param {
+        inner_pair = inner_pair
+            .into_inner()
+            .next()
+            .ok_or("Normal parameter is missing body")?;
+    }
     let inner_rule = inner_pair.as_rule();
     let mut inner = inner_pair.into_inner();
     let mut mode = ParamMode::Borrow; // 默认借用

@@ -1,0 +1,114 @@
+// Bolide math standard library.
+// Usage: import "std/math/math.bl" as math;
+
+extern "bolide" {
+    fn bolide_math_abs_i64(value: i64) -> i64;
+    fn bolide_math_min_i64(a: i64, b: i64) -> i64;
+    fn bolide_math_max_i64(a: i64, b: i64) -> i64;
+    fn bolide_math_clamp_i64(value: i64, min: i64, max: i64) -> i64;
+    fn bolide_math_abs_f64(value: c_double) -> c_double;
+    fn bolide_math_min_f64(a: c_double, b: c_double) -> c_double;
+    fn bolide_math_max_f64(a: c_double, b: c_double) -> c_double;
+    fn bolide_math_clamp_f64(value: c_double, min: c_double, max: c_double) -> c_double;
+    fn bolide_math_floor(value: c_double) -> c_double;
+    fn bolide_math_ceil(value: c_double) -> c_double;
+    fn bolide_math_round(value: c_double) -> c_double;
+    fn bolide_math_trunc(value: c_double) -> c_double;
+    fn bolide_math_sqrt(value: c_double) -> c_double;
+    fn bolide_math_pow(value: c_double, exp: c_double) -> c_double;
+    fn bolide_math_sin(value: c_double) -> c_double;
+    fn bolide_math_cos(value: c_double) -> c_double;
+    fn bolide_math_tan(value: c_double) -> c_double;
+    fn bolide_math_log(value: c_double, base: c_double) -> c_double;
+    fn bolide_math_ln(value: c_double) -> c_double;
+    fn bolide_math_exp(value: c_double) -> c_double;
+}
+
+let PI: float = 3.141592653589793;
+let E: float = 2.718281828459045;
+
+fn abs(value: int) -> int {
+    return bolide_math_abs_i64(value);
+}
+
+fn abs(value: float) -> float {
+    return bolide_math_abs_f64(float(value));
+}
+
+fn min(a: int, b: int) -> int {
+    return bolide_math_min_i64(a, b);
+}
+
+fn min(a: float, b: float) -> float {
+    return bolide_math_min_f64(float(a), float(b));
+}
+
+fn max(a: int, b: int) -> int {
+    return bolide_math_max_i64(a, b);
+}
+
+fn max(a: float, b: float) -> float {
+    return bolide_math_max_f64(float(a), float(b));
+}
+
+fn clamp(value: int, low: int, high: int) -> int {
+    if low > high {
+        return bolide_math_clamp_i64(value, high, low);
+    }
+    return bolide_math_clamp_i64(value, low, high);
+}
+
+fn clamp(value: float, low: float, high: float) -> float {
+    if low > high {
+        return bolide_math_clamp_f64(float(value), float(high), float(low));
+    }
+    return bolide_math_clamp_f64(float(value), float(low), float(high));
+}
+
+fn floor(value: float) -> float {
+    return bolide_math_floor(float(value));
+}
+
+fn ceil(value: float) -> float {
+    return bolide_math_ceil(float(value));
+}
+
+fn round(value: float) -> float {
+    return bolide_math_round(float(value));
+}
+
+fn trunc(value: float) -> float {
+    return bolide_math_trunc(float(value));
+}
+
+fn sqrt(value: float) -> float {
+    return bolide_math_sqrt(float(value));
+}
+
+fn pow(value: float, exp: float) -> float {
+    return bolide_math_pow(float(value), float(exp));
+}
+
+fn sin(value: float) -> float {
+    return bolide_math_sin(float(value));
+}
+
+fn cos(value: float) -> float {
+    return bolide_math_cos(float(value));
+}
+
+fn tan(value: float) -> float {
+    return bolide_math_tan(float(value));
+}
+
+fn log(value: float, base: float) -> float {
+    return bolide_math_log(float(value), float(base));
+}
+
+fn ln(value: float) -> float {
+    return bolide_math_ln(float(value));
+}
+
+fn exp(value: float) -> float {
+    return bolide_math_exp(float(value));
+}

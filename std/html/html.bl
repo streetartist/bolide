@@ -1,0 +1,236 @@
+// Bolide lightweight HTML helper library.
+// Usage: import "std/html/html.bl" as html;
+
+class Element {
+    tag: str;
+    attrs: str;
+    body: str;
+}
+
+fn decode_entities(text: str) -> str {
+    return text
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&apos;", "'");
+}
+
+fn strip_tags(source: str) -> str {
+    let out: str = "";
+    let in_tag: bool = false;
+    for i in range(source.len()) {
+        let ch: str = source.char_at(i);
+        if ch == "<" {
+            in_tag = true;
+        } elif ch == ">" {
+            in_tag = false;
+            out = out + " ";
+        } elif not in_tag {
+            out = out + ch;
+        }
+    }
+    return decode_entities(out).replace("\r", " ").replace("\n", " ").replace("\t", " ").trim();
+}
+
+fn text(source: str) -> str {
+    return strip_tags(source);
+}
+
+fn tag_name(open_tag: str) -> str {
+    let raw: str = open_tag.trim();
+    let start: int = 0;
+    if raw.starts_with("<") {
+        start = 1;
+    }
+    if raw.substring(start, raw.len()).starts_with("/") {
+        start = start + 1;
+    }
+    let end: int = raw.len();
+    for i in range(start, raw.len()) {
+        let ch: str = raw.char_at(i);
+        if ch == " " or ch == "\t" or ch == "\n" or ch == "\r" or ch == ">" or ch == "/" {
+            end = i;
+            return raw.substring(start, end).lower();
+        }
+    }
+    return raw.substring(start, end).replace(">", "").lower();
+}
+
+fn attr(open_tag: str, name: str) -> str {
+    let lower: str = open_tag.lower();
+    let needle: str = name.lower() + "=";
+    let pos: int = lower.find(needle);
+    if pos < 0 {
+        return "";
+    }
+
+    let value_start: int = pos + needle.len();
+    if value_start >= open_tag.len() {
+        return "";
+    }
+
+    let quote: str = open_tag.char_at(value_start);
+    if quote == "\"" or quote == "'" {
+        let i: int = value_start + 1;
+        while i < open_tag.len() {
+            if open_tag.char_at(i) == quote {
+                return decode_entities(open_tag.substring(value_start + 1, i));
+            }
+            i = i + 1;
+        }
+        return decode_entities(open_tag.substring(value_start + 1, open_tag.len()));
+    }
+
+    let end: int = open_tag.len();
+    for i in range(value_start, open_tag.len()) {
+        let ch: str = open_tag.char_at(i);
+        if ch == " " or ch == "\t" or ch == "\n" or ch == "\r" or ch == ">" {
+            end = i;
+            return decode_entities(open_tag.substring(value_start, end));
+        }
+    }
+    return decode_entities(open_tag.substring(value_start, end));
+}
+
+fn find_open_tag(source: str, tag: str, start: int) -> int {
+    let lower: str = source.lower();
+    let needle: str = "<" + tag.lower();
+    let pos: int = lower.substring(start, lower.len()).find(needle);
+    if pos < 0 {
+        return -1;
+    }
+    return start + pos;
+}
+
+fn element(source: str, tag: str) -> Element {
+    let lower: str = source.lower();
+    let name: str = tag.lower();
+    let open_pos: int = find_open_tag(source, name, 0);
+    if open_pos < 0 {
+        return Element(name, "", "");
+    }
+
+    let open_end_rel: int = lower.substring(open_pos, lower.len()).find(">");
+    if open_end_rel < 0 {
+        return Element(name, "", "");
+    }
+    let open_end: int = open_pos + open_end_rel;
+    let close_needle: str = "</" + name + ">";
+    let close_rel: int = lower.substring(open_end + 1, lower.len()).find(close_needle);
+    if close_rel < 0 {
+        return Element(name, source.substring(open_pos, open_end + 1), "");
+    }
+    let close_pos: int = open_end + 1 + close_rel;
+    return Element(
+        name,
+        source.substring(open_pos, open_end + 1),
+        source.substring(open_end + 1, close_pos)
+    );
+}
+
+fn elements(source: str, tag: str) -> list<Element> {
+    let out: list<Element> = [];
+    let lower: str = source.lower();
+    let name: str = tag.lower();
+    let close_needle: str = "</" + name + ">";
+    let start: int = 0;
+
+    while start < source.len() {
+        let open_pos: int = find_open_tag(source, name, start);
+        if open_pos < 0 {
+            return out;
+        }
+        let open_end_rel: int = lower.substring(open_pos, lower.len()).find(">");
+        if open_end_rel < 0 {
+            return out;
+        }
+        let open_end: int = open_pos + open_end_rel;
+        let close_rel: int = lower.substring(open_end + 1, lower.len()).find(close_needle);
+        if close_rel < 0 {
+            out.push(Element(name, source.substring(open_pos, open_end + 1), ""));
+            start = open_end + 1;
+        } else {
+            let close_pos: int = open_end + 1 + close_rel;
+            out.push(Element(name, source.substring(open_pos, open_end + 1), source.substring(open_end + 1, close_pos)));
+            start = close_pos + close_needle.len();
+        }
+    }
+    return out;
+}
+
+fn title(source: str) -> str {
+    let el: Element = element(source, "title");
+    return strip_tags(el.body);
+}
+
+fn links(source: str) -> list<str> {
+    let out: list<str> = [];
+    let lower: str = source.lower();
+    let start: int = 0;
+    while start < source.len() {
+        let rel: int = lower.substring(start, lower.len()).find("<a");
+        if rel < 0 {
+            return out;
+        }
+        let pos: int = start + rel;
+        let end_rel: int = lower.substring(pos, lower.len()).find(">");
+        if end_rel < 0 {
+            return out;
+        }
+        let open_tag: str = source.substring(pos, pos + end_rel + 1);
+        let href: str = attr(open_tag, "href");
+        if href != "" {
+            out.push(href);
+        }
+        start = pos + end_rel + 1;
+    }
+    return out;
+}
+
+fn images(source: str) -> list<str> {
+    let out: list<str> = [];
+    let lower: str = source.lower();
+    let start: int = 0;
+    while start < source.len() {
+        let rel: int = lower.substring(start, lower.len()).find("<img");
+        if rel < 0 {
+            return out;
+        }
+        let pos: int = start + rel;
+        let end_rel: int = lower.substring(pos, lower.len()).find(">");
+        if end_rel < 0 {
+            return out;
+        }
+        let open_tag: str = source.substring(pos, pos + end_rel + 1);
+        let src: str = attr(open_tag, "src");
+        if src != "" {
+            out.push(src);
+        }
+        start = pos + end_rel + 1;
+    }
+    return out;
+}
+
+fn meta(source: str, name: str) -> str {
+    let lower: str = source.lower();
+    let start: int = 0;
+    while start < source.len() {
+        let rel: int = lower.substring(start, lower.len()).find("<meta");
+        if rel < 0 {
+            return "";
+        }
+        let pos: int = start + rel;
+        let end_rel: int = lower.substring(pos, lower.len()).find(">");
+        if end_rel < 0 {
+            return "";
+        }
+        let open_tag: str = source.substring(pos, pos + end_rel + 1);
+        if attr(open_tag, "name").lower() == name.lower() or attr(open_tag, "property").lower() == name.lower() {
+            return attr(open_tag, "content");
+        }
+        start = pos + end_rel + 1;
+    }
+    return "";
+}

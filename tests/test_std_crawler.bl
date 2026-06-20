@@ -1,0 +1,56 @@
+import "std/crawler/crawler.bl" as crawler;
+
+fn check_bool(name: str, got: bool, want: bool) {
+    if got == want {
+        print("ok " + name + "\n");
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want) + "\n");
+    }
+}
+
+fn check_int(name: str, got: int, want: int) {
+    if got == want {
+        print("ok " + name + "\n");
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want) + "\n");
+    }
+}
+
+fn check_str(name: str, got: str, want: str) {
+    if got == want {
+        print("ok " + name + "\n");
+    } else {
+        print("FAIL " + name + " got=" + got + " want=" + want + "\n");
+    }
+}
+
+let q: crawler.Queue = crawler.queue();
+check_bool("add first", q.add("https://example.com/"), true);
+check_bool("add duplicate", q.add("https://example.com/"), false);
+check_bool("has next", q.has_next(), true);
+check_int("pending", q.pending_count(), 1);
+check_int("seen", q.seen_count(), 1);
+check_str("next", q.next(), "https://example.com/");
+check_bool("empty", q.has_next(), false);
+
+let doc: str =
+    "<a href=\"/a\">A</a>" +
+    "<a href=\"b/c.html\">B</a>" +
+    "<a href=\"https://other.test/x\">X</a>" +
+    "<a href=\"mailto:a@example.com\">mail</a>";
+
+let all_links: list<str> = crawler.links("https://example.com/root/page.html", doc);
+check_int("all links", all_links.len(), 3);
+check_str("link root", all_links[0], "https://example.com/a");
+check_str("link relative", all_links[1], "https://example.com/root/b/c.html");
+
+let internal: list<str> = crawler.internal_links("https://example.com/root/page.html", doc);
+check_int("internal links", internal.len(), 2);
+check_bool("same host true", crawler.same_host("https://example.com/a", "http://example.com/b"), true);
+check_bool("same host false", crawler.same_host("https://example.com/a", "https://other.test/b"), false);
+
+let page: crawler.Page = crawler.Page("https://example.com/", 200, "<title>Demo</title>");
+check_bool("ok", crawler.ok(page), true);
+check_str("page title", crawler.page_title(page), "Demo");
+
+print("std crawler done\n");

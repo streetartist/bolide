@@ -1,0 +1,43 @@
+import "std/url/url.bl" as url;
+
+fn check_bool(name: str, got: bool, want: bool) {
+    if got == want {
+        print("ok " + name + "\n");
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want) + "\n");
+    }
+}
+
+fn check_str(name: str, got: str, want: str) {
+    if got == want {
+        print("ok " + name + "\n");
+    } else {
+        print("FAIL " + name + " got=" + got + " want=" + want + "\n");
+    }
+}
+
+let parsed: url.Url = url.parse("https://example.com:8443/a/b.html?q=bolide#top");
+check_str("scheme", parsed.scheme, "https");
+check_str("host", parsed.host, "example.com");
+check_str("port", parsed.port, "8443");
+check_str("path", parsed.path, "/a/b.html");
+check_str("query", parsed.query, "q=bolide");
+check_str("fragment", parsed.fragment, "top");
+check_str("stringify", url.stringify(parsed), "https://example.com:8443/a/b.html?q=bolide#top");
+
+check_str("resolve relative", url.resolve("https://example.com/a/b/page.html", "../img/logo.png"), "https://example.com/a/img/logo.png");
+check_str("resolve absolute path", url.resolve("https://example.com/a/b/page.html", "/root"), "https://example.com/root");
+check_str("resolve query", url.resolve("https://example.com/a/b/page.html", "?x=1"), "https://example.com/a/b/page.html?x=1");
+check_str("resolve scheme relative", url.resolve("https://example.com/a", "//cdn.example.com/lib.js"), "https://cdn.example.com/lib.js");
+
+check_str("encode", url.encode_component("a b&c=d"), "a%20b%26c%3Dd");
+check_str("decode", url.decode_component("a%20b%26c%3Dd"), "a b&c=d");
+check_str("query encode", url.encode_query_component("a b"), "a+b");
+check_str("query decode", url.decode_query_component("a+b"), "a b");
+
+let query: dict<str, str> = url.query_parse("?q=bolide+lang&x=1");
+check_str("query q", query["q"], "bolide lang");
+check_str("query x", query["x"], "1");
+check_str("query pairs", url.query_pairs([url.pair("q", "bolide lang"), url.pair("x", "1")]), "q=bolide+lang&x=1");
+
+print("std url done\n");

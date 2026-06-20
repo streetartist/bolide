@@ -1,0 +1,54 @@
+import "std/html/html.bl" as html;
+
+fn check_bool(name: str, got: bool, want: bool) {
+    if got == want {
+        print("ok " + name + "\n");
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want) + "\n");
+    }
+}
+
+fn check_int(name: str, got: int, want: int) {
+    if got == want {
+        print("ok " + name + "\n");
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want) + "\n");
+    }
+}
+
+fn check_str(name: str, got: str, want: str) {
+    if got == want {
+        print("ok " + name + "\n");
+    } else {
+        print("FAIL " + name + " got=" + got + " want=" + want + "\n");
+    }
+}
+
+let doc: str =
+    "<html><head>" +
+    "<title>Bolide &amp; Crawlers</title>" +
+    "<meta name=\"description\" content=\"small crawler\">" +
+    "</head><body>" +
+    "<h1>Hello <em>World</em></h1>" +
+    "<a href=\"/a\">A</a>" +
+    "<a class='nav' href='b.html'>B</a>" +
+    "<img src=\"logo.png\">" +
+    "</body></html>";
+
+check_str("title", html.title(doc), "Bolide & Crawlers");
+check_bool("text contains", html.text(doc).contains("Hello  World"), true);
+let links: list<str> = html.links(doc);
+check_int("links count", links.len(), 2);
+check_str("link first", links[0], "/a");
+check_str("link second", links[1], "b.html");
+let images: list<str> = html.images(doc);
+check_int("images count", images.len(), 1);
+check_str("image src", images[0], "logo.png");
+check_str("meta", html.meta(doc, "description"), "small crawler");
+check_str("attr", html.attr("<a class='nav' href='b.html'>", "href"), "b.html");
+
+let h1: html.Element = html.element(doc, "h1");
+check_str("element tag", h1.tag, "h1");
+check_str("element text", html.text(h1.body), "Hello  World");
+
+print("std html done\n");

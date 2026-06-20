@@ -1,0 +1,38 @@
+// Bolide time standard library.
+// Usage: import "std/time/time.bl" as time;
+
+extern "bolide" {
+    fn bolide_time_now() -> i64;
+    fn bolide_time_now_ms() -> i64;
+    fn bolide_time_now_us() -> i64;
+    fn bolide_time_monotonic_ms() -> i64;
+    fn bolide_time_sleep_ms(ms: i64);
+}
+
+fn now() -> int {
+    return bolide_time_now();
+}
+
+fn unix() -> int {
+    return bolide_time_now();
+}
+
+fn now_ms() -> int {
+    return bolide_time_now_ms();
+}
+
+fn now_us() -> int {
+    return bolide_time_now_us();
+}
+
+fn monotonic_ms() -> int {
+    return bolide_time_monotonic_ms();
+}
+
+fn sleep_ms(ms: int) {
+    bolide_time_sleep_ms(ms);
+}
+
+fn sleep(seconds: int) {
+    sleep_ms(seconds * 1000);
+}

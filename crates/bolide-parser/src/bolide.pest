@@ -89,7 +89,9 @@ generic_param_list = { "<" ~ ident ~ ("," ~ ident)* ~ ","? ~ ">" }
 throws_clause = { kw_throws ~ type_expr ~ ("," ~ type_expr)* ~ ","? }
 param_list = { param ~ ("," ~ param)* ~ ","? }
 param = { kw_variadic_param | variadic_param | normal_param }
-normal_param = { param_mode? ~ ident ~ ":" ~ type_expr ~ ("=" ~ expr)? }
+normal_param = { mode_param | plain_param }
+mode_param = { param_mode ~ ident ~ ":" ~ type_expr ~ ("=" ~ expr)? }
+plain_param = { ident ~ ":" ~ type_expr ~ ("=" ~ expr)? }
 variadic_param = { "*" ~ ident ~ ":" ~ type_expr }
 kw_variadic_param = { "**" ~ ident ~ ":" ~ type_expr }
 param_mode = { "owned" | "ref" }
@@ -295,16 +297,16 @@ qualified_type = { ident ~ ("." ~ ident)+ }
 basic_type = { qualified_type | ident }
 
 // 标识符
-ident = @{ !keyword ~ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
+//
+// Most Bolide keywords are contextual: `default`, `from`, `as`, `ref`, `weak`,
+// `select`, etc. still have keyword meaning in their grammar positions, but
+// should be usable as parameter names, fields, locals, and extern names.
+// Only literal/receiver tokens stay globally reserved because they have
+// expression-level semantics that cannot be represented as ordinary variables.
+ident = @{ !reserved_ident ~ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
 
-// 关键字
-keyword = {
-    ("fn" | "let" | "class" | "if" | "elif" | "else" |
-    "while" | "for" | "in" | "break" | "continue" | "return" | "import" | "as" |
-    "true" | "false" | "none" | "and" | "or" | "not" |
-    "spawn" | "pool" | "self" | "super" | "select" | "timeout" | "default" |
-    "async" | "await" | "scope" | "extern" | "struct" | "type" | "export" |
-    "from" | "throws" | "owned" | "ref" | "weak" | "unowned" | "enum" | "union" | "match") ~ !(ASCII_ALPHANUMERIC | "_")
+reserved_ident = {
+    ("true" | "false" | "none" | "self" | "super") ~ !(ASCII_ALPHANUMERIC | "_")
 }
 
 // C 类型系统

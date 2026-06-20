@@ -1,0 +1,35 @@
+import "std/random/random.bl" as random;
+
+fn check_bool(name: str, got: bool, want: bool) {
+    if got == want {
+        print("ok " + name + "\n");
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want) + "\n");
+    }
+}
+
+random.seed(12345);
+let a: int = random.rand_int(1000);
+let b: int = random.rand_int(1000);
+random.seed(12345);
+
+check_bool("deterministic first", random.rand_int(1000) == a, true);
+check_bool("deterministic second", random.rand_int(1000) == b, true);
+
+let ranged: int = random.range(10, 20);
+check_bool("range lower", ranged >= 10, true);
+check_bool("range upper exclusive", ranged < 20, true);
+check_bool("range fallback", random.range(5, 5) == 5, true);
+check_bool("int fallback", random.rand_int(0) == 0, true);
+
+let f: float = random.rand_float();
+check_bool("float lower", f >= 0.0, true);
+check_bool("float upper exclusive", f < 1.0, true);
+check_bool("chance false", random.chance(0.0), false);
+check_bool("chance true", random.chance(1.0), true);
+let coin: bool = random.rand_bool();
+check_bool("bool returns bool", coin == true or coin == false, true);
+check_bool("choice int", random.choice_int([7, 8, 9]) >= 7, true);
+check_bool("choice str", random.choice_str(["a", "b"]).len() == 1, true);
+
+print("std random done\n");

@@ -1,0 +1,33 @@
+// Contextual keywords should be valid identifiers outside their grammar roles.
+
+extern "bolide" {
+    fn bolide_env_get_or(default: *char, from: *char) -> str;
+}
+
+class KeywordBox {
+    default: int;
+    from: str;
+    select: bool;
+}
+
+fn combine(default: int, from: int, as: int, ref: int, weak: int, select: int, timeout: int) -> int {
+    let match: int = default + from;
+    let throws: int = as + ref;
+    let owned: int = weak + select;
+    return match + throws + owned + timeout;
+}
+
+fn check_int(name: str, got: int, want: int) {
+    if got == want {
+        print("ok " + name + "\n");
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want) + "\n");
+    }
+}
+
+check_int("params", combine(1, 2, 3, 4, 5, 6, 7), 28);
+
+let box: KeywordBox = KeywordBox(9, "ctx", true);
+check_int("field", box.default, 9);
+
+print("contextual keywords done\n");

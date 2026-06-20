@@ -1,0 +1,359 @@
+// Bolide command-line argument helper library.
+// Usage: import "std/cli/cli.bl" as cli;
+
+import "std/env/env.bl" as env;
+
+class Spec {
+    name: str;
+    short: str;
+    takes_value: bool;
+    value_name: str;
+    default_value: str;
+    help: str;
+    required: bool;
+}
+
+class Args {
+    program: str;
+    values: dict<str, str>;
+    flags: dict<str, bool>;
+    positionals: list<str>;
+    errors: list<str>;
+
+    fn has(name: str) -> bool {
+        return self.flags.contains(name) or self.values.contains(name);
+    }
+
+    fn flag(name: str) -> bool {
+        if self.flags.contains(name) {
+            return self.flags[name];
+        }
+        return false;
+    }
+
+    fn value(name: str) -> str {
+        if self.values.contains(name) {
+            return self.values[name];
+        }
+        return "";
+    }
+
+    fn value_or(name: str, fallback: str) -> str {
+        if self.values.contains(name) {
+            return self.values[name];
+        }
+        return fallback;
+    }
+
+    fn int_or(name: str, fallback: int) -> int {
+        if self.values.contains(name) {
+            return int(self.values[name]);
+        }
+        return fallback;
+    }
+
+    fn positional(index: int) -> str {
+        if index >= 0 and index < self.positionals.len() {
+            return self.positionals[index];
+        }
+        return "";
+    }
+
+    fn positional_count() -> int {
+        return self.positionals.len();
+    }
+
+    fn has_errors() -> bool {
+        return self.errors.len() > 0;
+    }
+
+    fn error_text() -> str {
+        return join_lines(self.errors);
+    }
+}
+
+fn flag(name: str, short: str, help: str) -> Spec {
+    return Spec(name, short, false, "", "", help, false);
+}
+
+fn option(name: str, short: str, value_name: str, default_value: str, help: str) -> Spec {
+    return Spec(name, short, true, value_name, default_value, help, false);
+}
+
+fn required_option(name: str, short: str, value_name: str, help: str) -> Spec {
+    return Spec(name, short, true, value_name, "", help, true);
+}
+
+fn find_long(specs: list<Spec>, name: str) -> int {
+    for i in range(specs.len()) {
+        if specs[i].name == name {
+            return i;
+        }
+    }
+    return -1;
+}
+
+fn find_short(specs: list<Spec>, short: str) -> int {
+    for i in range(specs.len()) {
+        if specs[i].short == short {
+            return i;
+        }
+    }
+    return -1;
+}
+
+fn starts_option(token: str) -> bool {
+    return token.starts_with("-") and token != "-";
+}
+
+fn empty_args(program: str, specs: list<Spec>) -> Args {
+    let values: dict<str, str> = {};
+    let flags: dict<str, bool> = {};
+    let positionals: list<str> = [];
+    let errors: list<str> = [];
+
+    for spec in specs {
+        if spec.takes_value {
+            if spec.default_value != "" {
+                values[spec.name] = spec.default_value;
+            }
+        } else {
+            flags[spec.name] = false;
+        }
+    }
+
+    return Args(program, values, flags, positionals, errors);
+}
+
+fn set_spec_value(result: Args, spec: Spec, value: str) {
+    if spec.takes_value {
+        result.values[spec.name] = value;
+    } else {
+        result.flags[spec.name] = true;
+    }
+}
+
+fn parse_long_token(result: Args, specs: list<Spec>, token: str, argv: list<str>, index: int) -> int {
+    let body: str = token.substring(2, token.len());
+    let eq: int = body.find("=");
+    let name: str = body;
+    let inline_value: str = "";
+    let has_inline_value: bool = false;
+
+    if eq >= 0 {
+        name = body.substring(0, eq);
+        inline_value = body.substring(eq + 1, body.len());
+        has_inline_value = true;
+    }
+
+    let spec_index: int = find_long(specs, name);
+    if spec_index < 0 {
+        result.errors.push("unknown option: --" + name);
+        return index;
+    }
+
+    let spec: Spec = specs[spec_index];
+    if spec.takes_value {
+        if has_inline_value {
+            set_spec_value(result, spec, inline_value);
+            return index;
+        }
+        if index + 1 < argv.len() and not starts_option(argv[index + 1]) {
+            set_spec_value(result, spec, argv[index + 1]);
+            return index + 1;
+        }
+        result.errors.push("missing value for --" + spec.name);
+        return index;
+    }
+
+    if has_inline_value {
+        result.errors.push("flag does not take a value: --" + spec.name);
+        return index;
+    }
+    set_spec_value(result, spec, "true");
+    return index;
+}
+
+fn parse_short_group(result: Args, specs: list<Spec>, token: str, argv: list<str>, index: int) -> int {
+    let body: str = token.substring(1, token.len());
+    if body.len() == 0 {
+        result.positionals.push(token);
+        return index;
+    }
+
+    if body.len() == 1 {
+        let spec_index: int = find_short(specs, body);
+        if spec_index < 0 {
+            result.errors.push("unknown option: -" + body);
+            return index;
+        }
+        let spec: Spec = specs[spec_index];
+        if spec.takes_value {
+            if index + 1 < argv.len() and not starts_option(argv[index + 1]) {
+                set_spec_value(result, spec, argv[index + 1]);
+                return index + 1;
+            }
+            result.errors.push("missing value for -" + spec.short);
+            return index;
+        }
+        set_spec_value(result, spec, "true");
+        return index;
+    }
+
+    for i in range(body.len()) {
+        let short: str = body.char_at(i);
+        let spec_index: int = find_short(specs, short);
+        if spec_index < 0 {
+            result.errors.push("unknown option: -" + short);
+        } else {
+            let spec: Spec = specs[spec_index];
+            if spec.takes_value {
+                result.errors.push("short option group cannot contain value option: -" + short);
+            } else {
+                set_spec_value(result, spec, "true");
+            }
+        }
+    }
+    return index;
+}
+
+fn validate_required(result: Args, specs: list<Spec>) {
+    for spec in specs {
+        if spec.required and not result.values.contains(spec.name) {
+            result.errors.push("missing required option: --" + spec.name);
+        }
+    }
+}
+
+fn parse(argv: list<str>, specs: list<Spec>) -> Args {
+    let program: str = "";
+    let start: int = 0;
+    if argv.len() > 0 {
+        program = argv[0];
+        start = 1;
+    }
+
+    let result: Args = empty_args(program, specs);
+    let positional_only: bool = false;
+    let i: int = start;
+
+    while i < argv.len() {
+        let token: str = argv[i];
+        if positional_only {
+            result.positionals.push(token);
+        } elif token == "--" {
+            positional_only = true;
+        } elif token.starts_with("--") and token.len() > 2 {
+            i = parse_long_token(result, specs, token, argv, i);
+        } elif token.starts_with("-") and token != "-" {
+            i = parse_short_group(result, specs, token, argv, i);
+        } else {
+            result.positionals.push(token);
+        }
+        i = i + 1;
+    }
+
+    validate_required(result, specs);
+    return result;
+}
+
+fn parse_values(values: list<str>, specs: list<Spec>) -> Args {
+    let argv: list<str> = ["program"];
+    for value in values {
+        argv.push(value);
+    }
+    return parse(argv, specs);
+}
+
+fn parse_env(specs: list<Spec>) -> Args {
+    return parse(env.args(), specs);
+}
+
+fn parse_simple(argv: list<str>) -> Args {
+    let specs: list<Spec> = [];
+    let result: Args = empty_args("", specs);
+    let start: int = 0;
+    if argv.len() > 0 {
+        result.program = argv[0];
+        start = 1;
+    }
+
+    let positional_only: bool = false;
+    let i: int = start;
+    while i < argv.len() {
+        let token: str = argv[i];
+        if positional_only {
+            result.positionals.push(token);
+        } elif token == "--" {
+            positional_only = true;
+        } elif token.starts_with("--") and token.len() > 2 {
+            let body: str = token.substring(2, token.len());
+            let eq: int = body.find("=");
+            if eq >= 0 {
+                let key: str = body.substring(0, eq);
+                let value: str = body.substring(eq + 1, body.len());
+                result.values[key] = value;
+            } else {
+                result.flags[body] = true;
+            }
+        } elif token.starts_with("-") and token.len() == 2 {
+            let key: str = token.substring(1, token.len());
+            result.flags[key] = true;
+        } else {
+            result.positionals.push(token);
+        }
+        i = i + 1;
+    }
+    return result;
+}
+
+fn join_lines(lines: list<str>) -> str {
+    let out: str = "";
+    for line in lines {
+        if out == "" {
+            out = line;
+        } else {
+            out = out + "\n" + line;
+        }
+    }
+    return out;
+}
+
+fn option_usage(spec: Spec) -> str {
+    let out: str = "";
+    if spec.short != "" {
+        out = "-" + spec.short + ", ";
+    }
+    out = out + "--" + spec.name;
+    if spec.takes_value {
+        let value_name: str = spec.value_name;
+        if value_name == "" {
+            value_name = "VALUE";
+        }
+        out = out + " <" + value_name + ">";
+    }
+    return out;
+}
+
+fn help(program: str, description: str, specs: list<Spec>) -> str {
+    let out: str = "Usage: " + program + " [options]";
+    if description != "" {
+        out = out + "\n\n" + description;
+    }
+    if specs.len() > 0 {
+        out = out + "\n\nOptions:";
+        for spec in specs {
+            out = out + "\n  " + option_usage(spec);
+            if spec.help != "" {
+                out = out + "\n      " + spec.help;
+            }
+            if spec.default_value != "" {
+                out = out + "\n      default: " + spec.default_value;
+            }
+            if spec.required {
+                out = out + "\n      required";
+            }
+        }
+    }
+    return out;
+}

@@ -1,0 +1,346 @@
+// Bolide URL helper library.
+// Usage: import "std/url/url.bl" as url;
+
+class Url {
+    scheme: str;
+    host: str;
+    port: str;
+    path: str;
+    query: str;
+    fragment: str;
+}
+
+class Pair {
+    key: str;
+    value: str;
+}
+
+fn is_unreserved(ch: str) -> bool {
+    return "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~".contains(ch);
+}
+
+fn pct_encode_char(ch: str) -> str {
+    if ch == " " { return "%20"; }
+    if ch == "!" { return "%21"; }
+    if ch == "\"" { return "%22"; }
+    if ch == "#" { return "%23"; }
+    if ch == "$" { return "%24"; }
+    if ch == "%" { return "%25"; }
+    if ch == "&" { return "%26"; }
+    if ch == "'" { return "%27"; }
+    if ch == "(" { return "%28"; }
+    if ch == ")" { return "%29"; }
+    if ch == "*" { return "%2A"; }
+    if ch == "+" { return "%2B"; }
+    if ch == "," { return "%2C"; }
+    if ch == "/" { return "%2F"; }
+    if ch == ":" { return "%3A"; }
+    if ch == ";" { return "%3B"; }
+    if ch == "<" { return "%3C"; }
+    if ch == "=" { return "%3D"; }
+    if ch == ">" { return "%3E"; }
+    if ch == "?" { return "%3F"; }
+    if ch == "@" { return "%40"; }
+    if ch == "[" { return "%5B"; }
+    if ch == "\\" { return "%5C"; }
+    if ch == "]" { return "%5D"; }
+    if ch == "^" { return "%5E"; }
+    if ch == "`" { return "%60"; }
+    if ch == "{" { return "%7B"; }
+    if ch == "|" { return "%7C"; }
+    if ch == "}" { return "%7D"; }
+    return ch;
+}
+
+fn encode_component(value: str) -> str {
+    let out: str = "";
+    for i in range(value.len()) {
+        let ch: str = value.char_at(i);
+        if is_unreserved(ch) {
+            out = out + ch;
+        } else {
+            out = out + pct_encode_char(ch);
+        }
+    }
+    return out;
+}
+
+fn encode_query_component(value: str) -> str {
+    return encode_component(value).replace("%20", "+");
+}
+
+fn pct_decode_triplet(hex: str) -> str {
+    let h: str = hex.upper();
+    if h == "20" { return " "; }
+    if h == "21" { return "!"; }
+    if h == "22" { return "\""; }
+    if h == "23" { return "#"; }
+    if h == "24" { return "$"; }
+    if h == "25" { return "%"; }
+    if h == "26" { return "&"; }
+    if h == "27" { return "'"; }
+    if h == "28" { return "("; }
+    if h == "29" { return ")"; }
+    if h == "2A" { return "*"; }
+    if h == "2B" { return "+"; }
+    if h == "2C" { return ","; }
+    if h == "2F" { return "/"; }
+    if h == "3A" { return ":"; }
+    if h == "3B" { return ";"; }
+    if h == "3C" { return "<"; }
+    if h == "3D" { return "="; }
+    if h == "3E" { return ">"; }
+    if h == "3F" { return "?"; }
+    if h == "40" { return "@"; }
+    if h == "5B" { return "["; }
+    if h == "5C" { return "\\"; }
+    if h == "5D" { return "]"; }
+    if h == "5E" { return "^"; }
+    if h == "60" { return "`"; }
+    if h == "7B" { return "{"; }
+    if h == "7C" { return "|"; }
+    if h == "7D" { return "}"; }
+    return "%" + hex;
+}
+
+fn decode_component(value: str) -> str {
+    let out: str = "";
+    let i: int = 0;
+    while i < value.len() {
+        let ch: str = value.char_at(i);
+        if ch == "%" and i + 2 < value.len() {
+            out = out + pct_decode_triplet(value.substring(i + 1, i + 3));
+            i = i + 3;
+        } else {
+            out = out + ch;
+            i = i + 1;
+        }
+    }
+    return out;
+}
+
+fn decode_query_component(value: str) -> str {
+    return decode_component(value.replace("+", " "));
+}
+
+fn split_host_port(authority: str) -> Url {
+    let scheme: str = "";
+    let host: str = authority;
+    let port: str = "";
+    let pos: int = authority.find(":");
+    if pos >= 0 {
+        host = authority.substring(0, pos);
+        port = authority.substring(pos + 1, authority.len());
+    }
+    return Url(scheme, host, port, "", "", "");
+}
+
+fn parse(raw: str) -> Url {
+    let scheme: str = "";
+    let host: str = "";
+    let port: str = "";
+    let path: str = "";
+    let query: str = "";
+    let fragment: str = "";
+
+    let rest: str = raw;
+    let scheme_pos: int = rest.find("://");
+    if scheme_pos >= 0 {
+        scheme = rest.substring(0, scheme_pos).lower();
+        rest = rest.substring(scheme_pos + 3, rest.len());
+
+        let slash: int = rest.find("/");
+        let authority: str = rest;
+        if slash >= 0 {
+            authority = rest.substring(0, slash);
+            rest = rest.substring(slash, rest.len());
+        } else {
+            rest = "/";
+        }
+
+        let hp: Url = split_host_port(authority);
+        host = hp.host;
+        port = hp.port;
+    }
+
+    let hash: int = rest.find("#");
+    if hash >= 0 {
+        fragment = rest.substring(hash + 1, rest.len());
+        rest = rest.substring(0, hash);
+    }
+
+    let q: int = rest.find("?");
+    if q >= 0 {
+        path = rest.substring(0, q);
+        query = rest.substring(q + 1, rest.len());
+    } else {
+        path = rest;
+    }
+
+    if path == "" {
+        path = "/";
+    }
+    return Url(scheme, host, port, path, query, fragment);
+}
+
+fn stringify(u: Url) -> str {
+    let out: str = "";
+    if u.scheme != "" {
+        out = out + u.scheme + "://";
+    }
+    out = out + u.host;
+    if u.port != "" {
+        out = out + ":" + u.port;
+    }
+    if u.path == "" {
+        out = out + "/";
+    } else {
+        out = out + u.path;
+    }
+    if u.query != "" {
+        out = out + "?" + u.query;
+    }
+    if u.fragment != "" {
+        out = out + "#" + u.fragment;
+    }
+    return out;
+}
+
+fn dirname(path: str) -> str {
+    let last: int = -1;
+    for i in range(path.len()) {
+        if path.char_at(i) == "/" {
+            last = i;
+        }
+    }
+    if last < 0 {
+        return "/";
+    }
+    return path.substring(0, last + 1);
+}
+
+fn normalize_path(path: str) -> str {
+    let absolute: bool = path.starts_with("/");
+    let parts: list<str> = path.split("/");
+    let stack: list<str> = [];
+    for part in parts {
+        if part != "" and part != "." {
+            if part == ".." {
+                if stack.len() > 0 {
+                    let removed: str = stack.pop();
+                }
+            } else {
+                stack.push(part);
+            }
+        }
+    }
+
+    let out: str = "";
+    for part in stack {
+        if out == "" {
+            out = part;
+        } else {
+            out = out + "/" + part;
+        }
+    }
+    if absolute {
+        return "/" + out;
+    }
+    if out == "" {
+        return "/";
+    }
+    return out;
+}
+
+fn resolve(base_url: str, href: str) -> str {
+    if href.starts_with("http://") or href.starts_with("https://") {
+        return href;
+    }
+    let base: Url = parse(base_url);
+    if href.starts_with("//") {
+        return base.scheme + ":" + href;
+    }
+    if href.starts_with("#") {
+        let copy: Url = Url(base.scheme, base.host, base.port, base.path, base.query, href.substring(1, href.len()));
+        return stringify(copy);
+    }
+
+    let path_part: str = href;
+    let query_part: str = "";
+    let fragment_part: str = "";
+    let hash: int = path_part.find("#");
+    if hash >= 0 {
+        fragment_part = path_part.substring(hash + 1, path_part.len());
+        path_part = path_part.substring(0, hash);
+    }
+    let q: int = path_part.find("?");
+    if q >= 0 {
+        query_part = path_part.substring(q + 1, path_part.len());
+        path_part = path_part.substring(0, q);
+    }
+
+    let new_path: str = "";
+    if path_part == "" {
+        new_path = base.path;
+    } elif path_part.starts_with("/") {
+        new_path = normalize_path(path_part);
+    } else {
+        new_path = normalize_path(dirname(base.path) + path_part);
+    }
+
+    return stringify(Url(base.scheme, base.host, base.port, new_path, query_part, fragment_part));
+}
+
+fn query_parse(query: str) -> dict<str, str> {
+    let out: dict<str, str> = {};
+    let q: str = query;
+    if q.starts_with("?") {
+        q = q.substring(1, q.len());
+    }
+    if q == "" {
+        return out;
+    }
+    for part in q.split("&") {
+        if part != "" {
+            let eq: int = part.find("=");
+            if eq >= 0 {
+                let key: str = decode_query_component(part.substring(0, eq));
+                let value: str = decode_query_component(part.substring(eq + 1, part.len()));
+                out[key] = value;
+            } else {
+                out[decode_query_component(part)] = "";
+            }
+        }
+    }
+    return out;
+}
+
+fn query_build(values: dict<str, str>) -> str {
+    let out: str = "";
+    for key in values.keys() {
+        let part: str = encode_query_component(key) + "=" + encode_query_component(values[key]);
+        if out == "" {
+            out = part;
+        } else {
+            out = out + "&" + part;
+        }
+    }
+    return out;
+}
+
+fn query_pairs(pairs: list<Pair>) -> str {
+    let out: str = "";
+    for pair in pairs {
+        let part: str = encode_query_component(pair.key) + "=" + encode_query_component(pair.value);
+        if out == "" {
+            out = part;
+        } else {
+            out = out + "&" + part;
+        }
+    }
+    return out;
+}
+
+fn pair(key: str, value: str) -> Pair {
+    return Pair(key, value);
+}

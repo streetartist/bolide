@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "0.12.1",
+    [string]$Version = "0.13.3",
     [string]$LinuxTarget = "x86_64-unknown-linux-gnu",
     [string]$DistDir = "dist",
     [switch]$SkipMsi,
@@ -51,6 +51,18 @@ function Write-Utf8NoBom {
 function Xml-Escape {
     param([string]$Text)
     return [System.Security.SecurityElement]::Escape($Text)
+}
+
+function Get-RelativePathCompat {
+    param([string]$BasePath, [string]$TargetPath)
+    $BaseFull = [System.IO.Path]::GetFullPath($BasePath)
+    if (-not $BaseFull.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
+        $BaseFull += [System.IO.Path]::DirectorySeparatorChar
+    }
+    $TargetFull = [System.IO.Path]::GetFullPath($TargetPath)
+    $BaseUri = [System.Uri]::new($BaseFull)
+    $TargetUri = [System.Uri]::new($TargetFull)
+    return [System.Uri]::UnescapeDataString($BaseUri.MakeRelativeUri($TargetUri).ToString()).Replace("/", "\")
 }
 
 function New-StableId {
@@ -342,7 +354,7 @@ function New-WindowsMsi {
 
     $Files = Get-ChildItem -LiteralPath $PayloadDir -Recurse -File | Sort-Object FullName
     foreach ($File in $Files) {
-        $Rel = [System.IO.Path]::GetRelativePath($PayloadDir, $File.FullName).Replace("\", "/")
+        $Rel = (Get-RelativePathCompat $PayloadDir $File.FullName).Replace("\", "/")
         $RelDir = ([System.IO.Path]::GetDirectoryName($Rel) -replace "\\", "/")
         if (-not $RelDir) { $RelDir = "" }
         Register-Dir $Dirs $RelDir
@@ -367,7 +379,7 @@ function New-WindowsMsi {
     }
 
     foreach ($File in $Files) {
-        $Rel = [System.IO.Path]::GetRelativePath($PayloadDir, $File.FullName).Replace("\", "/")
+        $Rel = (Get-RelativePathCompat $PayloadDir $File.FullName).Replace("\", "/")
         $RelDir = ([System.IO.Path]::GetDirectoryName($Rel) -replace "\\", "/")
         if (-not $RelDir) { $RelDir = "" }
         $DirId = $Dirs[$RelDir]

@@ -1,0 +1,85 @@
+import "std/cli/cli.bl" as cli;
+
+fn check_bool(name: str, got: bool, want: bool) {
+    if got == want {
+        print("ok " + name + "\n");
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want) + "\n");
+    }
+}
+
+fn check_int(name: str, got: int, want: int) {
+    if got == want {
+        print("ok " + name + "\n");
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want) + "\n");
+    }
+}
+
+fn check_str(name: str, got: str, want: str) {
+    if got == want {
+        print("ok " + name + "\n");
+    } else {
+        print("FAIL " + name + " got=" + got + " want=" + want + "\n");
+    }
+}
+
+let specs: list<cli.Spec> = [
+    cli.flag("verbose", "v", "print more output"),
+    cli.flag("dry-run", "n", "do not write changes"),
+    cli.option("output", "o", "FILE", "out.txt", "write output to file"),
+    cli.option("count", "c", "N", "1", "number of times"),
+    cli.required_option("name", "", "NAME", "name to greet"),
+];
+
+let parsed: cli.Args = cli.parse([
+    "tool",
+    "--verbose",
+    "-n",
+    "-o",
+    "result.txt",
+    "--count=3",
+    "--name",
+    "bolide",
+    "input.txt",
+    "--",
+    "--literal"
+], specs);
+
+check_str("program", parsed.program, "tool");
+check_bool("verbose", parsed.flag("verbose"), true);
+check_bool("dry run", parsed.flag("dry-run"), true);
+check_str("output", parsed.value("output"), "result.txt");
+check_int("count int", parsed.int_or("count", 0), 3);
+check_str("name", parsed.value("name"), "bolide");
+check_int("positionals count", parsed.positional_count(), 2);
+check_str("positional first", parsed.positional(0), "input.txt");
+check_str("positional literal", parsed.positional(1), "--literal");
+check_bool("has output", parsed.has("output"), true);
+check_bool("no errors", parsed.has_errors(), false);
+
+let defaults: cli.Args = cli.parse(["tool", "--name=demo"], specs);
+check_bool("default flag", defaults.flag("verbose"), false);
+check_str("default value", defaults.value("output"), "out.txt");
+check_int("default int", defaults.int_or("count", 0), 1);
+
+let grouped: cli.Args = cli.parse(["tool", "-vn", "--name", "demo"], specs);
+check_bool("group verbose", grouped.flag("verbose"), true);
+check_bool("group dry run", grouped.flag("dry-run"), true);
+check_bool("group no errors", grouped.has_errors(), false);
+
+let missing: cli.Args = cli.parse(["tool", "-o"], specs);
+check_bool("missing errors", missing.has_errors(), true);
+check_bool("missing output error", missing.error_text().contains("missing value for -o"), true);
+check_bool("missing required error", missing.error_text().contains("missing required option: --name"), true);
+
+let simple: cli.Args = cli.parse_simple(["tool", "--port=8080", "--debug", "serve"]);
+check_str("simple value", simple.value("port"), "8080");
+check_bool("simple flag", simple.flag("debug"), true);
+check_str("simple positional", simple.positional(0), "serve");
+
+let help_text: str = cli.help("tool", "demo command", specs);
+check_bool("help usage", help_text.contains("Usage: tool [options]"), true);
+check_bool("help option", help_text.contains("--output <FILE>"), true);
+
+print("std cli done\n");

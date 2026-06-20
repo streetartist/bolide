@@ -1,0 +1,51 @@
+// Bolide process standard library.
+// Usage: import "std/process/process.bl" as process;
+
+extern "bolide" {
+    fn bolide_process_run(program: *char, args: *void) -> *void;
+    fn bolide_process_run_shell(command: *char) -> *void;
+    fn bolide_process_status(res: *void) -> i64;
+    fn bolide_process_stdout(res: *void) -> str;
+    fn bolide_process_stderr(res: *void) -> str;
+    fn bolide_process_success(res: *void) -> i64;
+    fn bolide_process_free(res: *void);
+}
+
+class Result {
+    handle: ptr;
+
+    fn status() -> int {
+        return bolide_process_status(self.handle);
+    }
+
+    fn stdout() -> str {
+        return bolide_process_stdout(self.handle);
+    }
+
+    fn stderr() -> str {
+        return bolide_process_stderr(self.handle);
+    }
+
+    fn success() -> bool {
+        return bolide_process_success(self.handle) != 0;
+    }
+
+    fn close() {
+        if self.handle != 0 {
+            bolide_process_free(self.handle);
+            self.handle = 0;
+        }
+    }
+}
+
+fn run(program: str, args: list<str>) -> Result {
+    return Result(bolide_process_run(program, args));
+}
+
+fn run0(program: str) -> Result {
+    return run(program, []);
+}
+
+fn shell(command: str) -> Result {
+    return Result(bolide_process_run_shell(command));
+}

@@ -1,0 +1,36 @@
+import "std/env/env.bl" as env;
+
+fn check_bool(name: str, got: bool, want: bool) {
+    if got == want {
+        print("ok " + name + "\n");
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want) + "\n");
+    }
+}
+
+fn check_str(name: str, got: str, want: str) {
+    if got == want {
+        print("ok " + name + "\n");
+    } else {
+        print("FAIL " + name + " got=" + got + " want=" + want + "\n");
+    }
+}
+
+let key: str = "BOLIDE_TEST_ENV_LIB";
+env.remove(key);
+check_bool("missing", env.contains(key), false);
+check_str("get_or missing", env.get_or(key, "fallback"), "fallback");
+check_bool("set", env.set(key, "value"), true);
+check_bool("contains", env.contains(key), true);
+check_str("get", env.get(key), "value");
+check_bool("remove", env.remove(key), true);
+check_bool("removed", env.contains(key), false);
+
+check_bool("args nonempty", env.args().len() > 0, true);
+check_bool("vars nonempty", env.vars().len() > 0, true);
+check_bool("os nonempty", env.os().len() > 0, true);
+check_bool("arch nonempty", env.arch().len() > 0, true);
+check_bool("family nonempty", env.family().len() > 0, true);
+check_bool("temp dir nonempty", env.temp_dir().len() > 0, true);
+
+print("std env done\n");

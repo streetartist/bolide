@@ -1,0 +1,174 @@
+// Bolide crawler helper library.
+// Usage: import "std/crawler/crawler.bl" as crawler;
+
+import "std/web/web.bl" as web;
+import "std/html/html.bl" as html;
+import "std/url/url.bl" as url;
+import "std/time/time.bl" as time;
+import "std/fs/fs.bl" as fs;
+
+class Page {
+    url: str;
+    status: int;
+    body: str;
+}
+
+class Queue {
+    pending: list<str>;
+    seen: dict<str, bool>;
+
+    fn add(target: str) -> bool {
+        if target == "" {
+            return false;
+        }
+        if self.seen.contains(target) {
+            return false;
+        }
+        self.seen[target] = true;
+        self.pending.push(target);
+        return true;
+    }
+
+    fn add_all(targets: list<str>) -> int {
+        let count: int = 0;
+        for target in targets {
+            if self.add(target) {
+                count = count + 1;
+            }
+        }
+        return count;
+    }
+
+    fn has_next() -> bool {
+        return self.pending.len() > 0;
+    }
+
+    fn next() -> str {
+        if self.pending.len() == 0 {
+            return "";
+        }
+        return self.pending.remove(0);
+    }
+
+    fn pending_count() -> int {
+        return self.pending.len();
+    }
+
+    fn seen_count() -> int {
+        return self.seen.len();
+    }
+}
+
+class Options {
+    timeout_ms: int;
+    max_redirects: int;
+    delay_ms: int;
+    user_agent: str;
+}
+
+fn options(timeout_ms: int, max_redirects: int, delay_ms: int, user_agent: str) -> Options {
+    return Options(timeout_ms, max_redirects, delay_ms, user_agent);
+}
+
+fn default_options() -> Options {
+    return Options(5000, 3, 0, "bolide-crawler/0.1");
+}
+
+fn queue() -> Queue {
+    let pending: list<str> = [];
+    let seen: dict<str, bool> = {};
+    return Queue(pending, seen);
+}
+
+fn headers(opts: Options) -> str {
+    let ua: str = opts.user_agent;
+    if ua == "" {
+        ua = "bolide-crawler/0.1";
+    }
+    return "User-Agent: " + ua + "\r\n";
+}
+
+fn fetch(target: str, opts: Options) -> Page {
+    if opts.delay_ms > 0 {
+        time.sleep_ms(opts.delay_ms);
+    }
+    let res: web.ClientResponse = web.fetch_with_options(
+        "GET",
+        target,
+        "",
+        headers(opts),
+        opts.timeout_ms,
+        opts.max_redirects
+    );
+    let status: int = res.status();
+    let body: str = res.body_text();
+    res.free();
+    return Page(target, status, body);
+}
+
+fn ok(page: Page) -> bool {
+    return page.status >= 200 and page.status < 300;
+}
+
+fn normalize_link(base_url: str, href: str) -> str {
+    let h: str = href.trim();
+    if h == "" {
+        return "";
+    }
+    if h.starts_with("mailto:") or h.starts_with("tel:") or h.starts_with("javascript:") {
+        return "";
+    }
+    return url.resolve(base_url, h);
+}
+
+fn links(base_url: str, body: str) -> list<str> {
+    let out: list<str> = [];
+    for href in html.links(body) {
+        let target: str = normalize_link(base_url, href);
+        if target != "" {
+            out.push(target);
+        }
+    }
+    return out;
+}
+
+fn same_host(a: str, b: str) -> bool {
+    return url.parse(a).host.lower() == url.parse(b).host.lower();
+}
+
+fn internal_links(base_url: str, body: str) -> list<str> {
+    let out: list<str> = [];
+    for target in links(base_url, body) {
+        if same_host(base_url, target) {
+            out.push(target);
+        }
+    }
+    return out;
+}
+
+fn save(page: Page, path: str) -> bool {
+    return fs.write_text(path, page.body);
+}
+
+fn page_title(page: Page) -> str {
+    return html.title(page.body);
+}
+
+fn crawl_once(q: Queue, opts: Options, same_site_only: bool) -> Page {
+    let target: str = q.next();
+    if target == "" {
+        return Page("", 0, "");
+    }
+
+    let page: Page = fetch(target, opts);
+    if ok(page) {
+        let discovered: list<str> = [];
+        if same_site_only {
+            discovered = internal_links(target, page.body);
+        } else {
+            discovered = links(target, page.body);
+        }
+        q.add_all(discovered);
+    }
+    return page;
+}

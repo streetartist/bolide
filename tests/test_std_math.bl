@@ -1,0 +1,50 @@
+import "std/math/math.bl" as math;
+
+fn check_bool(name: str, got: bool, want: bool) {
+    if got == want {
+        print("ok " + name + "\n");
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want) + "\n");
+    }
+}
+
+fn check_int(name: str, got: int, want: int) {
+    if got == want {
+        print("ok " + name + "\n");
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want) + "\n");
+    }
+}
+
+fn close(name: str, got: float, want: float) {
+    let delta: float = got - want;
+    if delta < 0.0 {
+        delta = -delta;
+    }
+    check_bool(name, delta < 0.000001, true);
+}
+
+check_int("abs", math.abs(-7), 7);
+check_int("min", math.min(3, 9), 3);
+check_int("max", math.max(3, 9), 9);
+check_int("clamp mid", math.clamp(5, 1, 9), 5);
+check_int("clamp low", math.clamp(-1, 1, 9), 1);
+check_int("clamp high", math.clamp(12, 1, 9), 9);
+check_int("clamp swapped", math.clamp(5, 9, 1), 5);
+
+close("abs float", math.abs(-1.5), 1.5);
+close("min float", math.min(1.5, 2.5), 1.5);
+close("max float", math.max(1.5, 2.5), 2.5);
+close("clamp float", math.clamp(9.0, 1.0, 3.0), 3.0);
+close("floor", math.floor(1.9), 1.0);
+close("ceil", math.ceil(1.1), 2.0);
+close("round", math.round(1.6), 2.0);
+close("trunc", math.trunc(1.9), 1.0);
+close("sqrt", math.sqrt(16.0), 4.0);
+close("pow", math.pow(2.0, 8.0), 256.0);
+close("sin", math.sin(0.0), 0.0);
+close("cos", math.cos(0.0), 1.0);
+close("ln", math.ln(math.E), 1.0);
+close("log", math.log(8.0, 2.0), 3.0);
+
+print("std math done\n");
