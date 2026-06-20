@@ -4,9 +4,9 @@ import "std/config/config.bl" as config;
 import "std/log/log.bl" as log;
 
 let obj: str = json.object([
-    json.pair("name", json.string("Bolide \"std\"")),
-    json.pair("ok", json.from_bool(true)),
-    json.pair("count", json.from_int(3)),
+    json.pair("name", json.value("Bolide \"std\"")),
+    json.pair("ok", json.value(true)),
+    json.pair("count", json.value(3)),
     json.pair("tags", json.string_array(["web", "json"]))
 ]);
 

@@ -27,35 +27,23 @@ fn null() -> str {
     return "null";
 }
 
-fn bool_value(value: bool) -> str {
+fn value(value: bool) -> str {
     if value {
         return "true";
     }
     return "false";
 }
 
-fn int_value(value: int) -> str {
+fn value(value: int) -> str {
     return str(value);
 }
 
-fn float_value(value: float) -> str {
+fn value(value: float) -> str {
     return str(value);
 }
 
-fn string(value: str) -> str {
+fn value(value: str) -> str {
     return quote(value);
-}
-
-fn from_int(value: int) -> str {
-    return int_value(value);
-}
-
-fn from_float(value: float) -> str {
-    return float_value(value);
-}
-
-fn from_bool(value: bool) -> str {
-    return bool_value(value);
 }
 
 fn pair(key: str, value_json: str) -> Pair {
@@ -79,7 +67,7 @@ fn raw_array(items: list<str>) -> str {
 fn string_array(items: list<str>) -> str {
     let values: list<str> = [];
     for item in items {
-        values.push(quote(item));
+        values.push(value(item));
     }
     return raw_array(values);
 }
@@ -87,7 +75,7 @@ fn string_array(items: list<str>) -> str {
 fn int_array(items: list<int>) -> str {
     let values: list<str> = [];
     for item in items {
-        values.push(str(item));
+        values.push(value(item));
     }
     return raw_array(values);
 }
@@ -95,7 +83,7 @@ fn int_array(items: list<int>) -> str {
 fn float_array(items: list<float>) -> str {
     let values: list<str> = [];
     for item in items {
-        values.push(str(item));
+        values.push(value(item));
     }
     return raw_array(values);
 }
@@ -103,7 +91,7 @@ fn float_array(items: list<float>) -> str {
 fn bool_array(items: list<bool>) -> str {
     let values: list<str> = [];
     for item in items {
-        values.push(bool_value(item));
+        values.push(value(item));
     }
     return raw_array(values);
 }
@@ -125,7 +113,7 @@ fn object(pairs: list<Pair>) -> str {
 fn dict_str(values: dict<str, str>) -> str {
     let pairs: list<Pair> = [];
     for key in values.keys() {
-        pairs.push(pair(key, quote(values[key])));
+        pairs.push(pair(key, value(values[key])));
     }
     return object(pairs);
 }
@@ -133,7 +121,7 @@ fn dict_str(values: dict<str, str>) -> str {
 fn dict_int(values: dict<str, int>) -> str {
     let pairs: list<Pair> = [];
     for key in values.keys() {
-        pairs.push(pair(key, str(values[key])));
+        pairs.push(pair(key, value(values[key])));
     }
     return object(pairs);
 }
@@ -141,7 +129,7 @@ fn dict_int(values: dict<str, int>) -> str {
 fn dict_bool(values: dict<str, bool>) -> str {
     let pairs: list<Pair> = [];
     for key in values.keys() {
-        pairs.push(pair(key, bool_value(values[key])));
+        pairs.push(pair(key, value(values[key])));
     }
     return object(pairs);
 }
