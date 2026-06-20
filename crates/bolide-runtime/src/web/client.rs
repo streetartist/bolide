@@ -15,6 +15,27 @@ pub struct BolideWebClientResponse {
     status: i64,
     headers: Vec<(String, String)>,
     body: Vec<u8>,
+    error: String,
+}
+
+impl BolideWebClientResponse {
+    fn ok(status: i64, headers: Vec<(String, String)>, body: Vec<u8>) -> Self {
+        Self {
+            status,
+            headers,
+            body,
+            error: String::new(),
+        }
+    }
+
+    fn error(message: impl Into<String>) -> Self {
+        Self {
+            status: 0,
+            headers: Vec::new(),
+            body: Vec::new(),
+            error: message.into(),
+        }
+    }
 }
 
 fn parse_url(url: &str) -> Option<(bool, String, u16, String)> {
@@ -67,6 +88,7 @@ fn read_response(mut io: impl Read) -> std::io::Result<BolideWebClientResponse> 
             status: 0,
             headers: Vec::new(),
             body: data,
+            error: "invalid HTTP response: missing header terminator".to_string(),
         });
     };
     let head = String::from_utf8_lossy(&data[..pos + 4]);
@@ -96,11 +118,7 @@ fn read_response(mut io: impl Read) -> std::io::Result<BolideWebClientResponse> 
     } else {
         data[pos + 4..].to_vec()
     };
-    Ok(BolideWebClientResponse {
-        status,
-        headers,
-        body,
-    })
+    Ok(BolideWebClientResponse::ok(status, headers, body))
 }
 
 fn request_once(
@@ -109,9 +127,11 @@ fn request_once(
     body: &[u8],
     headers: &str,
     timeout: Duration,
-) -> Option<BolideWebClientResponse> {
-    let (https, host, port, path) = parse_url(url)?;
-    let mut stream = TcpStream::connect((host.as_str(), port)).ok()?;
+) -> Result<BolideWebClientResponse, String> {
+    let (https, host, port, path) =
+        parse_url(url).ok_or_else(|| format!("invalid URL: {}", url))?;
+    let mut stream = TcpStream::connect((host.as_str(), port))
+        .map_err(|e| format!("connect {}:{} failed: {}", host, port, e))?;
     let _ = stream.set_read_timeout(Some(timeout));
     let _ = stream.set_write_timeout(Some(timeout));
     let request = format!(
@@ -123,17 +143,28 @@ fn request_once(
         headers
     );
     if https {
-        let connector = TlsConnector::new().ok()?;
-        let mut tls = connector.connect(&host, stream).ok()?;
-        tls.write_all(request.as_bytes()).ok()?;
-        tls.write_all(body).ok()?;
-        tls.flush().ok()?;
-        read_response(tls).ok()
+        let connector = TlsConnector::new().map_err(|e| format!("TLS setup failed: {}", e))?;
+        let mut tls = connector
+            .connect(&host, stream)
+            .map_err(|e| format!("TLS connect {} failed: {}", host, e))?;
+        tls.write_all(request.as_bytes())
+            .map_err(|e| format!("write request failed: {}", e))?;
+        tls.write_all(body)
+            .map_err(|e| format!("write body failed: {}", e))?;
+        tls.flush()
+            .map_err(|e| format!("flush request failed: {}", e))?;
+        read_response(tls).map_err(|e| format!("read response failed: {}", e))
     } else {
-        stream.write_all(request.as_bytes()).ok()?;
-        stream.write_all(body).ok()?;
-        stream.flush().ok()?;
-        read_response(stream).ok()
+        stream
+            .write_all(request.as_bytes())
+            .map_err(|e| format!("write request failed: {}", e))?;
+        stream
+            .write_all(body)
+            .map_err(|e| format!("write body failed: {}", e))?;
+        stream
+            .flush()
+            .map_err(|e| format!("flush request failed: {}", e))?;
+        read_response(stream).map_err(|e| format!("read response failed: {}", e))
     }
 }
 
@@ -162,7 +193,7 @@ fn fetch_with_options(
     headers: &str,
     timeout_ms: i64,
     max_redirects: i64,
-) -> Option<BolideWebClientResponse> {
+) -> BolideWebClientResponse {
     let timeout = if timeout_ms > 0 {
         Duration::from_millis(timeout_ms as u64)
     } else {
@@ -173,15 +204,21 @@ fn fetch_with_options(
     let mut body = body.to_vec();
     let max_redirects = max_redirects.clamp(0, 20);
     for redirect_count in 0..=max_redirects {
-        let res = request_once(&method, &url, &body, headers, timeout)?;
+        let res = match request_once(&method, &url, &body, headers, timeout) {
+            Ok(res) => res,
+            Err(message) => return BolideWebClientResponse::error(message),
+        };
         if !matches!(res.status, 301 | 302 | 303 | 307 | 308) || redirect_count == max_redirects {
-            return Some(res);
+            return res;
         }
         let Some(location) = find_header(&res.headers, "location") else {
-            return Some(res);
+            return res;
         };
         let Some(next_url) = redirect_url(&url, location) else {
-            return Some(res);
+            return BolideWebClientResponse::error(format!(
+                "invalid redirect location from {}: {}",
+                url, location
+            ));
         };
         if matches!(res.status, 301 | 302 | 303) && method != "GET" && method != "HEAD" {
             method = "GET".to_string();
@@ -189,10 +226,10 @@ fn fetch_with_options(
         }
         url = next_url;
     }
-    None
+    BolideWebClientResponse::error("redirect handling failed")
 }
 
-fn fetch(method: &str, url: &str, body: &[u8], headers: &str) -> Option<BolideWebClientResponse> {
+fn fetch(method: &str, url: &str, body: &[u8], headers: &str) -> BolideWebClientResponse {
     fetch_with_options(method, url, body, headers, 30_000, 5)
 }
 
@@ -207,10 +244,7 @@ pub extern "C" fn bolide_web_fetch(
     let url = cstr_to_str(url).unwrap_or("");
     let body = cstr_to_str(body).unwrap_or("").as_bytes().to_vec();
     let headers = cstr_to_str(headers).unwrap_or("");
-    fetch(method, url, &body, headers)
-        .map(Box::new)
-        .map(Box::into_raw)
-        .unwrap_or(std::ptr::null_mut())
+    Box::into_raw(Box::new(fetch(method, url, &body, headers)))
 }
 
 #[no_mangle]
@@ -220,15 +254,12 @@ pub extern "C" fn bolide_web_fetch_str(
     body: *const BolideString,
     headers: *const BolideString,
 ) -> *mut BolideWebClientResponse {
-    fetch(
+    Box::into_raw(Box::new(fetch(
         bstr_to_str(method),
         bstr_to_str(url),
         bstr_to_str(body).as_bytes(),
         bstr_to_str(headers),
-    )
-    .map(Box::new)
-    .map(Box::into_raw)
-    .unwrap_or(std::ptr::null_mut())
+    )))
 }
 
 #[no_mangle]
@@ -240,17 +271,14 @@ pub extern "C" fn bolide_web_fetch_with_options_str(
     timeout_ms: i64,
     max_redirects: i64,
 ) -> *mut BolideWebClientResponse {
-    fetch_with_options(
+    Box::into_raw(Box::new(fetch_with_options(
         bstr_to_str(method),
         bstr_to_str(url),
         bstr_to_str(body).as_bytes(),
         bstr_to_str(headers),
         timeout_ms,
         max_redirects,
-    )
-    .map(Box::new)
-    .map(Box::into_raw)
-    .unwrap_or(std::ptr::null_mut())
+    )))
 }
 
 #[no_mangle]
@@ -291,6 +319,16 @@ pub extern "C" fn bolide_web_client_response_body_bytes(
         return BolideBytes::new();
     }
     unsafe { BolideBytes::from_slice(&(*res).body) }
+}
+
+#[no_mangle]
+pub extern "C" fn bolide_web_client_response_error(
+    res: *const BolideWebClientResponse,
+) -> *mut BolideString {
+    if res.is_null() {
+        return BolideString::new("missing client response");
+    }
+    unsafe { BolideString::new(&(*res).error) }
 }
 
 #[no_mangle]

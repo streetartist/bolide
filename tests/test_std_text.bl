@@ -1,0 +1,37 @@
+import "std/text/text.bl" as text;
+
+fn check_str(name: str, got: str, want: str) {
+    if got == want {
+        print("ok " + name + "\n");
+    } else {
+        print("FAIL " + name + " got=" + got + " want=" + want + "\n");
+    }
+}
+
+fn check_int(name: str, got: int, want: int) {
+    if got == want {
+        print("ok " + name + "\n");
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want) + "\n");
+    }
+}
+
+check_str("join", text.join(["a", "b", "c"], "|"), "a|b|c");
+
+let parts: list<str> = text.lines("a\r\nb\nc");
+check_int("lines len", parts.len(), 3);
+check_str("lines item", parts[1], "b");
+
+let ws: list<str> = text.words("  hello\tbolide\nstd  ");
+check_int("words len", ws.len(), 3);
+check_str("words item", ws[2], "std");
+
+check_str("truncate", text.truncate("abcdef", 5, "..."), "ab...");
+check_str("pad left", text.pad_left("7", 3, "0"), "007");
+check_str("pad right", text.pad_right("x", 3, "."), "x..");
+check_str("indent", text.indent("a\nb", "> "), "> a\n> b");
+check_str("snake", text.snake("HelloBolide stdLib"), "hello_bolide_std_lib");
+check_str("kebab", text.kebab("HelloBolide stdLib"), "hello-bolide-std-lib");
+check_str("slug", text.slug("Hello, Bolide!"), "hello-bolide");
+
+print("std text done\n");

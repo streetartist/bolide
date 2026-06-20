@@ -1,0 +1,35 @@
+import "std/http/http.bl" as http;
+
+fn check_bool(name: str, got: bool, want: bool) {
+    if got == want {
+        print("ok " + name + "\n");
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want) + "\n");
+    }
+}
+
+fn check_str(name: str, got: str, want: str) {
+    if got == want {
+        print("ok " + name + "\n");
+    } else {
+        print("FAIL " + name + " got=" + got + " want=" + want + "\n");
+    }
+}
+
+let h: str = http.header_lines([
+    http.header("Accept", "application/json"),
+    http.header("X-Test", "bolide")
+]);
+check_str("headers", h, "Accept: application/json\r\nX-Test: bolide\r\n");
+check_bool("json headers", http.json_headers().contains("Content-Type: application/json"), true);
+
+let ok_res: http.Response = http.Response(200, "hello", "text/plain", "");
+let fail_res: http.Response = http.Response(404, "missing", "text/plain", "");
+let error_res: http.Response = http.Response(0, "", "", "invalid URL: nope");
+check_bool("response ok", ok_res.ok(), true);
+check_bool("response fail", fail_res.ok(), false);
+check_bool("response error", error_res.ok(), false);
+check_bool("response has error", error_res.has_error(), true);
+check_str("response text", ok_res.text(), "hello");
+
+print("std http done\n");

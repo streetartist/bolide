@@ -1,0 +1,51 @@
+import "std/regex/regex.bl" as regex;
+
+fn check_bool(name: str, got: bool, want: bool) {
+    if got == want {
+        print("ok " + name + "\n");
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want) + "\n");
+    }
+}
+
+fn check_str(name: str, got: str, want: str) {
+    if got == want {
+        print("ok " + name + "\n");
+    } else {
+        print("FAIL " + name + " got=" + got + " want=" + want + "\n");
+    }
+}
+
+fn check_int(name: str, got: int, want: int) {
+    if got == want {
+        print("ok " + name + "\n");
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want) + "\n");
+    }
+}
+
+check_bool("valid", regex.is_valid("[a-z]+"), true);
+check_bool("invalid", regex.is_valid("[a-"), false);
+check_str("escape", regex.escape("a.b+c"), "a\\.b\\+c");
+check_bool("match", regex.is_match("\\d+", "abc123"), true);
+check_bool("no match", regex.is_match("^\\d+$", "abc123"), false);
+check_str("find", regex.find("\\d+", "abc123def45"), "123");
+check_str("missing find", regex.find("\\d+", "abc"), "");
+
+let nums: list<str> = regex.find_all("\\d+", "a1 b22 c333");
+check_int("find all len", nums.len(), 3);
+check_str("find all item", nums[1], "22");
+
+let caps: list<str> = regex.captures("([a-z]+)-(\\d+)", "id abc-123 done");
+check_int("captures len", caps.len(), 3);
+check_str("captures full", caps[0], "abc-123");
+check_str("captures group", caps[2], "123");
+
+check_str("replace first", regex.replace("\\d+", "a1 b22", "#"), "a# b22");
+check_str("replace all", regex.replace_all("\\d+", "a1 b22", "#"), "a# b#");
+
+let parts: list<str> = regex.split("\\s*,\\s*", "a, b,c");
+check_int("split len", parts.len(), 3);
+check_str("split item", parts[1], "b");
+
+print("std regex done\n");

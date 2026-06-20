@@ -1,0 +1,25 @@
+import "std/table/table.bl" as table;
+
+fn check_str(name: str, got: str, want: str) {
+    if got == want {
+        print("ok " + name + "\n");
+    } else {
+        print("FAIL " + name + " got=" + got + " want=" + want + "\n");
+    }
+}
+
+check_str(
+    "format",
+    table.format([["name", "age"], ["bolide", "1"]]),
+    "| name   | age |\n| bolide | 1   |"
+);
+
+check_str(
+    "format header",
+    table.format_with_header(["name", "lang"], [["bolide", "bl"], ["tool", "cli"]]),
+    "| name   | lang |\n| ------ | ---- |\n| bolide | bl   |\n| tool   | cli  |"
+);
+
+check_str("empty", table.format([]), "");
+
+print("std table done\n");

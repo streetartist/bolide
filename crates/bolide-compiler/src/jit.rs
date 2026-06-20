@@ -1083,6 +1083,42 @@ impl JitCompiler {
             bolide_runtime::bolide_random_bool as *const u8,
         );
         builder.symbol(
+            "bolide_regex_is_valid",
+            bolide_runtime::bolide_regex_is_valid as *const u8,
+        );
+        builder.symbol(
+            "bolide_regex_escape",
+            bolide_runtime::bolide_regex_escape as *const u8,
+        );
+        builder.symbol(
+            "bolide_regex_is_match",
+            bolide_runtime::bolide_regex_is_match as *const u8,
+        );
+        builder.symbol(
+            "bolide_regex_find",
+            bolide_runtime::bolide_regex_find as *const u8,
+        );
+        builder.symbol(
+            "bolide_regex_find_all",
+            bolide_runtime::bolide_regex_find_all as *const u8,
+        );
+        builder.symbol(
+            "bolide_regex_captures",
+            bolide_runtime::bolide_regex_captures as *const u8,
+        );
+        builder.symbol(
+            "bolide_regex_replace",
+            bolide_runtime::bolide_regex_replace as *const u8,
+        );
+        builder.symbol(
+            "bolide_regex_replace_all",
+            bolide_runtime::bolide_regex_replace_all as *const u8,
+        );
+        builder.symbol(
+            "bolide_regex_split",
+            bolide_runtime::bolide_regex_split as *const u8,
+        );
+        builder.symbol(
             "bolide_env_get",
             bolide_runtime::bolide_env_get as *const u8,
         );
@@ -1818,6 +1854,10 @@ impl JitCompiler {
         builder.symbol(
             "bolide_web_client_response_body_bytes",
             bolide_runtime::bolide_web_client_response_body_bytes as *const u8,
+        );
+        builder.symbol(
+            "bolide_web_client_response_error",
+            bolide_runtime::bolide_web_client_response_error as *const u8,
         );
         builder.symbol(
             "bolide_web_client_response_free",
@@ -3486,6 +3526,8 @@ impl JitCompiler {
                                 "values" => BolideType::List(v),
                                 "get" | "remove" => *v,
                                 "clone" => BolideType::Dict(k, v),
+                                "is_empty" | "contains" => BolideType::Bool,
+                                "len" => BolideType::Int,
                                 _ => BolideType::Int,
                             };
                         }
@@ -3493,6 +3535,11 @@ impl JitCompiler {
                             return match member.as_str() {
                                 "pop" | "get" | "first" | "last" | "remove" => *elem,
                                 "slice" | "copy" | "clone" | "filter" => BolideType::List(elem),
+                                "set" | "contains" | "includes" | "is_empty" | "empty" => {
+                                    BolideType::Bool
+                                }
+                                "len" | "length" | "size" | "index_of" | "index" | "find"
+                                | "count" => BolideType::Int,
                                 _ => BolideType::Int,
                             };
                         }
@@ -3501,6 +3548,12 @@ impl JitCompiler {
                                 "upper" | "lower" | "trim" | "strip" | "replace" | "repeat"
                                 | "substring" | "char_at" => BolideType::Str,
                                 "split" => BolideType::List(Box::new(BolideType::Str)),
+                                "contains" | "includes" | "starts_with" | "ends_with" => {
+                                    BolideType::Bool
+                                }
+                                "len" | "length" | "size" | "find" | "index_of" | "count" => {
+                                    BolideType::Int
+                                }
                                 _ => BolideType::Int,
                             };
                         }
@@ -3508,6 +3561,19 @@ impl JitCompiler {
                             return match member.as_str() {
                                 "copy" | "clone" => BolideType::Bytes,
                                 "to_string_lossy" => BolideType::Str,
+                                _ => BolideType::Int,
+                            };
+                        }
+                        BolideType::Channel(inner) => {
+                            return match member.as_str() {
+                                "recv" => *inner,
+                                "send" => BolideType::Bool,
+                                _ => BolideType::Int,
+                            };
+                        }
+                        BolideType::Future => {
+                            return match member.as_str() {
+                                "is_cancelled" => BolideType::Bool,
                                 _ => BolideType::Int,
                             };
                         }
@@ -15222,7 +15288,8 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                             "values" => BolideType::List(v),
                             "get" | "remove" => *v,
                             "clone" => BolideType::Dict(k, v),
-                            "len" | "is_empty" | "contains" => BolideType::Int,
+                            "is_empty" | "contains" => BolideType::Bool,
+                            "len" => BolideType::Int,
                             _ => BolideType::Int,
                         },
                         BolideType::List(elem) => match method.as_str() {
@@ -15236,7 +15303,12 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                                     .unwrap_or(*elem);
                                 BolideType::List(Box::new(ret))
                             }
-                            "len" | "index_of" | "count" | "is_empty" => BolideType::Int,
+                            "set" | "contains" | "includes" | "is_empty" | "empty" => {
+                                BolideType::Bool
+                            }
+                            "len" | "length" | "size" | "index_of" | "index" | "find" | "count" => {
+                                BolideType::Int
+                            }
                             _ => BolideType::Int,
                         },
                         BolideType::Str => match method.as_str() {
@@ -15245,12 +15317,24 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                             | "substring" | "char_at" => BolideType::Str,
                             // 返回 list<str>
                             "split" => BolideType::List(Box::new(BolideType::Str)),
-                            // 其余（len/find/contains/starts_with/ends_with/count...）返回 int
+                            "contains" | "includes" | "starts_with" | "ends_with" => {
+                                BolideType::Bool
+                            }
+                            // 其余（len/find/count...）返回 int
                             _ => BolideType::Int,
                         },
                         BolideType::Bytes => match method.as_str() {
                             "copy" | "clone" => BolideType::Bytes,
                             "to_string_lossy" => BolideType::Str,
+                            _ => BolideType::Int,
+                        },
+                        BolideType::Channel(inner) => match method.as_str() {
+                            "recv" => *inner,
+                            "send" => BolideType::Bool,
+                            _ => BolideType::Int,
+                        },
+                        BolideType::Future => match method.as_str() {
+                            "is_cancelled" => BolideType::Bool,
                             _ => BolideType::Int,
                         },
                         // 用户类方法：沿继承链查方法返回类型
@@ -15518,12 +15602,11 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                     .func_refs
                     .get("@_channel_send")
                     .ok_or("channel_send not found")?;
-                self.builder
+                let call = self
+                    .builder
                     .ins()
                     .call(channel_send_ref, &[channel_ptr, send_value]);
-
-                // send 在表达式语句中使用，返回占位值
-                Ok(self.builder.ins().iconst(types::I64, 0))
+                Ok(self.builder.inst_results(call)[0])
             }
             "recv" => {
                 if !args.is_empty() {
@@ -17481,7 +17564,8 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                             "values" => Ok(BolideType::List(v)),
                             "get" | "remove" => Ok(*v),
                             "clone" => Ok(BolideType::Dict(k, v)),
-                            "len" | "is_empty" | "contains" => Ok(BolideType::Int),
+                            "is_empty" | "contains" => Ok(BolideType::Bool),
+                            "len" => Ok(BolideType::Int),
                             _ => Err(format!("Unknown Dict method: {}", member)),
                         },
                         BolideType::List(elem) => match member.as_str() {
@@ -17494,15 +17578,22 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                                     .unwrap_or(*elem);
                                 Ok(BolideType::List(Box::new(ret)))
                             }
-                            "len" | "index_of" | "count" | "is_empty" => Ok(BolideType::Int),
+                            "set" | "contains" | "includes" | "is_empty" | "empty" => {
+                                Ok(BolideType::Bool)
+                            }
+                            "len" | "length" | "size" | "index_of" | "index" | "find" | "count" => {
+                                Ok(BolideType::Int)
+                            }
                             _ => Err(format!("Unknown List method: {}", member)),
                         },
                         BolideType::Str => match member.as_str() {
                             "upper" | "lower" | "trim" | "strip" | "replace" | "repeat"
                             | "substring" | "substr" | "char_at" => Ok(BolideType::Str),
                             "split" => Ok(BolideType::List(Box::new(BolideType::Str))),
-                            "len" | "length" | "size" | "find" | "index_of" | "contains"
-                            | "includes" | "starts_with" | "ends_with" | "count" => {
+                            "contains" | "includes" | "starts_with" | "ends_with" => {
+                                Ok(BolideType::Bool)
+                            }
+                            "len" | "length" | "size" | "find" | "index_of" | "count" => {
                                 Ok(BolideType::Int)
                             }
                             _ => Err(format!("Unknown Str method: {}", member)),
@@ -17516,12 +17607,13 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                             _ => Err(format!("Unknown Bytes method: {}", member)),
                         },
                         BolideType::Future => match member.as_str() {
-                            "close" | "cancel" | "is_cancelled" => Ok(BolideType::Int),
+                            "is_cancelled" => Ok(BolideType::Bool),
+                            "close" | "cancel" => Ok(BolideType::Int),
                             _ => Err(format!("Unknown Future method: {}", member)),
                         },
                         BolideType::Channel(inner) => match member.as_str() {
                             "recv" => Ok(*inner),
-                            "send" => Ok(BolideType::Int),
+                            "send" => Ok(BolideType::Bool),
                             _ => Err(format!("Unknown Channel method: {}", member)),
                         },
                         BolideType::Custom(class_name) => self

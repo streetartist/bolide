@@ -1,0 +1,93 @@
+// Bolide HTTP client convenience library.
+// Usage: import "std/http/http.bl" as http;
+
+import "std/web/web.bl" as web;
+
+class Header {
+    name: str;
+    value: str;
+}
+
+class Response {
+    status: int;
+    body: str;
+    content_type: str;
+    error: str;
+
+    fn ok() -> bool {
+        return self.error == "" and self.status >= 200 and self.status < 300;
+    }
+
+    fn text() -> str {
+        return self.body;
+    }
+
+    fn has_error() -> bool {
+        return self.error != "";
+    }
+}
+
+fn header(name: str, value: str) -> Header {
+    return Header(name, value);
+}
+
+fn header_lines(headers: list<Header>) -> str {
+    let out: str = "";
+    for item in headers {
+        out = out + item.name + ": " + item.value + "\r\n";
+    }
+    return out;
+}
+
+fn json_headers() -> str {
+    return "Content-Type: application/json\r\nAccept: application/json\r\n";
+}
+
+fn text_headers() -> str {
+    return "Content-Type: text/plain; charset=utf-8\r\nAccept: text/plain\r\n";
+}
+
+fn request_with_options(method: str, url: str, body: str, headers: str, timeout_ms: int, max_redirects: int) -> Response {
+    let res: web.ClientResponse = web.fetch_with_options(method, url, body, headers, timeout_ms, max_redirects);
+    let status: int = res.status();
+    let text: str = res.body_text();
+    let content_type: str = res.header("content-type");
+    let error: str = res.error();
+    if content_type == "" {
+        content_type = res.header("Content-Type");
+    }
+    res.free();
+    return Response(status, text, content_type, error);
+}
+
+fn request(method: str, url: str, body: str, headers: str) -> Response {
+    return request_with_options(method, url, body, headers, 15000, 5);
+}
+
+fn get(url: str) -> Response {
+    return request("GET", url, "", "");
+}
+
+fn get_with_headers(url: str, headers: str) -> Response {
+    return request("GET", url, "", headers);
+}
+
+fn post(url: str, body: str, content_type: str) -> Response {
+    return request("POST", url, body, "Content-Type: " + content_type + "\r\n");
+}
+
+fn post_json(url: str, body: str) -> Response {
+    return request("POST", url, body, json_headers());
+}
+
+fn put_json(url: str, body: str) -> Response {
+    return request("PUT", url, body, json_headers());
+}
+
+fn patch_json(url: str, body: str) -> Response {
+    return request("PATCH", url, body, json_headers());
+}
+
+fn delete(url: str) -> Response {
+    return request("DELETE", url, "", "");
+}

@@ -1,0 +1,144 @@
+// Bolide byte encoding helper library.
+// Usage: import "std/encoding/encoding.bl" as encoding;
+
+let b64_table: str = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+fn hex_digit(value: int) -> str {
+    return "0123456789abcdef".char_at(value);
+}
+
+fn hex_value(ch: str) -> int {
+    let c: str = ch.lower();
+    if c == "0" { return 0; }
+    if c == "1" { return 1; }
+    if c == "2" { return 2; }
+    if c == "3" { return 3; }
+    if c == "4" { return 4; }
+    if c == "5" { return 5; }
+    if c == "6" { return 6; }
+    if c == "7" { return 7; }
+    if c == "8" { return 8; }
+    if c == "9" { return 9; }
+    if c == "a" { return 10; }
+    if c == "b" { return 11; }
+    if c == "c" { return 12; }
+    if c == "d" { return 13; }
+    if c == "e" { return 14; }
+    if c == "f" { return 15; }
+    return -1;
+}
+
+fn hex_encode(data: bytes) -> str {
+    let out: str = "";
+    for i in range(data.len()) {
+        let value: int = data[i];
+        out = out + hex_digit(value / 16) + hex_digit(value % 16);
+    }
+    return out;
+}
+
+fn hex_decode(text: str) -> bytes {
+    let out: bytes = bytes();
+    let pending: int = -1;
+    for i in range(text.len()) {
+        let value: int = hex_value(text.char_at(i));
+        if value >= 0 {
+            if pending < 0 {
+                pending = value;
+            } else {
+                out.push(pending * 16 + value);
+                pending = -1;
+            }
+        }
+    }
+    return out;
+}
+
+fn b64_char(index: int) -> str {
+    return b64_table.char_at(index);
+}
+
+fn b64_value(ch: str) -> int {
+    let pos: int = b64_table.find(ch);
+    if pos >= 0 {
+        return pos;
+    }
+    return -1;
+}
+
+fn base64_encode(data: bytes) -> str {
+    let out: str = "";
+    let i: int = 0;
+    while i < data.len() {
+        let b0: int = data[i];
+        let b1: int = 0;
+        let b2: int = 0;
+        let remaining: int = data.len() - i;
+        if remaining > 1 {
+            b1 = data[i + 1];
+        }
+        if remaining > 2 {
+            b2 = data[i + 2];
+        }
+
+        out = out + b64_char(b0 / 4);
+        out = out + b64_char((b0 % 4) * 16 + b1 / 16);
+        if remaining > 1 {
+            out = out + b64_char((b1 % 16) * 4 + b2 / 64);
+        } else {
+            out = out + "=";
+        }
+        if remaining > 2 {
+            out = out + b64_char(b2 % 64);
+        } else {
+            out = out + "=";
+        }
+        i = i + 3;
+    }
+    return out;
+}
+
+fn is_b64_space(ch: str) -> bool {
+    return ch == " " or ch == "\n" or ch == "\r" or ch == "\t";
+}
+
+fn decode_quad(out: bytes, quad: list<int>, pad: int) {
+    if quad.len() < 4 {
+        return;
+    }
+    out.push(quad[0] * 4 + quad[1] / 16);
+    if pad < 2 {
+        out.push((quad[1] % 16) * 16 + quad[2] / 4);
+    }
+    if pad < 1 {
+        out.push((quad[2] % 4) * 64 + quad[3]);
+    }
+}
+
+fn base64_decode(text: str) -> bytes {
+    let out: bytes = bytes();
+    let quad: list<int> = [];
+    let pad: int = 0;
+
+    for i in range(text.len()) {
+        let ch: str = text.char_at(i);
+        if not is_b64_space(ch) {
+            if ch == "=" {
+                quad.push(0);
+                pad = pad + 1;
+            } else {
+                let value: int = b64_value(ch);
+                if value >= 0 {
+                    quad.push(value);
+                }
+            }
+            if quad.len() == 4 {
+                decode_quad(out, quad, pad);
+                quad = [];
+                pad = 0;
+            }
+        }
+    }
+
+    return out;
+}

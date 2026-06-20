@@ -1,0 +1,135 @@
+// Bolide in-memory cache helper library.
+// Usage: import "std/cache/cache.bl" as cache;
+
+import "std/time/time.bl" as time;
+
+class Cache {
+    values: dict<str, dynamic>;
+    expires_at: dict<str, int>;
+
+    fn set(key: str, value: dynamic) {
+        self.values[key] = value;
+        if self.expires_at.contains(key) {
+            self.expires_at.remove(key);
+        }
+    }
+
+    fn set_ttl(key: str, value: dynamic, ttl_ms: int) {
+        self.values[key] = value;
+        if ttl_ms > 0 {
+            self.expires_at[key] = time.now_ms() + ttl_ms;
+        } else {
+            if self.expires_at.contains(key) {
+                self.expires_at.remove(key);
+            }
+        }
+    }
+
+    fn is_expired(key: str) -> bool {
+        if not self.expires_at.contains(key) {
+            return false;
+        }
+        return time.now_ms() >= self.expires_at[key];
+    }
+
+    fn contains(key: str) -> bool {
+        if not self.values.contains(key) {
+            return false;
+        }
+        if self.is_expired(key) {
+            self.remove(key);
+            return false;
+        }
+        return true;
+    }
+
+    fn get_or(key: str, fallback: dynamic) -> dynamic {
+        if self.contains(key) {
+            return self.values[key];
+        }
+        return fallback;
+    }
+
+    fn remove(key: str) -> bool {
+        let existed: bool = self.values.contains(key);
+        if existed {
+            self.values.remove(key);
+        }
+        if self.expires_at.contains(key) {
+            self.expires_at.remove(key);
+        }
+        return existed;
+    }
+
+    fn clear() {
+        self.values.clear();
+        self.expires_at.clear();
+    }
+
+    fn cleanup() -> int {
+        let removed: int = 0;
+        let keys: list<str> = self.values.keys();
+        for key in keys {
+            if self.is_expired(key) {
+                self.remove(key);
+                removed = removed + 1;
+            }
+        }
+        return removed;
+    }
+
+    fn len() -> int {
+        self.cleanup();
+        return self.values.len();
+    }
+
+    fn is_empty() -> bool {
+        return self.len() == 0;
+    }
+
+    fn keys() -> list<str> {
+        self.cleanup();
+        return self.values.keys();
+    }
+
+    fn touch(key: str, ttl_ms: int) -> bool {
+        if not self.contains(key) {
+            return false;
+        }
+        if ttl_ms > 0 {
+            self.expires_at[key] = time.now_ms() + ttl_ms;
+        } else {
+            if self.expires_at.contains(key) {
+                self.expires_at.remove(key);
+            }
+        }
+        return true;
+    }
+
+    fn ttl_ms(key: str) -> int {
+        if not self.contains(key) {
+            return -1;
+        }
+        if not self.expires_at.contains(key) {
+            return -1;
+        }
+        let remaining: int = self.expires_at[key] - time.now_ms();
+        if remaining <= 0 {
+            self.remove(key);
+            return 0;
+        }
+        return remaining;
+    }
+}
+
+fn new() -> Cache {
+    let values: dict<str, dynamic> = {};
+    let expires_at: dict<str, int> = {};
+    return Cache(values, expires_at);
+}
+
+fn with_value(key: str, value: dynamic) -> Cache {
+    let c: Cache = new();
+    c.set(key, value);
+    return c;
+}

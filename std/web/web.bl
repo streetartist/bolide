@@ -144,6 +144,7 @@ extern "bolide" {
     fn bolide_web_client_response_header(res: *void, name: str) -> str;
     fn bolide_web_client_response_body_text(res: *void) -> str;
     fn bolide_web_client_response_body_bytes(res: *void) -> bytes;
+    fn bolide_web_client_response_error(res: *void) -> str;
     fn bolide_web_client_response_free(res: *void);
 }
 
@@ -637,6 +638,14 @@ class ClientResponse {
 
     fn body_bytes() -> bytes {
         return bolide_web_client_response_body_bytes(self.handle);
+    }
+
+    fn error() -> str {
+        return bolide_web_client_response_error(self.handle);
+    }
+
+    fn ok() -> bool {
+        return self.error() == "" and self.status() >= 200 and self.status() < 300;
     }
 
     fn free() {

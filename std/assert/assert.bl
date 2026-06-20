@@ -1,0 +1,105 @@
+// Bolide assertion helper library.
+// Usage: import "std/assert/assert.bl" as assert;
+
+let passed: int = 0;
+let failed: int = 0;
+
+fn reset() {
+    passed = 0;
+    failed = 0;
+}
+
+fn pass(name: str) {
+    passed = passed + 1;
+    print("ok " + name + "\n");
+}
+
+fn fail(name: str) {
+    failed = failed + 1;
+    print("FAIL " + name + "\n");
+}
+
+fn fail_with(name: str, detail: str) {
+    failed = failed + 1;
+    print("FAIL " + name + " " + detail + "\n");
+}
+
+fn is_true(name: str, got: bool) {
+    if got {
+        pass(name);
+    } else {
+        fail_with(name, "got=false want=true");
+    }
+}
+
+fn is_false(name: str, got: bool) {
+    if not got {
+        pass(name);
+    } else {
+        fail_with(name, "got=true want=false");
+    }
+}
+
+fn equal(name: str, got: str, want: str) {
+    if got == want {
+        pass(name);
+    } else {
+        fail_with(name, "got=\"" + got + "\" want=\"" + want + "\"");
+    }
+}
+
+fn equal(name: str, got: int, want: int) {
+    if got == want {
+        pass(name);
+    } else {
+        fail_with(name, "got=" + str(got) + " want=" + str(want));
+    }
+}
+
+fn equal(name: str, got: float, want: float) {
+    if got == want {
+        pass(name);
+    } else {
+        fail_with(name, "got=" + str(got) + " want=" + str(want));
+    }
+}
+
+fn equal(name: str, got: bool, want: bool) {
+    if got == want {
+        pass(name);
+    } else {
+        fail_with(name, "got=" + str(got) + " want=" + str(want));
+    }
+}
+
+fn contains(name: str, text: str, needle: str) {
+    if text.contains(needle) {
+        pass(name);
+    } else {
+        fail_with(name, "missing=\"" + needle + "\"");
+    }
+}
+
+fn not_contains(name: str, text: str, needle: str) {
+    if not text.contains(needle) {
+        pass(name);
+    } else {
+        fail_with(name, "unexpected=\"" + needle + "\"");
+    }
+}
+
+fn passed_count() -> int {
+    return passed;
+}
+
+fn failed_count() -> int {
+    return failed;
+}
+
+fn ok() -> bool {
+    return failed == 0;
+}
+
+fn summary() -> str {
+    return "passed=" + str(passed) + " failed=" + str(failed);
+}

@@ -1,0 +1,31 @@
+import "std/web/web.bl";
+import "std/http/http.bl" as http;
+
+fn check_bool(name: str, got: bool, want: bool) {
+    if got == want {
+        print("ok " + name + "\n");
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want) + "\n");
+    }
+}
+
+fn check_str_contains(name: str, got: str, needle: str) {
+    if got.contains(needle) {
+        print("ok " + name + "\n");
+    } else {
+        print("FAIL " + name + " got=" + got + " want contains=" + needle + "\n");
+    }
+}
+
+let res: web.ClientResponse = web.fetch_with_options("GET", "not-a-url", "", "", 10, 0);
+check_bool("web error status", res.status() == 0, true);
+check_bool("web not ok", res.ok(), false);
+check_str_contains("web error text", res.error(), "invalid URL");
+res.free();
+
+let hres: http.Response = http.get("not-a-url");
+check_bool("http not ok", hres.ok(), false);
+check_bool("http has error", hres.has_error(), true);
+check_str_contains("http error text", hres.error, "invalid URL");
+
+print("web client error done\n");

@@ -1,0 +1,54 @@
+// Bolide regex standard library.
+// Usage: import "std/regex/regex.bl" as regex;
+
+extern "bolide" {
+    fn bolide_regex_is_valid(pattern: *char) -> i64;
+    fn bolide_regex_escape(text: *char) -> str;
+    fn bolide_regex_is_match(pattern: *char, text: *char) -> i64;
+    fn bolide_regex_find(pattern: *char, text: *char) -> str;
+    fn bolide_regex_find_all(pattern: *char, text: *char) -> list;
+    fn bolide_regex_captures(pattern: *char, text: *char) -> list;
+    fn bolide_regex_replace(pattern: *char, text: *char, replacement: *char) -> str;
+    fn bolide_regex_replace_all(pattern: *char, text: *char, replacement: *char) -> str;
+    fn bolide_regex_split(pattern: *char, text: *char) -> list;
+}
+
+fn is_valid(pattern: str) -> bool {
+    return bolide_regex_is_valid(pattern) != 0;
+}
+
+fn escape(text: str) -> str {
+    return bolide_regex_escape(text);
+}
+
+fn is_match(pattern: str, text: str) -> bool {
+    return bolide_regex_is_match(pattern, text) != 0;
+}
+
+fn contains(pattern: str, text: str) -> bool {
+    return is_match(pattern, text);
+}
+
+fn find(pattern: str, text: str) -> str {
+    return bolide_regex_find(pattern, text);
+}
+
+fn find_all(pattern: str, text: str) -> list<str> {
+    return bolide_regex_find_all(pattern, text);
+}
+
+fn captures(pattern: str, text: str) -> list<str> {
+    return bolide_regex_captures(pattern, text);
+}
+
+fn replace(pattern: str, text: str, replacement: str) -> str {
+    return bolide_regex_replace(pattern, text, replacement);
+}
+
+fn replace_all(pattern: str, text: str, replacement: str) -> str {
+    return bolide_regex_replace_all(pattern, text, replacement);
+}
+
+fn split(pattern: str, text: str) -> list<str> {
+    return bolide_regex_split(pattern, text);
+}

@@ -1,0 +1,80 @@
+// Bolide text table formatting library.
+// Usage: import "std/table/table.bl" as table;
+
+fn pad_right(value: str, width: int) -> str {
+    if value.len() >= width {
+        return value;
+    }
+    return value + " ".repeat(width - value.len());
+}
+
+fn ensure_widths(widths: list<int>, count: int) {
+    while widths.len() < count {
+        widths.push(0);
+    }
+}
+
+fn update_widths(widths: list<int>, row: list<str>) {
+    ensure_widths(widths, row.len());
+    for i in range(row.len()) {
+        if row[i].len() > widths[i] {
+            widths[i] = row[i].len();
+        }
+    }
+}
+
+fn widths_for(rows: list<list<str>>) -> list<int> {
+    let widths: list<int> = [];
+    for row in rows {
+        update_widths(widths, row);
+    }
+    return widths;
+}
+
+fn render_row(row: list<str>, widths: list<int>) -> str {
+    let out: str = "|";
+    for i in range(widths.len()) {
+        let value: str = "";
+        if i < row.len() {
+            value = row[i];
+        }
+        out = out + " " + pad_right(value, widths[i]) + " |";
+    }
+    return out;
+}
+
+fn separator(widths: list<int>) -> str {
+    let out: str = "|";
+    for width in widths {
+        out = out + " " + "-".repeat(width) + " |";
+    }
+    return out;
+}
+
+fn format(rows: list<list<str>>) -> str {
+    if rows.len() == 0 {
+        return "";
+    }
+    let widths: list<int> = widths_for(rows);
+    let out: str = "";
+    for i in range(rows.len()) {
+        if i > 0 {
+            out = out + "\n";
+        }
+        out = out + render_row(rows[i], widths);
+    }
+    return out;
+}
+
+fn format_with_header(headers: list<str>, rows: list<list<str>>) -> str {
+    let all_rows: list<list<str>> = [headers];
+    for row in rows {
+        all_rows.push(row);
+    }
+    let widths: list<int> = widths_for(all_rows);
+    let out: str = render_row(headers, widths) + "\n" + separator(widths);
+    for row in rows {
+        out = out + "\n" + render_row(row, widths);
+    }
+    return out;
+}

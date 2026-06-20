@@ -648,6 +648,7 @@ pub const RUNTIME_SYMBOLS: &[&str] = &[
     "bolide_web_client_response_header",
     "bolide_web_client_response_body_text",
     "bolide_web_client_response_body_bytes",
+    "bolide_web_client_response_error",
     "bolide_web_client_response_free",
     // Template
     "bolide_template_escape_html",
@@ -665,6 +666,16 @@ pub const RUNTIME_SYMBOLS: &[&str] = &[
     "bolide_random_range",
     "bolide_random_float",
     "bolide_random_bool",
+    // Regex
+    "bolide_regex_is_valid",
+    "bolide_regex_escape",
+    "bolide_regex_is_match",
+    "bolide_regex_find",
+    "bolide_regex_find_all",
+    "bolide_regex_captures",
+    "bolide_regex_replace",
+    "bolide_regex_replace_all",
+    "bolide_regex_split",
     // Env
     "bolide_env_get",
     "bolide_env_get_or",
@@ -1563,6 +1574,8 @@ impl AotCompiler {
                                 "values" => Some(BolideType::List(v)),
                                 "get" | "remove" => Some(*v),
                                 "clone" => Some(BolideType::Dict(k, v)),
+                                "is_empty" | "contains" => Some(BolideType::Bool),
+                                "len" => Some(BolideType::Int),
                                 _ => Some(BolideType::Int),
                             },
                             Some(BolideType::List(elem)) => match method.as_str() {
@@ -1570,12 +1583,18 @@ impl AotCompiler {
                                 "slice" | "copy" | "clone" | "filter" => {
                                     Some(BolideType::List(elem))
                                 }
+                                "set" | "contains" | "includes" | "is_empty" | "empty" => {
+                                    Some(BolideType::Bool)
+                                }
                                 _ => Some(BolideType::Int),
                             },
                             Some(BolideType::Str) => match method.as_str() {
                                 "upper" | "lower" | "trim" | "strip" | "replace" | "repeat"
                                 | "substring" | "char_at" => Some(BolideType::Str),
                                 "split" => Some(BolideType::List(Box::new(BolideType::Str))),
+                                "contains" | "includes" | "starts_with" | "ends_with" => {
+                                    Some(BolideType::Bool)
+                                }
                                 _ => Some(BolideType::Int),
                             },
                             Some(BolideType::Bytes) => match method.as_str() {
@@ -1584,6 +1603,7 @@ impl AotCompiler {
                             },
                             Some(BolideType::Channel(inner)) => match method.as_str() {
                                 "recv" => Some(*inner),
+                                "send" => Some(BolideType::Bool),
                                 _ => Some(BolideType::Int),
                             },
                             _ => Some(BolideType::Int),
@@ -11982,8 +12002,12 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
                                     .unwrap_or(elem);
                                 Some(BolideType::List(ret))
                             }
-                            "len" | "length" | "size" | "index_of" | "index" | "find" | "count"
-                            | "is_empty" | "empty" => Some(BolideType::Int),
+                            "set" | "contains" | "includes" | "is_empty" | "empty" => {
+                                Some(BolideType::Bool)
+                            }
+                            "len" | "length" | "size" | "index_of" | "index" | "find" | "count" => {
+                                Some(BolideType::Int)
+                            }
                             _ => Some(BolideType::Int),
                         },
                         Some(BolideType::Dict(k, v)) => match method.as_str() {
@@ -11991,7 +12015,8 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
                             "values" => Some(BolideType::List(v)),
                             "get" | "remove" => Some(*v),
                             "clone" => Some(BolideType::Dict(k, v)),
-                            "len" | "is_empty" | "contains" => Some(BolideType::Int),
+                            "is_empty" | "contains" => Some(BolideType::Bool),
+                            "len" => Some(BolideType::Int),
                             _ => Some(BolideType::Int),
                         },
                         // 字符串方法返回类型
@@ -11999,8 +12024,10 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
                             "upper" | "lower" | "trim" | "strip" | "replace" | "repeat"
                             | "substring" | "char_at" => Some(BolideType::Str),
                             "split" => Some(BolideType::List(Box::new(BolideType::Str))),
-                            "find" | "index_of" | "contains" | "includes" | "starts_with"
-                            | "ends_with" | "count" | "len" | "length" | "size" => {
+                            "contains" | "includes" | "starts_with" | "ends_with" => {
+                                Some(BolideType::Bool)
+                            }
+                            "find" | "index_of" | "count" | "len" | "length" | "size" => {
                                 Some(BolideType::Int)
                             }
                             _ => Some(BolideType::Int),
@@ -12012,7 +12039,7 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
                         },
                         Some(BolideType::Channel(inner)) => match method.as_str() {
                             "recv" => Some(*inner),
-                            "send" => Some(BolideType::Int),
+                            "send" => Some(BolideType::Bool),
                             _ => Some(BolideType::Int),
                         },
                         // 用户类方法：沿继承链查方法返回类型
@@ -13811,8 +13838,8 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
                     .func_refs
                     .get("@_channel_send")
                     .ok_or("channel_send not found")?;
-                self.builder.ins().call(func_ref, &[ch, send_val]);
-                Ok(self.builder.ins().iconst(types::I64, 0))
+                let call = self.builder.ins().call(func_ref, &[ch, send_val]);
+                Ok(self.builder.inst_results(call)[0])
             }
             "recv" => {
                 if !args.is_empty() {

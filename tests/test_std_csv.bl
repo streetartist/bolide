@@ -1,0 +1,36 @@
+import "std/csv/csv.bl" as csv;
+
+fn check_str(name: str, got: str, want: str) {
+    if got == want {
+        print("ok " + name + "\n");
+    } else {
+        print("FAIL " + name + " got=" + got + " want=" + want + "\n");
+    }
+}
+
+fn check_int(name: str, got: int, want: int) {
+    if got == want {
+        print("ok " + name + "\n");
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want) + "\n");
+    }
+}
+
+check_str("escape plain", csv.escape("abc"), "abc");
+check_str("escape comma", csv.escape("a,b"), "\"a,b\"");
+check_str("escape quote", csv.escape("a\"b"), "\"a\"\"b\"");
+check_str("line", csv.line(["a", "b,c", "d\"e"]), "a,\"b,c\",\"d\"\"e\"");
+
+let row: list<str> = csv.parse_line("a,\"b,c\",\"d\"\"e\"");
+check_int("parse line len", row.len(), 3);
+check_str("parse line comma", row[1], "b,c");
+check_str("parse line quote", row[2], "d\"e");
+
+let rows: list<list<str>> = csv.parse("name,note\r\nbolide,\"hello\nworld\"");
+check_int("parse rows len", rows.len(), 2);
+check_str("parse rows name", rows[1][0], "bolide");
+check_str("parse rows multiline", rows[1][1], "hello\nworld");
+
+check_str("stringify", csv.stringify([["a", "b"], ["c,d", "e"]]), "a,b\n\"c,d\",e");
+
+print("std csv done\n");

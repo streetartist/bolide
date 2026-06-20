@@ -1,0 +1,34 @@
+fn check_str(name: str, got: str, want: str) {
+    if got == want {
+        print("ok " + name + "\n");
+    } else {
+        print("FAIL " + name + " got=" + got + " want=" + want + "\n");
+    }
+}
+
+let text: str = "hello bolide";
+check_str("str contains true", str(text.contains("bolide")), "true");
+check_str("str contains false", str(text.contains("rust")), "false");
+check_str("str starts_with", str(text.starts_with("hello")), "true");
+check_str("str ends_with", str(text.ends_with("bolide")), "true");
+
+let nums: list<int> = [1, 2, 3];
+check_str("list contains true", str(nums.contains(2)), "true");
+check_str("list contains false", str(nums.contains(9)), "false");
+check_str("list is_empty false", str(nums.is_empty()), "false");
+check_str("list set", str(nums.set(1, 20)), "true");
+nums.clear();
+check_str("list is_empty true", str(nums.is_empty()), "true");
+
+let values: dict<str, int> = {"a": 1};
+check_str("dict contains true", str(values.contains("a")), "true");
+check_str("dict contains false", str(values.contains("b")), "false");
+check_str("dict is_empty false", str(values.is_empty()), "false");
+values.clear();
+check_str("dict is_empty true", str(values.is_empty()), "true");
+
+let ch: channel<int> = channel();
+check_str("channel send", str(ch.send(42)), "true");
+check_str("channel recv", str(ch.recv()), "42");
+
+print("builtin bool returns done\n");

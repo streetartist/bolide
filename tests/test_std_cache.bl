@@ -1,0 +1,67 @@
+import "std/cache/cache.bl" as cache;
+import "std/time/time.bl" as time;
+
+fn check_bool(name: str, got: bool, want: bool) {
+    if got == want {
+        print("ok " + name + "\n");
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want) + "\n");
+    }
+}
+
+fn check_int(name: str, got: int, want: int) {
+    if got == want {
+        print("ok " + name + "\n");
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want) + "\n");
+    }
+}
+
+fn check_str(name: str, got: str, want: str) {
+    if got == want {
+        print("ok " + name + "\n");
+    } else {
+        print("FAIL " + name + " got=" + got + " want=" + want + "\n");
+    }
+}
+
+let c: cache.Cache = cache.new();
+check_bool("empty", c.is_empty(), true);
+
+c.set("name", "bolide");
+c.set("count", 3);
+check_bool("contains", c.contains("name"), true);
+check_int("len", c.len(), 2);
+check_str("get str", str(c.get_or("name", "")), "bolide");
+check_int("get int", int(c.get_or("count", 0)), 3);
+check_str("fallback", str(c.get_or("missing", "fallback")), "fallback");
+
+let keys: list<str> = c.keys();
+check_int("keys len", keys.len(), 2);
+
+check_bool("remove exists", c.remove("name"), true);
+check_bool("remove missing", c.remove("name"), false);
+check_bool("removed contains", c.contains("name"), false);
+
+c.set_ttl("short", "gone", 20);
+check_bool("ttl contains", c.contains("short"), true);
+check_bool("ttl positive", c.ttl_ms("short") > 0, true);
+time.sleep_ms(40);
+check_bool("ttl expired", c.contains("short"), false);
+
+c.set_ttl("touch", "keep", 20);
+check_bool("touch", c.touch("touch", 200), true);
+time.sleep_ms(40);
+check_bool("touch kept", c.contains("touch"), true);
+
+c.set_ttl("cleanup", "gone", 10);
+time.sleep_ms(20);
+check_int("cleanup removed", c.cleanup(), 1);
+
+c.clear();
+check_int("clear", c.len(), 0);
+
+let c2: cache.Cache = cache.with_value("hello", "world");
+check_str("with value", str(c2.get_or("hello", "")), "world");
+
+print("std cache done\n");

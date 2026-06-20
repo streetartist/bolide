@@ -1,0 +1,46 @@
+import "std/encoding/encoding.bl" as encoding;
+
+fn check_str(name: str, got: str, want: str) {
+    if got == want {
+        print("ok " + name + "\n");
+    } else {
+        print("FAIL " + name + " got=" + got + " want=" + want + "\n");
+    }
+}
+
+fn check_int(name: str, got: int, want: int) {
+    if got == want {
+        print("ok " + name + "\n");
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want) + "\n");
+    }
+}
+
+let data: bytes = bytes();
+data.push(65);
+data.push(66);
+data.push(67);
+
+check_str("hex encode", encoding.hex_encode(data), "414243");
+
+let decoded_hex: bytes = encoding.hex_decode("41 42 43");
+check_int("hex decode len", decoded_hex.len(), 3);
+check_int("hex decode item", decoded_hex[2], 67);
+
+check_str("base64 encode 3", encoding.base64_encode(data), "QUJD");
+
+let one: bytes = bytes();
+one.push(65);
+check_str("base64 encode 1", encoding.base64_encode(one), "QQ==");
+
+let two: bytes = bytes();
+two.push(65);
+two.push(66);
+check_str("base64 encode 2", encoding.base64_encode(two), "QUI=");
+
+let decoded_b64: bytes = encoding.base64_decode("QUJD");
+check_int("base64 decode len", decoded_b64.len(), 3);
+check_int("base64 decode item", decoded_b64[0], 65);
+check_int("base64 decode item 2", decoded_b64[2], 67);
+
+print("std encoding done\n");

@@ -1,0 +1,137 @@
+// Bolide text helper library.
+// Usage: import "std/text/text.bl" as text;
+
+fn join(items: list<str>, sep: str) -> str {
+    let out: str = "";
+    for i in range(items.len()) {
+        if i > 0 {
+            out = out + sep;
+        }
+        out = out + items[i];
+    }
+    return out;
+}
+
+fn lines(value: str) -> list<str> {
+    let normalized: str = value.replace("\r\n", "\n").replace("\r", "\n");
+    return normalized.split("\n");
+}
+
+fn is_space(ch: str) -> bool {
+    return ch == " " or ch == "\n" or ch == "\r" or ch == "\t";
+}
+
+fn words(value: str) -> list<str> {
+    let out: list<str> = [];
+    let current: str = "";
+    for i in range(value.len()) {
+        let ch: str = value.char_at(i);
+        if is_space(ch) {
+            if current != "" {
+                out.push(current);
+                current = "";
+            }
+        } else {
+            current = current + ch;
+        }
+    }
+    if current != "" {
+        out.push(current);
+    }
+    return out;
+}
+
+fn repeat(value: str, count: int) -> str {
+    if count <= 0 {
+        return "";
+    }
+    return value.repeat(count);
+}
+
+fn truncate(value: str, max_len: int, suffix: str) -> str {
+    if max_len <= 0 {
+        return "";
+    }
+    if value.len() <= max_len {
+        return value;
+    }
+    if suffix.len() >= max_len {
+        return suffix.substring(0, max_len);
+    }
+    return value.substring(0, max_len - suffix.len()) + suffix;
+}
+
+fn pad_left(value: str, width: int, fill: str) -> str {
+    if value.len() >= width {
+        return value;
+    }
+    let token: str = fill;
+    if token == "" {
+        token = " ";
+    }
+    return token.repeat(width - value.len()) + value;
+}
+
+fn pad_right(value: str, width: int, fill: str) -> str {
+    if value.len() >= width {
+        return value;
+    }
+    let token: str = fill;
+    if token == "" {
+        token = " ";
+    }
+    return value + token.repeat(width - value.len());
+}
+
+fn indent(value: str, prefix: str) -> str {
+    let parts: list<str> = lines(value);
+    for i in range(parts.len()) {
+        parts[i] = prefix + parts[i];
+    }
+    return join(parts, "\n");
+}
+
+fn is_alnum(ch: str) -> bool {
+    return "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789".contains(ch);
+}
+
+fn is_upper(ch: str) -> bool {
+    return "ABCDEFGHIJKLMNOPQRSTUVWXYZ".contains(ch);
+}
+
+fn words_from_identifier(value: str) -> list<str> {
+    let out: list<str> = [];
+    let current: str = "";
+    for i in range(value.len()) {
+        let ch: str = value.char_at(i);
+        if is_alnum(ch) {
+            if is_upper(ch) and current != "" {
+                out.push(current.lower());
+                current = ch;
+            } else {
+                current = current + ch;
+            }
+        } else {
+            if current != "" {
+                out.push(current.lower());
+                current = "";
+            }
+        }
+    }
+    if current != "" {
+        out.push(current.lower());
+    }
+    return out;
+}
+
+fn snake(value: str) -> str {
+    return join(words_from_identifier(value), "_");
+}
+
+fn kebab(value: str) -> str {
+    return join(words_from_identifier(value), "-");
+}
+
+fn slug(value: str) -> str {
+    return kebab(value);
+}

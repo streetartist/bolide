@@ -1,0 +1,34 @@
+import "std/random/random.bl" as random;
+import "std/uuid/uuid.bl" as uuid;
+
+fn check_bool(name: str, got: bool, want: bool) {
+    if got == want {
+        print("ok " + name + "\n");
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want) + "\n");
+    }
+}
+
+fn check_int(name: str, got: int, want: int) {
+    if got == want {
+        print("ok " + name + "\n");
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want) + "\n");
+    }
+}
+
+random.seed(12345);
+let id: str = uuid.v4();
+check_int("uuid len", id.len(), 36);
+check_bool("uuid v4", uuid.is_v4(id), true);
+check_bool("uuid invalid", uuid.is_v4("not-a-uuid"), false);
+
+let compact: str = uuid.compact_v4();
+check_int("compact len", compact.len(), 32);
+check_bool("compact version", compact.char_at(12) == "4", true);
+
+let short: str = uuid.short_id(12);
+check_int("short len", short.len(), 12);
+check_int("short empty", uuid.short_id(0).len(), 0);
+
+print("std uuid done\n");

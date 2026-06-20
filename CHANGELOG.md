@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.13.4
+
+- 新增一批实用标准库：`std/assert`、`std/text`、`std/csv`、`std/encoding`、`std/http`、`std/uuid`、`std/table`、`std/cache`。
+- 新增 `std/regex`，绑定 Rust `regex`，支持匹配、提取、捕获、替换、切分和正则转义，并补齐 JIT/AOT 符号注册。
+- 改进 HTTP 客户端错误设计：DNS、连接、TLS、超时、非法 URL 等请求层错误不再静默吞掉，可通过 `ClientResponse.error()` / `http.Response.error` 获取。
+- 统一内置 bool 返回表现：字符串/列表/字典的 `contains`、`is_empty`、`starts_with`、`ends_with`，以及 `list.set`、`channel.send` 等现在按 `bool` 暴露，`str(...)` 输出 `true/false`。
+- 新增标准库教程 `docs/standard-library.md`，覆盖当前 `std/` 模块的导入、示例、API 速查和常见组合。
+
 ## 0.13.3
 
 - 新增 `std/cli`，支持命令行 flag、option、必填参数、位置参数、错误收集和 help 文本生成。
