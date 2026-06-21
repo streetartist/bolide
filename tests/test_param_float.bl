@@ -1,0 +1,7 @@
+class V { x: float; fn set(px: float) { self.x = px; } }
+
+fn pass_val(v: V, val: float) { v.set(val); }
+
+let v: V = V(0.0);
+pass_val(v, 3.5);
+print(v.x);

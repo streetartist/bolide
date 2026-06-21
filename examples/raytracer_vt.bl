@@ -1,0 +1,185 @@
+// ============================================================
+// Bolide 光线追踪器 — 全 Value Type + Inline 版
+// 零堆分配，热路径完全内联
+// ============================================================
+
+import "std/buffer/buffer.bl" as buffer;
+import "std/fs/fs.bl" as fs;
+import "std/math/math.bl" as math;
+import "std/time/time.bl" as time;
+
+value Vec3 { x: float; y: float; z: float; }
+
+// 场景数据
+let CX: list<float> = [0.0, 0.0, -1.15, 1.15, 0.4];
+let CY: list<float> = [-1000.5, 0.0, 0.0, 0.0, 0.45];
+let CZ: list<float> = [-3.0, -3.0, -3.0, -3.0, -3.6];
+let CR: list<float> = [1000.0, 0.5, 0.5, 0.5, 0.22];
+let S_R: list<float> = [0.45, 0.85, 0.18, 0.88, 0.18];
+let S_G: list<float> = [0.42, 0.18, 0.45, 0.78, 0.78];
+let S_B: list<float> = [0.38, 0.18, 0.85, 0.22, 0.28];
+let L: Vec3 = Vec3 { x: -0.433888, y: 0.771357, z: -0.482094 };
+
+// ——— Vec3 内联运算 ——— 零分配 + 零调用开销
+
+inline fn v3_add(a: Vec3, b: Vec3) -> Vec3 {
+    return Vec3 { x: a.x + b.x, y: a.y + b.y, z: a.z + b.z };
+}
+
+inline fn v3_sub(a: Vec3, b: Vec3) -> Vec3 {
+    return Vec3 { x: a.x - b.x, y: a.y - b.y, z: a.z - b.z };
+}
+
+inline fn v3_mul(a: Vec3, s: float) -> Vec3 {
+    return Vec3 { x: a.x * s, y: a.y * s, z: a.z * s };
+}
+
+inline fn v3_dot(a: Vec3, b: Vec3) -> float {
+    return a.x * b.x + a.y * b.y + a.z * b.z;
+}
+
+inline fn v3_len(a: Vec3) -> float {
+    return math.sqrt(a.x * a.x + a.y * a.y + a.z * a.z);
+}
+
+fn v3_norm(a: Vec3) -> Vec3 {
+    let inv = 1.0 / v3_len(a);
+    return v3_mul(a, inv);
+}
+
+inline fn v3_reflect(v: Vec3, n: Vec3) -> Vec3 {
+    let d = 2.0 * (v.x * n.x + v.y * n.y + v.z * n.z);
+    return Vec3 { x: v.x - d * n.x, y: v.y - d * n.y, z: v.z - d * n.z };
+}
+
+// ——— 求交 ——— 纯标量，热路径
+
+fn ray_hit(c: Vec3, r: float, o: Vec3, d: Vec3) -> float {
+    let oc = v3_sub(o, c);
+    let a = d.x * d.x + d.y * d.y + d.z * d.z;
+    let hb = oc.x * d.x + oc.y * d.y + oc.z * d.z;
+    let c2 = oc.x * oc.x + oc.y * oc.y + oc.z * oc.z - r * r;
+    let disc = hb * hb - a * c2;
+    if disc < 0.0 { return 1e30; }
+    let sd = math.sqrt(disc);
+    let t0 = -hb - sd; let t1 = -hb + sd;
+    var t = t0;
+    if t0 <= 1e-4 { t = t1; }
+    if t < 1e-4 { return 1e30; }
+    return t / a;
+}
+
+var g_ht: float = 0.0;
+var g_hi: int = 0;
+
+fn scene_hit(o: Vec3, d: Vec3) -> int {
+    g_ht = 1e30; g_hi = -1;
+    var ht: float = 0.0;
+    ht = ray_hit(Vec3 { x: CX[0], y: CY[0], z: CZ[0] }, CR[0], o, d);
+    if ht < g_ht { g_ht = ht; g_hi = 0; }
+    ht = ray_hit(Vec3 { x: CX[1], y: CY[1], z: CZ[1] }, CR[1], o, d);
+    if ht < g_ht { g_ht = ht; g_hi = 1; }
+    ht = ray_hit(Vec3 { x: CX[2], y: CY[2], z: CZ[2] }, CR[2], o, d);
+    if ht < g_ht { g_ht = ht; g_hi = 2; }
+    ht = ray_hit(Vec3 { x: CX[3], y: CY[3], z: CZ[3] }, CR[3], o, d);
+    if ht < g_ht { g_ht = ht; g_hi = 3; }
+    ht = ray_hit(Vec3 { x: CX[4], y: CY[4], z: CZ[4] }, CR[4], o, d);
+    if ht < g_ht { g_ht = ht; g_hi = 4; }
+    return g_hi;
+}
+
+fn sky_color(d: Vec3) -> Vec3 {
+    let t = (d.y + 1.0) * 0.5;
+    let omt = 1.0 - t;
+    return Vec3 {
+        x: omt * 0.5 + t * 1.0,
+        y: omt * 0.7 + t * 1.0,
+        z: omt * 1.0 + t * 1.0,
+    };
+}
+
+fn trace(o: Vec3, d: Vec3, depth: int) -> Vec3 {
+    if depth <= 0 { return Vec3 { x: 0.0, y: 0.0, z: 0.0 }; }
+    let hi = scene_hit(o, d);
+    let t = g_ht;
+    if hi < 0 { return sky_color(d); }
+    let h = Vec3 { x: o.x + d.x * t, y: o.y + d.y * t, z: o.z + d.z * t };
+    let n = v3_norm(v3_sub(h, Vec3 { x: CX[hi], y: CY[hi], z: CZ[hi] }));
+    let rd = v3_reflect(d, n);
+    let s = Vec3 { x: S_R[hi], y: S_G[hi], z: S_B[hi] };
+    var col = v3_mul(s, 0.05);
+    let ld = v3_norm(v3_sub(L, h));
+    var diff = v3_dot(n, ld);
+    if diff < 0.0 { diff = 0.0; }
+    col = v3_add(col, v3_mul(s, diff * 0.6));
+    let bounce_o = v3_add(h, v3_mul(n, 0.001));
+    let rc = trace(bounce_o, rd, depth - 1);
+    col = v3_add(col, v3_mul(rc, 0.35));
+    return col;
+}
+
+fn to_byte(c: float) -> int {
+    let ic = int(c * 255.0 + 0.5);
+    if ic > 255 { return 255; }
+    if ic < 0 { return 0; }
+    return ic;
+}
+
+fn emit(out: buffer.Buffer, c: Vec3) {
+    out.push(to_byte(math.pow(math.max(0.0, c.x), 0.454545)));
+    out.push(" ");
+    out.push(to_byte(math.pow(math.max(0.0, c.y), 0.454545)));
+    out.push(" ");
+    out.push(to_byte(math.pow(math.max(0.0, c.z), 0.454545)));
+    out.push("\n");
+}
+
+fn render(width: int, height: int) -> str {
+    let wf = float(width); let hf = float(height);
+    let asp = wf / hf;
+    let du = asp / wf; let dv = 1.0 / hf;
+    let buf = buffer.with_capacity(width * height * 18);
+    buf.push("P3\n"); buf.push(width); buf.push(" "); buf.push(height); buf.push("\n255\n");
+    var y = 0;
+    while y < height {
+        var x = 0;
+        while x < width {
+            let uc = (float(x) / wf - 0.5) * 2.0 * asp;
+            let vc = (0.5 - float(y) / hf) * 2.0;
+            var col = Vec3 { x: 0.0, y: 0.0, z: 0.0 };
+            var sy = 0;
+            while sy < 4 {
+                var sx = 0;
+                while sx < 4 {
+                    let su = uc + (float(sx) * 0.5 - 0.75) * du;
+                    let sv = vc + (float(sy) * 0.5 - 0.75) * dv;
+                    let rl = math.sqrt(su*su + sv*sv + 2.25);
+                    let rd = Vec3 { x: su / rl, y: sv / rl, z: -1.5 / rl };
+                    let o = Vec3 { x: 0.0, y: 1.2, z: 4.5 };
+                    let sc = trace(o, rd, 8);
+                    col.x = col.x + sc.x;
+                    col.y = col.y + sc.y;
+                    col.z = col.z + sc.z;
+                    sx = sx + 1;
+                }
+                sy = sy + 1;
+            }
+            let c = Vec3 { x: col.x / 16.0, y: col.y / 16.0, z: col.z / 16.0 };
+            emit(buf, c);
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+    let ppm = buf.to_string();
+    buf.close();
+    return ppm;
+}
+
+let W = 1920; let H = 1080; let OUT = "tmp/raytracer_vt.ppm";
+fs.create_dir_all("tmp");
+print("Bolide VT Ray Tracer — " + str(W) + "x" + str(H) + "\n");
+let t0 = time.monotonic_ms();
+let ppm = render(W, H);
+let ms = time.monotonic_ms() - t0;
+fs.write_text(OUT, ppm);
+print("Done: " + str(W) + "x" + str(H) + " in " + str(ms) + " ms -> " + OUT + "\n");

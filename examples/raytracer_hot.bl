@@ -1,0 +1,164 @@
+// ============================================================
+// Bolide 光线追踪器 — Ref + Global 混合版
+// 热路径(scene_hit)用全局变量，冷路径用 ref out
+// ============================================================
+
+import "std/buffer/buffer.bl" as buffer;
+import "std/fs/fs.bl" as fs;
+import "std/math/math.bl" as math;
+import "std/time/time.bl" as time;
+
+let CX: list<float> = [0.0, 0.0, -1.15, 1.15, 0.4];
+let CY: list<float> = [-1000.5, 0.0, 0.0, 0.0, 0.45];
+let CZ: list<float> = [-3.0, -3.0, -3.0, -3.0, -3.6];
+let CR: list<float> = [1000.0, 0.5, 0.5, 0.5, 0.22];
+let S_R: list<float> = [0.45, 0.85, 0.18, 0.88, 0.18];
+let S_G: list<float> = [0.42, 0.18, 0.45, 0.78, 0.78];
+let S_B: list<float> = [0.38, 0.18, 0.85, 0.22, 0.28];
+let LX: float = -0.433888; let LY: float = 0.771357; let LZ: float = -0.482094;
+
+// 全局变量: scene_hit 输出（避免栈槽开销）
+var g_ht: float = 0.0;
+var g_hi: int = 0;
+
+fn ray_hit(cx: float, cy: float, cz: float, r: float, ox: float, oy: float, oz: float,
+           dx: float, dy: float, dz: float) -> float {
+    let ocx = ox - cx; let ocy = oy - cy; let ocz = oz - cz;
+    let a = dx*dx + dy*dy + dz*dz;
+    let hb = ocx*dx + ocy*dy + ocz*dz;
+    let c = ocx*ocx + ocy*ocy + ocz*ocz - r*r;
+    let disc = hb*hb - a*c;
+    if disc < 0.0 { return 1e30; }
+    let sd = math.sqrt(disc);
+    let t0 = -hb - sd; let t1 = -hb + sd;
+    var t = t0;
+    if t0 <= 1e-4 { t = t1; }
+    if t < 1e-4 { return 1e30; }
+    return t / a;
+}
+
+// 热路径 — 全局变量 zero 栈槽开销
+fn scene_hit(ox: float, oy: float, oz: float, dx: float, dy: float, dz: float) -> int {
+    g_ht = 1e30; g_hi = -1;
+    var ht: float = 0.0;
+    ht = ray_hit(CX[0], CY[0], CZ[0], CR[0], ox, oy, oz, dx, dy, dz);
+    if ht < g_ht { g_ht = ht; g_hi = 0; }
+    ht = ray_hit(CX[1], CY[1], CZ[1], CR[1], ox, oy, oz, dx, dy, dz);
+    if ht < g_ht { g_ht = ht; g_hi = 1; }
+    ht = ray_hit(CX[2], CY[2], CZ[2], CR[2], ox, oy, oz, dx, dy, dz);
+    if ht < g_ht { g_ht = ht; g_hi = 2; }
+    ht = ray_hit(CX[3], CY[3], CZ[3], CR[3], ox, oy, oz, dx, dy, dz);
+    if ht < g_ht { g_ht = ht; g_hi = 3; }
+    ht = ray_hit(CX[4], CY[4], CZ[4], CR[4], ox, oy, oz, dx, dy, dz);
+    if ht < g_ht { g_ht = ht; g_hi = 4; }
+    return g_hi;
+}
+
+// 冷路径 — ref out 清晰语义
+fn sky_color(dx: float, dy: float, dz: float, ref out_r: float, ref out_g: float, ref out_b: float) {
+    let t = (dy + 1.0) * 0.5;
+    out_r = (1.0 - t) * 0.5 + t * 1.0;
+    out_g = (1.0 - t) * 0.7 + t * 1.0;
+    out_b = (1.0 - t) * 1.0 + t * 1.0;
+}
+
+fn trace(ox: float, oy: float, oz: float, dx: float, dy: float, dz: float, depth: int,
+         ref out_r: float, ref out_g: float, ref out_b: float) {
+    if depth <= 0 { out_r = 0.0; out_g = 0.0; out_b = 0.0; return; }
+
+    let hi = scene_hit(ox, oy, oz, dx, dy, dz);
+    let t = g_ht;
+
+    if hi < 0 {
+        sky_color(dx, dy, dz, out_r, out_g, out_b);
+        return;
+    }
+
+    let hx = ox + dx * t; let hy = oy + dy * t; let hz = oz + dz * t;
+    let nx = hx - CX[hi]; let ny = hy - CY[hi]; let nz = hz - CZ[hi];
+    let inv_len = 1.0 / math.sqrt(nx*nx + ny*ny + nz*nz);
+    let nnx = nx * inv_len; let nny = ny * inv_len; let nnz = nz * inv_len;
+
+    let ddn = dx*nnx + dy*nny + dz*nnz;
+    let rdx = dx - 2.0*ddn*nnx; let rdy = dy - 2.0*ddn*nny; let rdz = dz - 2.0*ddn*nnz;
+
+    out_r = S_R[hi] * 0.05; out_g = S_G[hi] * 0.05; out_b = S_B[hi] * 0.05;
+
+    let lx = LX - hx; let ly = LY - hy; let lz = LZ - hz;
+    let llen = math.sqrt(lx*lx + ly*ly + lz*lz);
+    let nlx = lx / llen; let nly = ly / llen; let nlz = lz / llen;
+    var diff = nnx*nlx + nny*nly + nnz*nlz;
+    if diff < 0.0 { diff = 0.0; }
+    out_r = out_r + S_R[hi] * diff * 0.6;
+    out_g = out_g + S_G[hi] * diff * 0.6;
+    out_b = out_b + S_B[hi] * diff * 0.6;
+
+    var rr: float = 0.0; var rg: float = 0.0; var rb: float = 0.0;
+    trace(hx + nnx*0.001, hy + nny*0.001, hz + nnz*0.001, rdx, rdy, rdz, depth - 1, rr, rg, rb);
+    out_r = out_r + rr * 0.35; out_g = out_g + rg * 0.35; out_b = out_b + rb * 0.35;
+}
+
+fn to_byte(c: float) -> int {
+    let ic = int(c * 255.0 + 0.5);
+    if ic > 255 { return 255; }
+    if ic < 0 { return 0; }
+    return ic;
+}
+fn emit(out: buffer.Buffer, r: float, g: float, b: float) {
+    out.push(to_byte(math.pow(math.max(0.0, r), 0.454545)));
+    out.push(" ");
+    out.push(to_byte(math.pow(math.max(0.0, g), 0.454545)));
+    out.push(" ");
+    out.push(to_byte(math.pow(math.max(0.0, b), 0.454545)));
+    out.push("\n");
+}
+
+fn render(width: int, height: int) -> str {
+    let wf = float(width); let hf = float(height);
+    let asp = wf / hf;
+    let du = asp / wf; let dv = 1.0 / hf;
+    let buf = buffer.with_capacity(width * height * 18);
+    buf.push("P3\n"); buf.push(width); buf.push(" "); buf.push(height); buf.push("\n255\n");
+
+    var y = 0;
+    while y < height {
+        var x = 0;
+        while x < width {
+            let uc = (float(x) / wf - 0.5) * 2.0 * asp;
+            let vc = (0.5 - float(y) / hf) * 2.0;
+            var r: float = 0.0; var g: float = 0.0; var b: float = 0.0;
+
+            var sy = 0;
+            while sy < 4 {
+                var sx = 0;
+                while sx < 4 {
+                    let su = uc + (float(sx) * 0.5 - 0.75) * du;
+                    let sv = vc + (float(sy) * 0.5 - 0.75) * dv;
+                    let rl = math.sqrt(su*su + sv*sv + 2.25);
+                    let sdx = su / rl; let sdy = sv / rl; let sdz = -1.5 / rl;
+
+                    var sr: float = 0.0; var sg: float = 0.0; var sb: float = 0.0;
+                    trace(0.0, 1.2, 4.5, sdx, sdy, sdz, 8, sr, sg, sb);
+                    r = r + sr; g = g + sg; b = b + sb;
+                    sx = sx + 1;
+                }
+                sy = sy + 1;
+            }
+            emit(buf, r / 16.0, g / 16.0, b / 16.0);
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+    let ppm = buf.to_string();
+    buf.close();
+    return ppm;
+}
+
+let W = 1920; let H = 1080; let OUT = "tmp/raytracer_hot.ppm";
+fs.create_dir_all("tmp");
+print("Bolide Hot-path Ray Tracer — " + str(W) + "x" + str(H) + "\n");
+let t0 = time.monotonic_ms();
+let ppm = render(W, H);
+let ms = time.monotonic_ms() - t0;
+fs.write_text(OUT, ppm);
+print("Done: " + str(W) + "x" + str(H) + " in " + str(ms) + " ms -> " + OUT + "\n");

@@ -2,6 +2,10 @@
 
 ## 0.13.6
 
+- 新增 `value` 值类型语法，支持轻量聚合类型的按值构造、字段访问、局部变量、函数参数和返回值，并打通 JIT/AOT 两个后端。
+- 新增 `inline fn` 语法与 AST 级内联展开，适合数值计算和其他热路径上的短小辅助函数。
+- 修复 `value` 与 `inline` 组合时的类型推导和名称捕获问题，补齐一批对应测试与示例，包括 `raytracer_vt.bl`。
+- AOT 现已支持值类型调用、返回和局部/全局存储链路，`bolide compile examples/raytracer_vt.bl -o examples/raytracer_vt.exe` 可成功生成原生可执行文件。
 - 编译器错误信息改进：导入模块内函数体的编译错误现在会显示实际源文件名、函数名和行号
   （"in 'file.bl' (function '@module_fn' at line N)"），不再指向 import 行。
 - AST 增加源位置信息：`FuncDef` 新增 `def_span_start` 字段记录函数定义在源文件中的字节偏移。

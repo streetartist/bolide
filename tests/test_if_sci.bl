@@ -1,0 +1,1 @@
+var t0: float = 0.001; var t1: float = 0.1; let t = if t0 > 1e-4 { t0 } else { t1 }; print(t);

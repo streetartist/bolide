@@ -339,7 +339,111 @@ pub extern "C" fn bolide_string_concat_many(
     unsafe { BolideString::concat_ptrs(parts, count) }
 }
 
-/// 格式化字符串。`{}` 消耗位置参数，`{name}` 使用命名参数，`{{` 和 `}}` 输出字面量花括号。
+
+/// 对已转为字符串的值应用 Python 风格的格式说明符。
+/// 格式说明语法: [[fill]align][0][width][.precision]
+///  - fill:   任意填充字符（需后跟 align）
+///  - align:  < (左对齐) | > (右对齐) | ^ (居中) | = (数字符号后填充)
+///  - 0:     零填充标志（等价于 fill='0', align='>'）
+///  - width: 最小字段宽度
+///  - .precision: 字符串最大截断长度
+/// 省略时默认: fill=' ', align='<', 无宽度限制, 无截断。
+fn apply_format_spec(value: &str, spec: &str) -> String {
+    if spec.is_empty() {
+        return value.to_string();
+    }
+
+    let s = spec;
+    let len = s.len();
+    let bytes = s.as_bytes();
+    let mut pos = 0usize;
+
+    let mut fill = ' ';
+    let mut align = '<'; // 字符串默认左对齐
+    let mut width = 0usize;
+    let mut precision: Option<usize> = None;
+
+    // 1. 解析 [[fill]align] — 两字符 fill+align 或单字符 align
+    if pos < len {
+        if pos + 1 < len && matches!(bytes[pos + 1], b'<' | b'>' | b'^' | b'=') {
+            fill = bytes[pos] as char;
+            align = bytes[pos + 1] as char;
+            pos += 2;
+        } else if matches!(bytes[pos], b'<' | b'>' | b'^' | b'=') {
+            align = bytes[pos] as char;
+            pos += 1;
+        }
+    }
+
+    // 2. 解析 0 标志（零填充，等价 fill='0', align='>'）
+    let had_explicit_align = pos > 0;
+    if pos < len && bytes[pos] == b'0' && !had_explicit_align {
+        fill = '0';
+        align = '>';
+        pos += 1;
+    }
+
+    // 3. 解析 width（数字）
+    while pos < len && bytes[pos].is_ascii_digit() {
+        width = width * 10 + (bytes[pos] - b'0') as usize;
+        pos += 1;
+    }
+
+    // 4. 解析 .precision
+    if pos < len && bytes[pos] == b'.' {
+        pos += 1;
+        let mut prec = 0usize;
+        while pos < len && bytes[pos].is_ascii_digit() {
+            prec = prec * 10 + (bytes[pos] - b'0') as usize;
+            pos += 1;
+        }
+        precision = Some(prec);
+    }
+
+    // 应用格式
+    let display: String = if let Some(n) = precision {
+        value.chars().take(n).collect()
+    } else {
+        value.to_string()
+    };
+
+    if display.len() >= width {
+        return display;
+    }
+
+    let padding = width - display.len();
+    let mut result = String::with_capacity(width);
+    let fill_str: String = std::iter::repeat(fill).take(padding).collect();
+
+    match align {
+        '<' => {
+            result.push_str(&display);
+            result.push_str(&fill_str);
+        }
+        '>' | '=' => {
+            result.push_str(&fill_str);
+            result.push_str(&display);
+        }
+        '^' => {
+            let left = padding / 2;
+            let right = padding - left;
+            for _ in 0..left { result.push(fill); }
+            result.push_str(&display);
+            for _ in 0..right { result.push(fill); }
+        }
+        _ => {
+            result.push_str(&display);
+        }
+    }
+
+    result
+}
+
+/// 格式化字符串。支持 Python 风格格式说明符。
+/// `{}` / `{:spec}` 消耗位置参数，`{name}` / `{name:spec}` 使用命名参数，
+/// `{{` 和 `}}` 输出字面量花括号。
+/// 格式说明语法: [[fill]align][0][width][.precision]
+///   例: {:.1} 截断; {:>10} 右对齐; {:0>5} 零填充; {name:^20} 居中
 #[no_mangle]
 pub extern "C" fn bolide_string_format(
     template: *const BolideString,
@@ -379,6 +483,7 @@ pub extern "C" fn bolide_string_format(
                 chars.next();
                 out.push('{');
             } else if chars.peek() == Some(&'}') {
+                // 空占位符 {} — 位置参数，无格式说明
                 chars.next();
                 if let Some(&value) = positional.get(arg_index) {
                     if !value.is_null() {
@@ -389,25 +494,61 @@ pub extern "C" fn bolide_string_format(
                     out.push_str("{}");
                 }
             } else {
-                let mut name = String::new();
+                // 有内容的占位符: 名字/索引 或 格式说明
+                let mut field = String::new();
                 while let Some(&next) = chars.peek() {
-                    if next == '}' {
+                    if next == '}' || next == ':' {
                         break;
                     }
-                    name.push(next);
+                    field.push(next);
                     chars.next();
                 }
+
+                // 解析格式说明（: 后面的部分）
+                let mut format_spec = String::new();
+                if chars.peek() == Some(&':') {
+                    chars.next(); // skip ':'
+                    while let Some(&next) = chars.peek() {
+                        if next == '}' {
+                            break;
+                        }
+                        format_spec.push(next);
+                        chars.next();
+                    }
+                }
+
                 if chars.peek() == Some(&'}') {
-                    chars.next();
+                    chars.next(); // skip '}'
+                }
+
+                if field.is_empty() {
+                    // 纯格式说明 {:spec} — 位置参数
+                    if let Some(&value) = positional.get(arg_index) {
+                        if !value.is_null() {
+                            let raw = unsafe { (*value).as_str() };
+                            out.push_str(&apply_format_spec(raw, &format_spec));
+                        }
+                        arg_index += 1;
+                    } else {
+                        out.push('{');
+                        if !format_spec.is_empty() {
+                            out.push(':');
+                            out.push_str(&format_spec);
+                        }
+                        out.push('}');
+                    }
+                } else {
+                    // 命名占位符 {name} 或 {name:spec}
                     let mut replaced = false;
                     for (i, &key) in named_names.iter().enumerate() {
                         if key.is_null() {
                             continue;
                         }
-                        if unsafe { (*key).as_str() } == name {
+                        if unsafe { (*key).as_str() } == field {
                             if let Some(&value) = named_values.get(i) {
                                 if !value.is_null() {
-                                    out.push_str(unsafe { (*value).as_str() });
+                                    let raw = unsafe { (*value).as_str() };
+                                    out.push_str(&apply_format_spec(raw, &format_spec));
                                 }
                             }
                             replaced = true;
@@ -416,12 +557,13 @@ pub extern "C" fn bolide_string_format(
                     }
                     if !replaced {
                         out.push('{');
-                        out.push_str(&name);
+                        out.push_str(&field);
+                        if !format_spec.is_empty() {
+                            out.push(':');
+                            out.push_str(&format_spec);
+                        }
                         out.push('}');
                     }
-                } else {
-                    out.push('{');
-                    out.push_str(&name);
                 }
             }
         } else if ch == '}' {

@@ -1,0 +1,11 @@
+fn take_owned(owned x: int) {
+    print("got: "); print(x); print("\n");
+}
+
+fn test_owned() {
+    let a: int = 42;
+    take_owned(a);
+    print(a);  // 应该报错：a 已被 move
+}
+
+test_owned();

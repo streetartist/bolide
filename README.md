@@ -12,7 +12,7 @@
     <img src="https://img.shields.io/badge/License-MIT-brightgreen.svg" alt="License: MIT">
   </a>
   <a href="#">
-    <img src="https://img.shields.io/badge/version-0.13.5-blue.svg" alt="Version">
+    <img src="https://img.shields.io/badge/version-0.13.6-blue.svg" alt="Version">
   </a>
   <a href="#">
     <img src="https://img.shields.io/badge/platform-windows%20%7C%20linux-lightgrey.svg" alt="Platform">
@@ -34,6 +34,8 @@
 - **一等函数** - 函数可作为值传递、存入列表、作为参数与返回值，支持 `map`/`filter` 等高阶方法
 - **闭包** - 支持 `fn(...) -> T { ... }` 闭包字面量、自动捕获局部变量、闭包参数与返回闭包
 - **泛型函数** - 支持 `fn id<T>(x: T) -> T` 形式的类型参数，调用点自动推断并单态化
+- **值类型** - 支持 `value Vec3 { ... }` 这类零堆分配聚合类型，可按值构造、传参和返回
+- **内联函数** - 支持 `inline fn`，适合热路径上的短小计算函数
 - **函数参数** - 支持默认值、具名调用、`*args` 列表变长参数和 `**kwargs` 字典变长参数
 - **默认不可变绑定** - `let` 默认不可变，`var` 用于需要重新赋值或原地修改的状态
 - **字符串与切片** - 内置字符串方法，支持字符串、列表、元组的 Python 风格切片
@@ -280,6 +282,48 @@ print(total(base=5, bonus=7));   // 12，未知具名参数进入 **opts
 
 `*args` 必须位于普通参数之后，`**kwargs` 必须是最后一个参数。没有对应形参或
 `**kwargs` 时，未知具名参数会编译报错。
+
+### 值类型
+
+使用 `value` 可以定义轻量聚合类型。它们适合 `Vec2`/`Vec3`/颜色/小型记录这类高频数据，
+字段通过点号访问，可直接用于局部变量、函数参数和返回值。
+
+```bolide
+value Vec3 { x: float; y: float; z: float; }
+
+let a: Vec3 = Vec3 { x: 1.0, y: 2.0, z: 3.0 };
+let b: Vec3 = Vec3 { x: 4.0, y: 5.0, z: 6.0 };
+
+fn dot(lhs: Vec3, rhs: Vec3) -> float {
+    return lhs.x * rhs.x + lhs.y * rhs.y + lhs.z * rhs.z;
+}
+
+print(dot(a, b));
+print(a.x);
+```
+
+### 内联函数
+
+使用 `inline fn` 可以把短小函数在调用点展开，适合数值运算和热路径辅助函数。
+
+```bolide
+inline fn v3_add(a: Vec3, b: Vec3) -> Vec3 {
+    return Vec3 { x: a.x + b.x, y: a.y + b.y, z: a.z + b.z };
+}
+
+inline fn sq(x: float) -> float {
+    return x * x;
+}
+
+let sum = v3_add(
+    Vec3 { x: 1.0, y: 2.0, z: 3.0 },
+    Vec3 { x: 4.0, y: 5.0, z: 6.0 },
+);
+print(sum.y);
+print(sq(3.0));
+```
+
+当前 `inline fn` 最适合“若干 `let` 绑定 + 单个 `return` 表达式”的短函数。
 
 ### 泛型函数
 

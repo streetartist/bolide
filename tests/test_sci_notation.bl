@@ -1,0 +1,6 @@
+let a: float = 1e30;
+print(a);
+let b: float = 1e-4;
+print(b);
+let c: float = 1.5e+2;
+print(c);

@@ -1,0 +1,16 @@
+value Vec3 { x: float; y: float; z: float; }
+
+fn v3_add(a: Vec3, b: Vec3) -> Vec3 {
+    return Vec3 { x: a.x + b.x, y: a.y + b.y, z: a.z + b.z };
+}
+
+fn main() {
+    let a = Vec3 { x: 1.0, y: 2.0, z: 3.0 };
+    let b = Vec3 { x: 4.0, y: 5.0, z: 6.0 };
+    let c = v3_add(a, b);
+    print(c.x); print(" ");
+    print(c.y); print(" ");
+    print(c.z); print("\n");
+}
+
+main();

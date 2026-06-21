@@ -1,0 +1,32 @@
+// 科学计数法 + 格式说明 综合测试
+
+// 测试基本 format（回归）
+print("basic: {}\n".format(42));
+
+// 测试 {:.precision} 截断
+print("truncate: {:.3}\n".format("hello world"));
+
+// 测试 {:>width} 右对齐
+print("rpad: |{:>10}|\n".format("hi"));
+
+// 测试 {:<width} 左对齐
+print("lpad: |{:<10}|\n".format("hi"));
+
+// 测试 {:^width} 居中
+print("center: |{:^10}|\n".format("hi"));
+
+// 测试零填充 {:0>width}
+print("zeropad: {:0>5}\n".format("42"));
+
+// 测试自定义填充字符
+print("fill: |{:*^12}|\n".format("ok"));
+
+// 测试 width + precision
+print("w+p: |{:>10.4}|\n".format("hello world"));
+
+// 测试科学计数法浮点数 + 格式
+let big: float = 1.5e-3;
+print("sci+fmt: {:.1}\n".format(str(big)));
+
+// 测试多个组合
+print("multi: {} | {:>8} | {:.4}\n".format("a", "bc", "defghij"));

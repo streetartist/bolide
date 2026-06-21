@@ -1,0 +1,10 @@
+inline fn add(x: float, y: float) -> float {
+    return x + y;
+}
+
+fn main() {
+    let r = add(1.0, 2.0);
+    print(r); print("\n");
+}
+
+main();

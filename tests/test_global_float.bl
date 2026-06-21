@@ -1,0 +1,6 @@
+let GX: float = 0.5;
+let GY: float = 0.3;
+
+let x: float = 1.0;
+let y: float = x * GX + GY;
+print(y);

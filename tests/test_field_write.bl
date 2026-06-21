@@ -1,0 +1,13 @@
+class Vec3 { x: float; }
+
+fn test(out: Vec3, n: Vec3) {
+    let val: float = n.x * 0.5;
+    if val > 0.0 {
+        out.x = val;
+    }
+}
+
+var v: Vec3 = Vec3(0.0);
+var n: Vec3 = Vec3(2.0);
+test(v, n);
+print(v.x);

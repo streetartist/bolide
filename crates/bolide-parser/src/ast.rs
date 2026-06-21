@@ -13,6 +13,7 @@ pub enum Statement {
     Assign(Assign),
     FuncDef(FuncDef),
     ClassDef(ClassDef),
+    ValueDef(ValueDef),
     EnumDef(EnumDef),
     If(IfStmt),
     While(WhileStmt),
@@ -75,6 +76,8 @@ pub struct FuncDef {
     pub is_async: bool,
     /// export fn：以裸名（无 mangling）导出，供 C 链接调用
     pub is_export: bool,
+    /// inline fn：调用点内联展开函数体
+    pub is_inline: bool,
     /// 泛型参数，如 `fn id<T>(x: T) -> T`
     pub type_params: Vec<String>,
     pub params: Vec<Param>,
@@ -121,6 +124,20 @@ pub struct ClassDef {
     pub parent: Option<String>, // 父类名（继承）
     pub fields: Vec<ClassField>,
     pub methods: Vec<FuncDef>,
+}
+
+/// 值类型定义（栈上，零分配）
+#[derive(Debug, Clone)]
+pub struct ValueDef {
+    pub name: String,
+    pub fields: Vec<ValueField>,
+}
+
+/// 值类型字段
+#[derive(Debug, Clone)]
+pub struct ValueField {
+    pub name: String,
+    pub ty: Type,
 }
 
 /// enum/union 定义（代数数据类型）
@@ -316,6 +333,8 @@ pub enum Expr {
     Propagate(Box<Expr>),
     /// expr! - unwrap Result.Ok or throw Result.Err as Error
     Raise(Box<Expr>),
+    /// value 类型构造: TypeName { field: expr, ... }
+    ValueConstruct(String, Vec<(String, Expr)>),
     /// try { ... } expression - convert thrown Error into Result.Err
     TryExpr(Vec<Statement>),
     /// 元组字面量: (expr, expr, ...)

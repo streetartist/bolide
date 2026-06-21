@@ -12,7 +12,7 @@
     <img src="https://img.shields.io/badge/License-MIT-brightgreen.svg" alt="License: MIT">
   </a>
   <a href="#">
-    <img src="https://img.shields.io/badge/version-0.13.5-blue.svg" alt="Version">
+    <img src="https://img.shields.io/badge/version-0.13.6-blue.svg" alt="Version">
   </a>
   <a href="#">
     <img src="https://img.shields.io/badge/platform-windows%20%7C%20linux-lightgrey.svg" alt="Platform">
@@ -28,6 +28,8 @@
 - **JIT Compilation** - Native performance via Cranelift, fast startup
 - **AOT Compilation** - Compile to native executables, no runtime needed
 - **First-Class Functions** - Functions as values: pass, store in lists, return; higher-order `map`/`filter`
+- **Value Types** - Define lightweight aggregate types with `value Vec3 { ... }` for by-value construction, parameters, and returns
+- **Inline Functions** - Mark hot tiny helpers with `inline fn` so calls are expanded at the call site
 - **Async Coroutines** - First-class async/await support
 - **Bidirectional FFI** - Call C libraries (with callbacks); also compile Bolide to a static library callable from C (`export fn` + `.h` generation)
 - **Module System** - Namespace-isolated module imports
@@ -168,6 +170,47 @@ fn greet(name: str) {
     print(name);
 }
 ```
+
+### Value Types
+
+Use `value` to define small aggregate types. They work well for vectors, colors, and other hot-path records, and can be used as locals, parameters, and return values.
+
+```bolide
+value Vec3 { x: float; y: float; z: float; }
+
+let a: Vec3 = Vec3 { x: 1.0, y: 2.0, z: 3.0 };
+let b: Vec3 = Vec3 { x: 4.0, y: 5.0, z: 6.0 };
+
+fn dot(lhs: Vec3, rhs: Vec3) -> float {
+    return lhs.x * rhs.x + lhs.y * rhs.y + lhs.z * rhs.z;
+}
+
+print(dot(a, b));
+print(a.x);
+```
+
+### Inline Functions
+
+Use `inline fn` for short helpers that should be expanded at the call site, especially in numeric code and other hot paths.
+
+```bolide
+inline fn v3_add(a: Vec3, b: Vec3) -> Vec3 {
+    return Vec3 { x: a.x + b.x, y: a.y + b.y, z: a.z + b.z };
+}
+
+inline fn sq(x: float) -> float {
+    return x * x;
+}
+
+let sum = v3_add(
+    Vec3 { x: 1.0, y: 2.0, z: 3.0 },
+    Vec3 { x: 4.0, y: 5.0, z: 6.0 },
+);
+print(sum.y);
+print(sq(3.0));
+```
+
+At the moment, `inline fn` works best for short functions shaped like “a few `let` bindings plus one `return` expression”.
 
 ### First-Class Functions
 

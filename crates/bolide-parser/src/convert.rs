@@ -143,6 +143,7 @@ fn friendly_rule_name(rule: &Rule) -> Option<&'static str> {
         Rule::var_decl => Some("'let'/'var' declaration"),
         Rule::func_def => Some("'fn' definition"),
         Rule::class_def => Some("'class' definition"),
+        Rule::value_def => Some("'value' definition"),
         Rule::if_stmt => Some("'if' statement"),
         Rule::while_stmt => Some("'while' statement"),
         Rule::for_stmt => Some("'for' statement"),
@@ -150,7 +151,7 @@ fn friendly_rule_name(rule: &Rule) -> Option<&'static str> {
         Rule::expr_stmt => Some("expression statement"),
         Rule::assign_stmt => Some("assignment"),
         Rule::string_lit => Some("string literal"),
-        Rule::int_lit | Rule::float_lit | Rule::bigint_lit | Rule::decimal_lit => {
+        Rule::int_lit | Rule::float_lit | Rule::sci_lit | Rule::bigint_lit | Rule::decimal_lit => {
             Some("number literal")
         }
         _ => None,
@@ -186,6 +187,7 @@ fn parse_statement(pair: Pair<Rule>) -> Result<Option<Statement>, String> {
         Rule::expr_stmt => Ok(Some(Statement::Expr(parse_expr_stmt(pair)?))),
         Rule::import_stmt => Ok(Some(Statement::Import(parse_import(pair)?))),
         Rule::class_def => Ok(Some(Statement::ClassDef(parse_class_def(pair)?))),
+        Rule::value_def => Ok(Some(Statement::ValueDef(parse_value_def(pair)?))),
         Rule::extern_block => Ok(Some(Statement::ExternBlock(parse_extern_block(pair)?))),
         Rule::EOI => Ok(None),
         _ => Ok(None),
@@ -253,8 +255,9 @@ fn parse_func_def(pair: Pair<Rule>) -> Result<FuncDef, String> {
     let mut inner = pair.into_inner();
     let mut is_async = false;
     let mut is_export = false;
+    let mut is_inline = false;
 
-    // 前缀修饰符可按任意顺序出现：export? async? fn
+    // 前缀修饰符可按任意顺序出现：export? async? inline? fn
     let mut first = inner.next().unwrap();
     if first.as_rule() == Rule::export_keyword {
         is_export = true;
@@ -262,6 +265,10 @@ fn parse_func_def(pair: Pair<Rule>) -> Result<FuncDef, String> {
     }
     if first.as_rule() == Rule::async_keyword {
         is_async = true;
+        first = inner.next().unwrap();
+    }
+    if first.as_rule() == Rule::inline {
+        is_inline = true;
         first = inner.next().unwrap();
     }
     let name = first.as_str().to_string();
@@ -323,6 +330,7 @@ fn parse_func_def(pair: Pair<Rule>) -> Result<FuncDef, String> {
         name,
         is_async,
         is_export,
+        is_inline,
         type_params,
         params,
         throws,
@@ -1104,6 +1112,23 @@ fn parse_class_def(pair: Pair<Rule>) -> Result<ClassDef, String> {
     })
 }
 
+fn parse_value_def(pair: Pair<Rule>) -> Result<ValueDef, String> {
+    let mut inner = pair.into_inner();
+    let name = inner.next().unwrap().as_str().to_string();
+
+    let mut fields = Vec::new();
+    if let Some(fields_pair) = inner.next() {
+        for field in fields_pair.into_inner() {
+            let mut f = field.into_inner();
+            let fname = f.next().unwrap().as_str().to_string();
+            let fty = parse_type(f.next().unwrap())?;
+            fields.push(ValueField { name: fname, ty: fty });
+        }
+    }
+
+    Ok(ValueDef { name, fields })
+}
+
 // 表达式解析
 fn parse_expr(pair: Pair<Rule>) -> Result<Expr, String> {
     parse_or_expr(pair.into_inner().next().unwrap())
@@ -1515,6 +1540,13 @@ fn parse_primary(pair: Pair<Rule>) -> Result<Expr, String> {
                 .map_err(|e| format!("Invalid float literal '{}': {}", s, e))?;
             Ok(Expr::Float(f))
         }
+        Rule::sci_lit => {
+            let s = inner.as_str().replace('_', "");
+            let f: f64 = s
+                .parse()
+                .map_err(|e| format!("Invalid float literal '{}': {}", s, e))?;
+            Ok(Expr::Float(f))
+        }
         Rule::bigint_lit => {
             // 去掉后缀 B/b 和下划线分隔符
             let s = inner.as_str();
@@ -1562,6 +1594,22 @@ fn parse_primary(pair: Pair<Rule>) -> Result<Expr, String> {
                 }
             }
             Ok(Expr::Dict(entries))
+        }
+        Rule::value_construct => {
+            let mut inner_iter = inner.into_inner();
+            let type_name = inner_iter.next().unwrap().as_str().to_string();
+            let mut fields = Vec::new();
+            if let Some(args) = inner_iter.next() {
+                for arg_pair in args.into_inner() {
+                    if arg_pair.as_rule() == Rule::value_arg {
+                        let mut e = arg_pair.into_inner();
+                        let fname = e.next().unwrap().as_str().to_string();
+                        let fexpr = parse_expr(e.next().unwrap())?;
+                        fields.push((fname, fexpr));
+                    }
+                }
+            }
+            Ok(Expr::ValueConstruct(type_name, fields))
         }
         Rule::spawn_expr => {
             let spawn_inner = inner

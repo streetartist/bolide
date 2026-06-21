@@ -1,0 +1,4 @@
+let data: list<float> = [0.45, 0.85, 0.18, 0.88, 0.18];
+let idx: int = 1;
+let val: float = data[idx];
+print(val);

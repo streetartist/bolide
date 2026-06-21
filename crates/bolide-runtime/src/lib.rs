@@ -56,6 +56,7 @@ mod thread;
 mod time;
 mod tuple;
 mod web;
+mod vec3_simd;
 
 pub use atomic::*;
 pub use bigint::*;
@@ -92,6 +93,7 @@ pub use thread::*;
 pub use time::*;
 pub use tuple::*;
 pub use web::*;
+pub use vec3_simd::*;
 
 use std::alloc::{alloc, dealloc, Layout};
 use std::os::raw::c_void;

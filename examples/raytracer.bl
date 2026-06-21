@@ -1,0 +1,118 @@
+// ============================================================
+// Bolide 光线追踪器 — std/vec3 标准库版
+// 1920×1080, 4×4 SSAA, 5 spheres, depth 8, Gamma
+// ============================================================
+
+import "std/buffer/buffer.bl" as buffer;
+import "std/fs/fs.bl" as fs;
+import "std/math/math.bl" as math;
+import "std/time/time.bl" as time;
+import "std/vec3/vec3.bl" as vec3;
+
+let CX: list<float> = [0.0, 0.0, -1.15, 1.15, 0.4];
+let CY: list<float> = [-1000.5, 0.0, 0.0, 0.0, 0.45];
+fn ray_hit(cx: float, cy: float, cz: float, r: float, ox: float, oy: float, oz: float, dx: float, dy: float, dz: float) -> float {
+let CR: list<float> = [1000.0, 0.5, 0.5, 0.5, 0.22];
+let S_R: list<float> = [0.45, 0.85, 0.18, 0.88, 0.18];
+let S_G: list<float> = [0.42, 0.18, 0.45, 0.78, 0.78];
+let S_B: list<float> = [0.38, 0.18, 0.85, 0.22, 0.28];
+let LX: float = -0.433888; let LY: float = 0.771357; let LZ: float = -0.482094;
+
+fn ray_hit(cx,cy,cz,r, ox,oy,oz, dx,dy,dz: float) -> float {
+    let ocx = ox-cx; let ocy = oy-cy; let ocz = oz-cz;
+    let a = dx*dx+dy*dy+dz*dz; let hb = ocx*dx+ocy*dy+ocz*dz;
+    let cc = ocx*ocx+ocy*ocy+ocz*ocz - r*r; let d = hb*hb - a*cc;
+    if d<0.0{return -1.0} let sd=math.sqrt(d);
+    let t1=(-hb-sd)/a; if t1>0.0001{return t1}
+    let t2=(-hb+sd)/a; if t2>0.0001{return t2}
+    return -1.0;
+}
+
+var g_ht=0.0; var g_hi=-1;
+fn scene_hit(ox,oy,oz,dx,dy,dz: float) {
+    g_ht=1.0e6; g_hi=-1;
+    var t=ray_hit(CX[0],CY[0],CZ[0],CR[0],ox,oy,oz,dx,dy,dz);
+    if t>0.0001 and t<g_ht{g_ht=t;g_hi=0}
+    t=ray_hit(CX[1],CY[1],CZ[1],CR[1],ox,oy,oz,dx,dy,dz);
+    if t>0.0001 and t<g_ht{g_ht=t;g_hi=1}
+    t=ray_hit(CX[2],CY[2],CZ[2],CR[2],ox,oy,oz,dx,dy,dz);
+    if t>0.0001 and t<g_ht{g_ht=t;g_hi=2}
+    t=ray_hit(CX[3],CY[3],CZ[3],CR[3],ox,oy,oz,dx,dy,dz);
+    if t>0.0001 and t<g_ht{g_ht=t;g_hi=3}
+    t=ray_hit(CX[4],CY[4],CZ[4],CR[4],ox,oy,oz,dx,dy,dz);
+    if t>0.0001 and t<g_ht{g_ht=t;g_hi=4}
+}
+
+fn trace(ox,oy,oz,dx,dy,dz: float, depth: int) -> (float,float,float) {
+    if depth<=0{return(0,0,0)}
+    scene_hit(ox,oy,oz,dx,dy,dz); let t=g_ht; let idx=g_hi;
+    if idx<0{let sy=0.5*(dy+1); return(0.95-0.5*sy, 0.95-0.3*sy, 0.95+0.05*sy)}
+    let px=ox+dx*t; let py=oy+dy*t; let pz=oz+dz*t;
+    var nx=px-CX[idx]; var ny=py-CY[idx]; var nz=pz-CZ[idx];
+    let nl=vec3.length((nx,ny,nz));
+    if nl>0.000001{let inv=1/nl; nx=nx*inv; ny=ny*inv; nz=nz*inv}
+    let cr=S_R[idx]; let cg=S_G[idx]; let cb=S_B[idx];
+    if idx==3{
+        let rd=vec3.reflect((dx,dy,dz),(nx,ny,nz));
+        let b=trace(px+nx*0.001,py+ny*0.001,pz+nz*0.001, rd[0],rd[1],rd[2], depth-1);
+        return(b[0]*cr, b[1]*cg, b[2]*cb)
+    }
+    scene_hit(px+nx*0.001,py+ny*0.001,pz+nz*0.001, LX,LY,LZ); let sd=g_hi>=0;
+    var rr=cr*0.1; var gg=cg*0.1; var bb=cb*0.1;
+    if not sd{
+        let diff=math.max(0.0, nx*LX+ny*LY+nz*LZ);
+        rr=rr+cr*0.95*diff; gg=gg+cg*0.88*diff; bb=bb+cb*0.88*diff;
+        let hx=LX-dx; let hy=LY-dy; let hz=LZ-dz;
+        let hl=vec3.length((hx,hy,hz));
+        if hl>0.000001{let nh=(nx*hx+ny*hy+nz*hz)/hl;
+            let sp=math.pow(math.max(0.0,nh),32.0);
+            rr=rr+0.3*sp; gg=gg+0.3*sp; bb=bb+0.3*sp}
+    }
+    return(rr,gg,bb);
+}
+
+fn to_byte(c: float) -> int {let ic=int(c*255+0.5); if ic>255{return 255} if ic<0{return 0} return ic}
+fn emit(out: buffer.Buffer, r,g,b: float) {
+    out.push(to_byte(math.pow(math.max(0.0,r),0.454545))); out.push(" ");
+    out.push(to_byte(math.pow(math.max(0.0,g),0.454545))); out.push(" ");
+    out.push(to_byte(math.pow(math.max(0.0,b),0.454545))); out.push("\n");
+}
+
+fn strip(y0,y1,w,h: int) -> str {
+    let asp=float(w)/float(h); let du=asp/float(w); let dv=1/float(h);
+    let buf=buffer.with_capacity((y1-y0)*w*18);
+    for y in range(y0,y1){for x in range(w){
+        let uc=(float(x)/float(w)-0.5)*2*asp; let vc=(0.5-float(y)/float(h))*2;
+        var sr=0.0; var sg=0.0; var sb=0.0;
+        for sy in range(4){let sv=vc+(float(sy)*0.5-0.75)*dv;
+        for sx in range(4){let su=uc+(float(sx)*0.5-0.75)*du;
+            let rl=vec3.length((su,sv,-1.5));
+            let c=trace(0.0,1.2,4.5, su/rl,sv/rl,-1.5/rl, 8);
+            sr=sr+c[0]; sg=sg+c[1]; sb=sb+c[2];
+        }}
+        emit(buf, sr/16, sg/16, sb/16);
+    }}
+    let t=buf.to_string(); buf.close(); return t;
+}
+
+fn render(w,h: int) -> str {
+    let st=h/8;
+    let strips:(str,str,str,str,str,str,str,str)=spawn all{
+        strip(0,st,w,h),strip(st,st*2,w,h),strip(st*2,st*3,w,h),
+        strip(st*3,st*4,w,h),strip(st*4,st*5,w,h),strip(st*5,st*6,w,h),
+        strip(st*6,st*7,w,h),strip(st*7,h,w,h)
+    };
+    let out=buffer.with_capacity(w*h*18);
+    out.push("P3\n"); out.push(w); out.push(" "); out.push(h); out.push("\n255\n");
+    for i in range(8){out.push(strips[i])}
+    let p=out.to_string(); out.close(); return p;
+}
+
+let W=1920; let H=1080; let OUT="tmp/raytracer_vec3.ppm";
+fs.create_dir_all("tmp");
+print("Bolide Ray Tracer (vec3 lib) — {}x{} — 8 workers, 4x4 SSAA\n".format(W,H));
+let t0=time.monotonic_ms();
+let ppm=render(W,H);
+let ms=time.monotonic_ms()-t0;
+fs.write_text(OUT,ppm);
+print("Done: {}x{} in {} ms -> {}\n".format(W,H,ms,OUT));

@@ -1,0 +1,9 @@
+fn take_owned(owned x: int) {
+    print("got: "); print(x); print("\n");
+}
+
+var a: int = 42;
+take_owned(a);
+print("after owned: ");
+print(a);
+print("\n");

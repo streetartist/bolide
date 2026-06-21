@@ -1,0 +1,147 @@
+import "std/math/math.bl" as math;
+
+// ============================================================
+// std/vec3/vec3.bl — 3D 向量标准库
+// SIMD 加速: dot/length/distance/normalize/cross/reflect/refract
+// 用法: import "std/vec3/vec3.bl" as vec3;
+//       let v: (float,float,float) = (1,2,3);
+//       let d: float = vec3.dot(v, (4,5,6));
+// ============================================================
+
+extern "bolide" {
+    fn bolide_vec3_dot(ax: c_double, ay: c_double, az: c_double, bx: c_double, by: c_double, bz: c_double) -> c_double;
+    fn bolide_vec3_len(ax: c_double, ay: c_double, az: c_double) -> c_double;
+    fn bolide_vec3_dist(ax: c_double, ay: c_double, az: c_double, bx: c_double, by: c_double, bz: c_double) -> c_double;
+}
+
+// ============================================================
+// 构造
+// ============================================================
+
+fn new(x: float, y: float, z: float) -> (float, float, float) {
+    return (x, y, z);
+}
+fn zero() -> (float, float, float) { return (0.0, 0.0, 0.0); }
+fn one() -> (float, float, float) { return (1.0, 1.0, 1.0); }
+fn up() -> (float, float, float) { return (0.0, 1.0, 0.0); }
+fn right() -> (float, float, float) { return (1.0, 0.0, 0.0); }
+fn forward() -> (float, float, float) { return (0.0, 0.0, -1.0); }
+
+// ============================================================
+// 算术 — 纯 Bolide，3 个浮点运算不值得 FFI 开销
+// ============================================================
+
+fn add(a: (float,float,float), b: (float,float,float)) -> (float,float,float) {
+    return (a[0]+b[0], a[1]+b[1], a[2]+b[2]);
+}
+fn sub(a: (float,float,float), b: (float,float,float)) -> (float,float,float) {
+    return (a[0]-b[0], a[1]-b[1], a[2]-b[2]);
+}
+fn scale(v: (float,float,float), s: float) -> (float,float,float) {
+    return (v[0]*s, v[1]*s, v[2]*s);
+}
+fn mul(a: (float,float,float), b: (float,float,float)) -> (float,float,float) {
+    return (a[0]*b[0], a[1]*b[1], a[2]*b[2]);
+}
+fn div(v: (float,float,float), s: float) -> (float,float,float) {
+    return (v[0]/s, v[1]/s, v[2]/s);
+}
+fn neg(v: (float,float,float)) -> (float,float,float) {
+    return (-v[0], -v[1], -v[2]);
+}
+
+// ============================================================
+// 向量运算 — SIMD 加速
+// ============================================================
+
+/// 点积 a·b
+fn dot(a: (float,float,float), b: (float,float,float)) -> float {
+    return bolide_vec3_dot(a[0],a[1],a[2], b[0],b[1],b[2]);
+}
+
+/// 长度 |v|
+fn length(v: (float,float,float)) -> float {
+    return bolide_vec3_len(v[0],v[1],v[2]);
+}
+
+/// 长度平方（无 sqrt，纯标量更快）
+fn length_sq(v: (float,float,float)) -> float {
+    return v[0]*v[0] + v[1]*v[1] + v[2]*v[2];
+}
+
+/// 距离 |a-b|
+fn distance(a: (float,float,float), b: (float,float,float)) -> float {
+    return bolide_vec3_dist(a[0],a[1],a[2], b[0],b[1],b[2]);
+}
+
+/// 归一化 v/|v|
+fn normalize(v: (float,float,float)) -> (float,float,float) {
+    let l: float = bolide_vec3_len(v[0],v[1],v[2]);
+    if l < 0.000001 { return (0.0,0.0,0.0); }
+    return (v[0]/l, v[1]/l, v[2]/l);
+}
+
+/// 叉积 a×b
+fn cross(a: (float,float,float), b: (float,float,float)) -> (float,float,float) {
+    return (
+        a[1]*b[2] - a[2]*b[1],
+        a[2]*b[0] - a[0]*b[2],
+        a[0]*b[1] - a[1]*b[0]
+    );
+}
+
+/// 反射: v 关于法线 n 的反射方向（n 须已归一化）
+fn reflect(v: (float,float,float), n: (float,float,float)) -> (float,float,float) {
+    let d: float = 2.0 * bolide_vec3_dot(v[0],v[1],v[2], n[0],n[1],n[2]);
+    return (v[0] - n[0]*d, v[1] - n[1]*d, v[2] - n[2]*d);
+}
+
+/// 折射: Snell 定律。eta = n1/n2（入射介质折射率/出射介质折射率）
+/// 法线 n 须已归一化。返回 (折射方向, 是否成功)。全反射时成功=false
+fn refract(uv: (float,float,float), n: (float,float,float), eta: float) -> ((float,float,float), bool) {
+    let dt: float = -(uv[0]*n[0] + uv[1]*n[1] + uv[2]*n[2]);
+    // 钳位防止浮点误差导致 cos > 1
+    let cos_theta: float = math.min(dt, 1.0);
+    let sin2: float = math.max(0.0, 1.0 - cos_theta*cos_theta);
+    let sin_theta: float = math.sqrt(sin2);
+    // 全反射判断
+    if eta * sin_theta > 1.0 { return ((0.0,0.0,0.0), false); }
+    // 垂直分量: eta * (uv + n*cos_theta)
+    let rx: float = eta*(uv[0] + n[0]*cos_theta);
+    let ry: float = eta*(uv[1] + n[1]*cos_theta);
+    let rz: float = eta*(uv[2] + n[2]*cos_theta);
+    // 平行分量（与法线反向）: -sqrt(1 - |r_perp|²) * n
+    let r_len2: float = rx*rx + ry*ry + rz*rz;
+    let rs: float = -math.sqrt(math.max(0.0, 1.0 - r_len2));
+    return ((rx + n[0]*rs, ry + n[1]*rs, rz + n[2]*rs), true);
+}
+// ============================================================
+
+/// 线性插值 (1-t)*a + t*b
+fn lerp(a: (float,float,float), b: (float,float,float), t: float) -> (float,float,float) {
+    let s: float = 1.0 - t;
+    return (s*a[0] + t*b[0], s*a[1] + t*b[1], s*a[2] + t*b[2]);
+}
+
+fn min(a: (float,float,float), b: (float,float,float)) -> (float,float,float) {
+    var rx: float = a[0]; var ry: float = a[1]; var rz: float = a[2];
+    if b[0] < rx { rx = b[0]; }
+    if b[1] < ry { ry = b[1]; }
+    if b[2] < rz { rz = b[2]; }
+    return (rx, ry, rz);
+}
+fn max(a: (float,float,float), b: (float,float,float)) -> (float,float,float) {
+    var rx: float = a[0]; var ry: float = a[1]; var rz: float = a[2];
+    if b[0] > rx { rx = b[0]; }
+    if b[1] > ry { ry = b[1]; }
+    if b[2] > rz { rz = b[2]; }
+    return (rx, ry, rz);
+}
+
+/// 限制长度不超过 max_len
+fn clamp_length(v: (float,float,float), max_len: float) -> (float,float,float) {
+    let l: float = bolide_vec3_len(v[0],v[1],v[2]);
+    if l <= max_len or l < 0.000001 { return v; }
+    let s: float = max_len / l;
+    return (v[0]*s, v[1]*s, v[2]*s);
+}

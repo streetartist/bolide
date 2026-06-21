@@ -1,0 +1,42 @@
+class Vec3 {
+    x: float; y: float; z: float;
+    fn set(px: float, py: float, pz: float) { self.x = px; self.y = py; self.z = pz; }
+    fn sky() { self.x = 0.5 * (self.y + 1.0); }
+    fn normalize() {
+        let l: float = self.x * self.x + self.y * self.y + self.z * self.z;
+        if l > 0.0 { self.x = self.x / 1.0; }
+        // simplified
+    }
+    fn reflect(n: Vec3) {
+        let d: float = self.x * n.x + self.y * n.y;
+        self.x = self.x - n.x * d;
+    }
+}
+
+fn test(out: Vec3, depth: int) {
+    if depth <= 0 { out.set(0.0, 0.0, 0.0); return; }
+    
+    // simulate: local Vec3 usage
+    let pt: Vec3 = Vec3(1.0, 2.0, 3.0);
+    let n: Vec3 = Vec3(pt.x + 0.5, pt.y, pt.z);
+    n.normalize();
+    
+    if depth == 3 {
+        // metal: reflect + recurse
+        let rdir: Vec3 = Vec3(0.1, 0.2, 0.3);
+        rdir.reflect(n);
+        test(out, depth - 1);
+        out.x = out.x * 0.88;
+        return;
+    }
+    
+    // diffuse
+    out.x = 0.45 * 0.1;
+    out.y = 0.42 * 0.1;
+    let diff: float = n.x * 0.4 + n.y * 0.8;
+    out.x = out.x + 0.45 * 0.95 * diff;
+}
+
+let v: Vec3 = Vec3(0.0, 0.0, 0.0);
+test(v, 8);
+print(v.x);

@@ -1,0 +1,10 @@
+value Vec3 { x: float; y: float; z: float; }
+
+fn main() {
+    let a = Vec3 { x: 1.0, y: 2.0, z: 3.0 };
+    print(a.x); print(" ");
+    print(a.y); print(" ");
+    print(a.z); print("\n");
+}
+
+main();

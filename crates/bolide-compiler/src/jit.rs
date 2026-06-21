@@ -8,7 +8,7 @@ use crate::ffi_spec::{
 use crate::inject_builtin_classes;
 use bolide_parser::{
     Assign, BinOp, ClassDef, ClassField, Expr, ExternBlock, ForStmt, FuncDef, IfStmt, Param,
-    ParamMode, Program, Statement, Type as BolideType, UnaryOp, VarDecl,
+    ParamMode, Program, Statement, Type as BolideType, UnaryOp, ValueField, VarDecl,
 };
 use cranelift::prelude::isa::{CallConv, TargetIsa};
 use cranelift::prelude::*;
@@ -286,6 +286,8 @@ pub struct JitCompiler {
     pending_closures: Vec<ClosureJob>,
     /// 方法重载映射: (类名, 方法名) -> [(参数数量, 内部全名), ...]
     overloaded_methods: HashMap<String, Vec<(usize, String)>>,
+    /// 值类型定义: 类型名 -> 字段列表
+    value_types: HashMap<String, Vec<ValueField>>,
 }
 
 /// 一个待编译的 lifted 闭包函数
@@ -2815,6 +2817,7 @@ impl JitCompiler {
             dependency_manifest: None,
             pending_closures: Vec::new(),
             overloaded_methods: HashMap::new(),
+            value_types: HashMap::new(),
             closure_counter: 0,
             funcsig_return_sources: HashMap::new(),
             funcsig_closure_param_indices: HashMap::new(),
@@ -2839,6 +2842,8 @@ impl JitCompiler {
         let program = inject_builtin_classes(program);
         // 泛型函数单态化
         let program = crate::monomorphize(program)?;
+        // 内联展开：将 inline fn 的调用点替换为函数体
+        let program = crate::inline_expand(program)?;
 
         // 注册内置函数
         self.register_builtins()?;
@@ -2853,6 +2858,7 @@ impl JitCompiler {
         // 收集所有 ADT 和类定义
         self.collect_adts(&program)?;
         self.collect_classes(&program)?;
+        self.collect_value_types(&program)?;
 
         // 第一遍：收集所有函数声明（包括类构造函数）
         for stmt in &program.statements {
@@ -2916,6 +2922,7 @@ impl JitCompiler {
             name: "__main__".to_string(),
             is_async: false,
             is_export: false,
+            is_inline: false,
             type_params: vec![],
             params: vec![],
             throws: vec![],
@@ -2966,18 +2973,39 @@ impl JitCompiler {
     fn declare_function(&mut self, func: &FuncDef) -> Result<(), String> {
         let mut sig = self.module.make_signature();
 
-        // 添加参数类型
+        // 添加参数类型（值类型展开为多个标量字段）
         for param in &func.params {
             let param_ty = self.normalize_bolide_type(&param.ty);
-            let ty = self.bolide_type_to_cranelift(&param_ty);
+            if let BolideType::Custom(name) = &param_ty {
+                if self.value_types.contains_key(name) {
+                    for ft in self.value_type_cranelift_types(name) {
+                        sig.params.push(AbiParam::new(ft));
+                    }
+                    continue;
+                }
+            }
+            let ty = if param.mode == ParamMode::Ref { self.ptr_type } else { self.bolide_type_to_cranelift(&param_ty) };
             sig.params.push(AbiParam::new(ty));
         }
 
-        // 添加返回类型
+        // 添加返回类型（值类型通过 sret 指针返回，放在参数最前面）
         if let Some(ref ret_ty) = func.return_type {
             let ret_ty = self.normalize_bolide_type(ret_ty);
-            sig.returns
-                .push(AbiParam::new(self.bolide_type_to_cranelift(&ret_ty)));
+            if let BolideType::Custom(name) = &ret_ty {
+                if self.value_types.contains_key(name) {
+                    // sret: 在参数最前面插入隐藏指针参数
+                    sig.params.insert(0, AbiParam::new(self.ptr_type));
+                    // 不添加返回值（函数通过 sret 指针输出）
+                } else {
+                    sig.returns
+                        .push(AbiParam::new(self.bolide_type_to_cranelift(&ret_ty)));
+                }
+            } else {
+                sig.returns
+                    .push(AbiParam::new(self.bolide_type_to_cranelift(&ret_ty)));
+            }
+        } else {
+            // 无显式返回类型 → 检查是否声明为 value 类型的返回值
         }
 
         let function_key = self.overload_key_for_params(&func.name, &func.params);
@@ -6556,26 +6584,62 @@ impl JitCompiler {
             .or_else(|| self.functions.get(&func.name))
             .ok_or_else(|| format!("Function {} not declared", func.name))?;
 
-        // 预先计算参数类型
+        // 预先计算参数类型（每参数一个标量；值类型参数此处占位为 ptr，绑定时另行展开）
         let param_types: Vec<types::Type> = func
             .params
             .iter()
             .map(|p| self.bolide_type_to_cranelift(&self.normalize_bolide_type(&p.ty)))
             .collect();
 
-        // 重建签名
+        // 重建签名（值类型参数展开为多个标量字段；值类型返回通过 sret 指针参数）
         let mut sig = self.module.make_signature();
-        for ty in &param_types {
-            sig.params.push(AbiParam::new(*ty));
-        }
+        let mut has_sret: bool = false;
         if let Some(ref ret_ty) = func.return_type {
             let ret_ty = self.normalize_bolide_type(ret_ty);
-            sig.returns
-                .push(AbiParam::new(self.bolide_type_to_cranelift(&ret_ty)));
+            if let BolideType::Custom(name) = &ret_ty {
+                if self.value_types.contains_key(name) {
+                    sig.params.push(AbiParam::new(self.ptr_type));
+                    has_sret = true;
+                }
+            }
+        }
+        for param in &func.params {
+            let param_ty = self.normalize_bolide_type(&param.ty);
+            if let BolideType::Custom(name) = &param_ty {
+                if self.value_types.contains_key(name) {
+                    for ft in self.value_type_cranelift_types(name) {
+                        sig.params.push(AbiParam::new(ft));
+                    }
+                    continue;
+                }
+            }
+            let ty = self.bolide_type_to_cranelift(&param_ty);
+            let sig_ty = if param.mode == ParamMode::Ref { self.ptr_type } else { ty };
+            sig.params.push(AbiParam::new(sig_ty));
+        }
+        if !has_sret {
+            if let Some(ref ret_ty) = func.return_type {
+                let ret_ty = self.normalize_bolide_type(ret_ty);
+                sig.returns
+                    .push(AbiParam::new(self.bolide_type_to_cranelift(&ret_ty)));
+            }
         }
 
         self.ctx.func.signature = sig;
         self.ctx.func.name = cranelift_codegen::ir::UserFuncName::user(0, func_id.as_u32());
+
+        // 提前计算 sret 值类型名，避免 builder 借用时访问 self
+        let normalized_ret = func
+            .return_type
+            .as_ref()
+            .map(|rt| self.normalize_bolide_type(rt));
+        let sret_vt: Option<String> = normalized_ret
+            .and_then(|nrt| {
+                if let BolideType::Custom(ref name) = nrt {
+                    if self.value_types.contains_key(name) { Some(name.clone()) } else { None }
+                } else { None }
+            });
+        let has_sret = sret_vt.is_some();
 
         // 创建函数构建器
         let mut builder_ctx = FunctionBuilderContext::new();
@@ -6661,10 +6725,18 @@ impl JitCompiler {
             funcsig_return_sources,
             funcsig_closure_param_indices,
             &self.overloaded_methods,
+            self.value_types.clone(),
         );
 
         // 绑定参数到变量
         let params = compile_ctx.builder.block_params(entry_block).to_vec();
+
+        // sret: block_params[0] 是值类型返回存储指针
+        let mut flat: usize = 0;
+        if has_sret {
+            flat = 1;
+            compile_ctx.sret_ptr = Some(params[0]);
+        }
 
         for (i, param) in func.params.iter().enumerate() {
             let param_ty = compile_ctx.normalize_bolide_type(&param.ty);
@@ -6672,6 +6744,23 @@ impl JitCompiler {
             compile_ctx
                 .var_types
                 .insert(param.name.clone(), param_ty.clone());
+
+            // 值类型参数：从展开的多个 block param 绑定到字段变量 name$fi
+            if let BolideType::Custom(vt_name) = &param_ty {
+                if let Some(fields) = compile_ctx.value_types.get(vt_name).cloned() {
+                    for (fi, field) in fields.iter().enumerate() {
+                        let ft = compile_ctx.bolide_type_to_cranelift(&field.ty);
+                        let fvar_name = format!("{}${}", param.name, fi);
+                        let var = compile_ctx.declare_variable(&fvar_name, ft);
+                        compile_ctx.builder.def_var(var, params[flat]);
+                        flat += 1;
+                    }
+                    compile_ctx
+                        .value_var_fields
+                        .insert(param.name.clone(), fields);
+                    continue;
+                }
+            }
 
             // 函数类型参数只有在调用点实际传入闭包对象时才走闭包 ABI。
             if matches!(param_ty, BolideType::FuncSig(_, _) | BolideType::Func)
@@ -6688,12 +6777,12 @@ impl JitCompiler {
                 ParamMode::Borrow => {
                     // 借用：直接使用参数值，不负责释放
                     let var = compile_ctx.declare_variable(&param.name, param_types[i]);
-                    compile_ctx.builder.def_var(var, params[i]);
+                    compile_ctx.builder.def_var(var, params[flat]);
                 }
                 ParamMode::Owned => {
                     // 所有权转移：直接使用参数值，负责释放
                     let var = compile_ctx.declare_variable(&param.name, param_types[i]);
-                    compile_ctx.builder.def_var(var, params[i]);
+                    compile_ctx.builder.def_var(var, params[flat]);
                     // 对于需要 RC 管理的类型，注册到 rc_variables
                     if CompileContext::is_rc_type(&param_ty) {
                         compile_ctx
@@ -6703,12 +6792,12 @@ impl JitCompiler {
                 }
                 ParamMode::Ref => {
                     // Ref 参数：参数是指针地址，需要解引用
-                    let ptr_addr = params[i];
+                    let ptr_addr = params[flat];
                     let val =
                         compile_ctx
                             .builder
                             .ins()
-                            .load(ptr_type, MemFlags::new(), ptr_addr, 0);
+                            .load(param_types[i], MemFlags::new(), ptr_addr, 0);
                     let var = compile_ctx.declare_variable(&param.name, param_types[i]);
                     compile_ctx.builder.def_var(var, val);
                     // 记录 Ref 参数，以便在函数返回前写回
@@ -6717,6 +6806,7 @@ impl JitCompiler {
                         .push((param.name.clone(), var, ptr_addr));
                 }
             }
+            flat += 1;
         }
 
         // 绑定 super：在类方法体内，super 与 self 共享同一对象指针，
@@ -6749,11 +6839,32 @@ impl JitCompiler {
             compile_ctx.write_back_ref_params();
 
             if let Some(ref ret_ty) = func.return_type {
-                let zero = match ret_ty {
-                    BolideType::Float => compile_ctx.builder.ins().f64const(0.0),
-                    _ => compile_ctx.builder.ins().iconst(types::I64, 0),
-                };
-                compile_ctx.builder.ins().return_(&[zero]);
+                if has_sret {
+                    // sret 值类型：写 N 个零到 sret 指针
+                    let zero_val = compile_ctx.builder.ins().iconst(types::I64, 0);
+                    let zero_f64 = compile_ctx.builder.ins().f64const(0.0);
+                    let entry_block = compile_ctx.builder.current_block().unwrap();
+                    let sret_ptr = compile_ctx.builder.func.dfg
+                        .block_params(entry_block)
+                        .first()
+                        .copied()
+                        .unwrap_or_else(|| compile_ctx.builder.ins().iconst(compile_ctx.ptr_type, 0));
+                    if let Some(ref vt_name) = sret_vt {
+                        if let Some(fields) = compile_ctx.value_types.get(vt_name).cloned() {
+                            for (fi, field) in fields.iter().enumerate() {
+                                let z = if field.ty == BolideType::Float { zero_f64 } else { zero_val };
+                                compile_ctx.builder.ins().store(MemFlags::new(), z, sret_ptr, (fi * 8) as i32);
+                            }
+                        }
+                    }
+                    compile_ctx.builder.ins().return_(&[]);
+                } else {
+                    let zero = match ret_ty {
+                        BolideType::Float => compile_ctx.builder.ins().f64const(0.0),
+                        _ => compile_ctx.builder.ins().iconst(types::I64, 0),
+                    };
+                    compile_ctx.builder.ins().return_(&[zero]);
+                }
             } else {
                 compile_ctx.builder.ins().return_(&[]);
             }
@@ -6869,6 +6980,7 @@ impl JitCompiler {
             funcsig_return_sources,
             funcsig_closure_param_indices,
             &self.overloaded_methods,
+            self.value_types.clone(),
         );
 
         let block_params = compile_ctx.builder.block_params(entry_block).to_vec();
@@ -7484,6 +7596,27 @@ impl JitCompiler {
             methods,
             size: offset,
         })
+    }
+
+    /// 收集值类型定义
+    fn collect_value_types(&mut self, program: &Program) -> Result<(), String> {
+        for stmt in &program.statements {
+            if let Statement::ValueDef(vd) = stmt {
+                self.value_types.insert(vd.name.clone(), vd.fields.clone());
+            }
+        }
+        Ok(())
+    }
+
+    /// 值类型各字段对应的 Cranelift 标量类型（ABI 展开用）
+    fn value_type_cranelift_types(&self, name: &str) -> Vec<types::Type> {
+        match self.value_types.get(name) {
+            Some(fields) => fields
+                .iter()
+                .map(|f| self.bolide_type_to_cranelift(&f.ty))
+                .collect(),
+            None => vec![],
+        }
     }
 
     /// 声明类构造函数
@@ -9038,6 +9171,14 @@ struct CompileContext<'a, 'b> {
     /// 方法重载映射引用
     overloaded_methods: &'a HashMap<String, Vec<(usize, String)>>,
     closure_captures: Vec<(String, BolideType)>,
+    /// 值类型定义: 类型名 -> 字段列表
+    value_types: HashMap<String, Vec<ValueField>>,
+    /// 值类型局部变量名 -> 字段定义（字段值存于 Cranelift 变量 `name$i`）
+    value_var_fields: HashMap<String, Vec<ValueField>>,
+    /// 临时句柄 -> 字段值数组（仅用于函数调用返回值桥接；call 结果 SSA 唯一，无碰撞）
+    value_packs: HashMap<Value, Vec<Value>>,
+    /// sret 指针（值类型返回函数入口块的第一个 block param）
+    sret_ptr: Option<Value>,
 }
 
 impl<'a, 'b> CompileContext<'a, 'b> {
@@ -9154,6 +9295,7 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         funcsig_return_sources: HashMap<String, FuncSigReturnSource>,
         funcsig_closure_param_indices: HashMap<String, HashSet<usize>>,
         overloaded_methods: &'a HashMap<String, Vec<(usize, String)>>,
+        value_types: HashMap<String, Vec<ValueField>>,
     ) -> Self {
         Self {
             builder,
@@ -9210,6 +9352,10 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             closure_env_ptr: None,
             closure_captures: Vec::new(),
             overloaded_methods,
+            value_types,
+            value_var_fields: HashMap::new(),
+            value_packs: HashMap::new(),
+            sret_ptr: None,
         }
     }
 
@@ -10021,6 +10167,12 @@ impl<'a, 'b> CompileContext<'a, 'b> {
 
     /// 统一的 release 辅助函数，处理递归结构（如 Tuple/Class）
     fn emit_release(&mut self, val: Value, ty: &BolideType) {
+        // 值类型：无 RC 头，跳过释放
+        if let BolideType::Custom(name) = ty {
+            if self.value_types.contains_key(name) {
+                return;
+            }
+        }
         if let BolideType::Tuple(_) = ty {
             if let Some(&release_func) = self.func_refs.get("@_tuple_release") {
                 self.builder.ins().call(release_func, &[val]);
@@ -10179,6 +10331,12 @@ impl<'a, 'b> CompileContext<'a, 'b> {
 
     /// 记录临时 RC 值（表达式中间结果）
     fn track_temp_rc_value(&mut self, val: Value, ty: &BolideType) {
+        // 值类型：无 RC 头，不参与 RC 跟踪
+        if let BolideType::Custom(name) = ty {
+            if self.value_types.contains_key(name) {
+                return;
+            }
+        }
         if Self::is_rc_type(ty) && !self.temp_rc_values.iter().any(|(v, _)| *v == val) {
             self.temp_rc_values.push((val, ty.clone()));
         }
@@ -10280,6 +10438,24 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             .get(&self.current_func_name)
             .cloned()
             .flatten();
+        // 值类型 sret: 直接返空（调用者会在 sret 栈槽中看到零值）
+        if let Some(BolideType::Custom(name)) = return_ty.as_ref().map(|rt| self.normalize_bolide_type(rt)) {
+            if self.value_types.contains_key(&name) {
+                if let Some(sret_ptr) = self.sret_ptr {
+                    // 写零到 sret 槽
+                    let zero_val = self.builder.ins().iconst(types::I64, 0);
+                    let zero_f64 = self.builder.ins().f64const(0.0);
+                    if let Some(fields) = self.value_types.get(&name) {
+                        for (fi, field) in fields.iter().enumerate() {
+                            let z = if field.ty == BolideType::Float { zero_f64 } else { zero_val };
+                            self.builder.ins().store(MemFlags::new(), z, sret_ptr, (fi * 8) as i32);
+                        }
+                    }
+                    self.builder.ins().return_(&[]);
+                    return;
+                }
+            }
+        }
         match return_ty {
             Some(BolideType::Float) => {
                 let zero = self.builder.ins().f64const(0.0);
@@ -10506,6 +10682,7 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             Statement::FuncDef(_) => Ok(false),
             Statement::ClassDef(_) => Ok(false),
             Statement::EnumDef(_) => Ok(false),
+            Statement::ValueDef(_) => Ok(false),
             Statement::Import(_) => Ok(false),
             Statement::ExternBlock(eb) => {
                 self.register_extern_block(eb)?;
@@ -11192,6 +11369,19 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         // from 借用检查：借用存活期间禁止对来源变量重新赋值
         self.check_borrow_source_assign(var_name)?;
 
+        // 值类型赋值：将新值字段写入 name$fi
+        if self.value_var_fields.contains_key(var_name) {
+            let field_vals = self.compile_value_expr(value)?;
+            let fields = self.value_var_fields.get(var_name).cloned().unwrap_or_default();
+            for (fi, _field) in fields.iter().enumerate() {
+                let fvar_name = format!("{}${}", var_name, fi);
+                if let Some(&var) = self.variables.get(&fvar_name) {
+                    self.builder.def_var(var, field_vals[fi]);
+                }
+            }
+            return Ok(());
+        }
+
         // 首先检查是否是局部变量
         if let Some(&var) = self.variables.get(var_name) {
             // 局部变量赋值（原有逻辑）
@@ -11406,10 +11596,28 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         // from 借用检查：借用值禁止存入对象字段
         self.check_borrow_escape(value, "field assignment")?;
 
+        // 值类型字段赋值：展开赋值为字段标量，写回 name$fi
+        if let Expr::Ident(var_name) = base {
+            if let Some(vt_name) = self.value_type_name_of(base) {
+                let fields = self.value_types.get(&vt_name).cloned().unwrap_or_default();
+                let fi = fields.iter().position(|f| f.name == *member)
+                    .ok_or_else(|| format!("Field '{}' not found in value type '{}'", member, vt_name))?;
+                let val = self.compile_expr(value)?;
+                let fvar_name = format!("{}${}", var_name, fi);
+                if let Some(&var) = self.variables.get(&fvar_name) {
+                    self.builder.def_var(var, val);
+                    return Ok(());
+                }
+                return Err(format!("value field var '{}' not found", fvar_name));
+            }
+        }
+
         // 获取基础表达式的类型
         let class_name = self.get_expr_type(base)?;
         let class_name = match class_name {
-            BolideType::Custom(name) => name,
+            BolideType::Custom(name) if self.classes.contains_key(&name) => name,
+            BolideType::Custom(name) if self.value_types.contains_key(&name) =>
+                return Err(format!("Cannot assign to field '{}' of value type '{}' through a non-Ident base", member, name)),
             _ => return Err(format!("Member assign on non-class type: {:?}", class_name)),
         };
 
@@ -11546,9 +11754,71 @@ impl<'a, 'b> CompileContext<'a, 'b> {
 
             // 全局变量不需要创建局部变量，直接编译初始化赋值
             if let Some(ref val) = decl.value {
+                // 值类型全局变量：Vec3 { ... } → 写入 global_data 数据段
+                if let BolideType::Custom(vt_name) = &bolide_ty {
+                    if let Some(fields) = self.value_types.get(vt_name).cloned() {
+                        let data_id = *self.global_data_ids.get(&decl.name)
+                            .ok_or_else(|| format!("global '{}' data not registered", decl.name))?;
+                        let gv = self.module.declare_data_in_func(data_id, self.builder.func);
+                        let base = self.builder.ins().global_value(self.ptr_type, gv);
+                        let field_vals = self.compile_value_expr(val)?;
+                        for (fi, _) in fields.iter().enumerate() {
+                            self.builder.ins().store(
+                                MemFlags::new(),
+                                field_vals[fi],
+                                base,
+                                (fi * 8) as i32,
+                            );
+                        }
+                        return Ok(());
+                    }
+                }
                 self.compile_var_assign(&decl.name, val)?;
             }
             return Ok(());
+        }
+
+        // 值类型局部变量：展开为字段变量 name$i（零分配）
+        if let BolideType::Custom(vt_name) = &bolide_ty {
+            if let Some(fields) = self.value_types.get(vt_name).cloned() {
+                self.snapshot_binding_for_scope(&decl.name);
+                let value = decl
+                    .value
+                    .as_ref()
+                    .ok_or_else(|| format!("value type '{}' must be initialized", vt_name))?;
+                let field_vals = self.compile_value_expr(value)?;
+                if field_vals.len() != fields.len() {
+                    return Err(format!(
+                        "value '{}' expected {} fields, got {}",
+                        vt_name,
+                        fields.len(),
+                        field_vals.len()
+                    ));
+                }
+                for (fi, field) in fields.iter().enumerate() {
+                    let ft = self.bolide_type_to_cranelift(&field.ty);
+                    let fvar_name = format!("{}${}", decl.name, fi);
+                    let var = self.declare_variable(&fvar_name, ft);
+                    self.builder.def_var(var, field_vals[fi]);
+                }
+                self.var_types.insert(decl.name.clone(), bolide_ty.clone());
+                self.var_mutability.insert(decl.name.clone(), decl.mutable);
+                self.value_var_fields.insert(decl.name.clone(), fields);
+                self.record_var_scope(&decl.name);
+                self.spawn_func_map.remove(&decl.name);
+                self.task_func_map.remove(&decl.name);
+                self.force_thread_tasks.remove(&decl.name);
+                if let Some(func_name) = pending_spawn_func {
+                    self.spawn_func_map.insert(decl.name.clone(), func_name);
+                }
+                if let Some(func_name) = pending_task_func {
+                    self.task_func_map.insert(decl.name.clone(), func_name);
+                }
+                if pending_force_thread_task {
+                    self.force_thread_tasks.insert(decl.name.clone());
+                }
+                return Ok(());
+            }
         }
 
         // 转换为 Cranelift 类型
@@ -11750,6 +12020,25 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                 self.validate_lifetime_return(e)?;
             }
 
+            // 值类型返回：通过 sret 指针输出标量字段
+            if let Some(ref e) = expr {
+                if self.value_type_name_of(e).is_some() {
+                    let field_vals = self.compile_value_expr(e)?;
+                    if let Some(sret_ptr) = self.sret_ptr {
+                        for (fi, &v) in field_vals.iter().enumerate() {
+                            self.builder
+                                .ins()
+                                .store(MemFlags::new(), v, sret_ptr, (fi * 8) as i32);
+                        }
+                        self.builder.ins().return_(&[]);
+                        return Ok(());
+                    } else {
+                        self.builder.ins().return_(&field_vals);
+                        return Ok(());
+                    }
+                }
+            }
+
             // 先编译返回表达式
             let raw_val = self.compile_expr(e)?;
             let val_ty = self.infer_expr_type(e);
@@ -11903,6 +12192,12 @@ impl<'a, 'b> CompileContext<'a, 'b> {
 
     /// 统一的 retain 辅助函数
     fn emit_retain(&mut self, val: Value, ty: &BolideType) -> Option<Value> {
+        // 值类型：无 RC 头，不做 retain
+        if let BolideType::Custom(name) = ty {
+            if self.value_types.contains_key(name) {
+                return None;
+            }
+        }
         if let Some(clone_func) = Self::get_clone_func_name(ty) {
             if let Some(&func_ref) = self.func_refs.get(clone_func) {
                 let call = self.builder.ins().call(func_ref, &[val]);
@@ -12984,6 +13279,11 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             Expr::Await(inner_expr) => self.compile_await(inner_expr),
             Expr::SpawnAll(exprs) => self.compile_spawn_all(exprs),
             Expr::Propagate(inner) => self.compile_propagate(inner),
+            Expr::ValueConstruct(type_name, _) => Err(format!(
+                "value type '{}' cannot be used as a single scalar here; \
+                 assign it to a variable, pass it to a function, or return it",
+                type_name
+            )),
             Expr::Raise(inner) => self.compile_raise(inner),
             Expr::TryExpr(body) => self.compile_try_expr(body),
             Expr::Tuple(exprs) => self.compile_tuple(exprs),
@@ -15102,15 +15402,17 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             .get(&func_name)
             .cloned()
             .unwrap_or_default();
-        let mut arg_values: Vec<Option<Value>> = vec![None; params.len()];
+        // 每个逻辑参数对应一个或多个标量值（值类型展开为多个字段）
+        let mut arg_values: Vec<Option<Vec<Value>>> = vec![None; params.len()];
         for (i, param) in params.iter().enumerate() {
             if param.is_variadic {
-                arg_values[i] = Some(self.new_packed_args(&param.ty)?);
+                arg_values[i] = Some(vec![self.new_packed_args(&param.ty)?]);
             } else if param.is_kw_variadic {
-                arg_values[i] = Some(self.new_packed_kwargs(&param.ty)?);
+                arg_values[i] = Some(vec![self.new_packed_kwargs(&param.ty)?]);
             }
         }
-        let mut ref_writebacks: Vec<(usize, String, Option<Value>)> = Vec::new();
+        // ref 写回：(变量名, 全局旧值, 栈槽/地址)
+        let mut ref_writebacks: Vec<(String, Option<Value>, Value)> = Vec::new();
 
         for arg in prepared_args.iter() {
             let target_index = arg.target_index();
@@ -15122,6 +15424,11 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             match mode {
                 ParamMode::Borrow => match arg {
                     PreparedArg::Expr { expr, .. } => {
+                        // 值类型实参：展开为多个字段标量
+                        if self.value_type_name_of(expr).is_some() {
+                            let field_vals = self.compile_value_expr(expr)?;
+                            arg_values[target_index] = Some(field_vals);
+                        } else {
                         let val = self.compile_expr(expr)?;
                         let target_ty = params.get(target_index).map(|param| param.ty.clone());
                         let val = if let Some(target_ty) = target_ty {
@@ -15151,18 +15458,25 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                         } else {
                             val
                         };
-                        arg_values[target_index] = Some(val);
+                        arg_values[target_index] = Some(vec![val]);
+                        }
                     }
                     PreparedArg::PackedArgItem { elem_ty, item, .. } => {
-                        let list_ptr = arg_values[target_index].ok_or_else(|| {
-                            "internal error: missing variadic container".to_string()
-                        })?;
+                        let list_ptr = arg_values[target_index]
+                            .as_ref()
+                            .and_then(|v| v.first().copied())
+                            .ok_or_else(|| {
+                                "internal error: missing variadic container".to_string()
+                            })?;
                         self.append_packed_arg_item(list_ptr, elem_ty, item)?;
                     }
                     PreparedArg::PackedKwargItem { value_ty, item, .. } => {
-                        let dict_ptr = arg_values[target_index].ok_or_else(|| {
-                            "internal error: missing kwargs container".to_string()
-                        })?;
+                        let dict_ptr = arg_values[target_index]
+                            .as_ref()
+                            .and_then(|v| v.first().copied())
+                            .ok_or_else(|| {
+                                "internal error: missing kwargs container".to_string()
+                            })?;
                         self.append_packed_kwarg_item(dict_ptr, value_ty, item)?;
                     }
                 },
@@ -15179,13 +15493,18 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                     } else {
                         raw_val
                     };
-                    arg_values[target_index] = Some(val);
+                    arg_values[target_index] = Some(vec![val]);
 
                     // 如果参数是变量，标记为已移动并置空
                     if let Expr::Ident(var_name) = expr {
-                        self.moved_variables.insert(var_name.clone());
+                        // 仅局部变量标记为已移动，全局变量不限制复用
+                        let is_local = self.variables.contains_key(var_name);
+                        if is_local {
+                            self.moved_variables.insert(var_name.clone());
+                        }
                         // 置空变量（设为 null）
-                        if let Some(&var) = self.variables.get(var_name) {
+                        if is_local {
+                            let var = self.variables[var_name];
                             let null_val = self.builder.ins().iconst(self.ptr_type, 0);
                             self.builder.def_var(var, null_val);
                         } else if let Some(&data_id) = self.global_data_ids.get(var_name) {
@@ -15223,8 +15542,8 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                                 .ins()
                                 .store(MemFlags::new(), current_val, slot_addr, 0);
 
-                            arg_values[target_index] = Some(slot_addr);
-                            ref_writebacks.push((target_index, var_name.clone(), None));
+                            arg_values[target_index] = Some(vec![slot_addr]);
+                            ref_writebacks.push((var_name.clone(), None, slot_addr));
 
                             // 注意：函数返回后需要从栈槽读回新值
                             // 这需要在 call 之后处理
@@ -15237,8 +15556,8 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                                 self.builder
                                     .ins()
                                     .load(self.ptr_type, MemFlags::new(), addr, 0);
-                            arg_values[target_index] = Some(addr);
-                            ref_writebacks.push((target_index, var_name.clone(), Some(old_val)));
+                            arg_values[target_index] = Some(vec![addr]);
+                            ref_writebacks.push((var_name.clone(), Some(old_val), addr));
                         } else {
                             return Err(format!("Undefined variable for ref: {}", var_name));
                         }
@@ -15249,13 +15568,50 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             }
         }
 
-        let arg_values: Vec<Value> = arg_values
-            .into_iter()
-            .map(|value| {
-                value.ok_or_else(|| "internal error: missing prepared argument".to_string())
-            })
-            .collect::<Result<_, _>>()?;
-        let call = self.builder.ins().call(func_ref, &arg_values);
+        // sret: 值返回函数，调用者分配栈槽作为第一个参数
+        let ret_is_vt = self
+            .func_return_types
+            .get(&func_name)
+            .cloned()
+            .flatten()
+            .and_then(|rt| {
+                if let BolideType::Custom(name) = self.normalize_bolide_type(&rt) {
+                    if self.value_types.contains_key(&name) {
+                        return Some(name);
+                    }
+                }
+                None
+            });
+        let sret_slot = if ret_is_vt.is_some() {
+            let fields = self.value_types.get(ret_is_vt.as_ref().unwrap()).unwrap();
+            let size = (fields.len() * 8) as u32;
+            let slot = self.builder.create_sized_stack_slot(StackSlotData::new(
+                StackSlotKind::ExplicitSlot,
+                size,
+                8,
+            ));
+            let sret_ptr = self.builder.ins().stack_addr(self.ptr_type, slot, 0);
+            Some(sret_ptr)
+        } else {
+            None
+        };
+
+        // 展平：sret ptr（如果有）在前，然后每个逻辑参数的标量值列表直接拼接成 call_args
+        let mut call_args: Vec<Value> = if let Some(p) = sret_slot {
+            vec![p]
+        } else {
+            vec![]
+        };
+        call_args.extend(arg_values
+            .iter()
+            .flat_map(|opt| {
+                let vals = opt
+                    .as_ref()
+                    .cloned()
+                    .unwrap_or_default();
+                vals
+            }));
+        let call = self.builder.ins().call(func_ref, &call_args);
         self.emit_exception_pending_check()?;
 
         // 检查是否是生命周期函数
@@ -15263,7 +15619,7 @@ impl<'a, 'b> CompileContext<'a, 'b> {
 
         // 处理 Ref 参数：从栈槽读回新值
         // 对于生命周期函数，跳过释放旧值（因为返回值可能就是参数本身）
-        for (i, var_name, old_global_value) in ref_writebacks {
+        for (var_name, old_global_value, slot_addr) in ref_writebacks {
             if let Some(old_val) = old_global_value {
                 // 全局变量：被调函数已原地写入新值，这里释放调用前的旧值
                 if !is_lifetime_func {
@@ -15281,11 +15637,13 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             }
 
             // arg_values[i] 是栈槽地址，从中读取新值
-            let slot_addr = arg_values[i];
+            let val_ty = self.var_types.get(&var_name)
+                .map(|t| self.bolide_type_to_cranelift(t))
+                .unwrap_or(self.ptr_type);
             let new_val = self
                 .builder
                 .ins()
-                .load(self.ptr_type, MemFlags::new(), slot_addr, 0);
+                .load(val_ty, MemFlags::new(), slot_addr, 0);
 
             if let Some(&var) = self.variables.get(&var_name) {
                 // 释放旧值（调用者原本拥有的对象）
@@ -15307,7 +15665,26 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             }
         }
 
-        let results = self.builder.inst_results(call);
+        // sret：从调用者的栈槽中读取值类型各字段
+        if let Some(sret_ptr) = sret_slot {
+            let vt_name = ret_is_vt.unwrap();
+            let fields = self.value_types.get(&vt_name).cloned().unwrap_or_default();
+            let mut field_vals = Vec::with_capacity(fields.len());
+            for (fi, field) in fields.iter().enumerate() {
+                let ft = self.bolide_type_to_cranelift(&field.ty);
+                let v = self
+                    .builder
+                    .ins()
+                    .load(ft, MemFlags::new(), sret_ptr, (fi * 8) as i32);
+                field_vals.push(v);
+            }
+            // 返回句柄，同时注册到 value_packs 供 compile_value_expr 取回
+            let handle = field_vals[0];
+            self.value_packs.insert(handle, field_vals);
+            return Ok(handle);
+        }
+
+        let results = self.builder.inst_results(call).to_vec();
         if results.is_empty() {
             Ok(self.builder.ins().iconst(types::I64, 0))
         } else {
@@ -15937,6 +16314,7 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                     BolideType::Int
                 }
             }
+            Expr::ValueConstruct(type_name, _) => BolideType::Custom(type_name.clone()),
             Expr::Member(base, member) => {
                 // 获取基础表达式的类型，然后查找字段类型
                 let base_ty = self.infer_expr_type(base);
@@ -15962,6 +16340,12 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                 if let Some(class_name) = class_name {
                     if let Some(class_info) = self.classes.get(&class_name) {
                         if let Some(field) = class_info.fields.iter().find(|f| f.name == *member) {
+                            return field.ty.clone();
+                        }
+                    }
+                    // 检查值类型字段
+                    if let Some(vt_fields) = self.value_types.get(&class_name) {
+                        if let Some(field) = vt_fields.iter().find(|f| f.name == *member) {
                             return field.ty.clone();
                         }
                     }
@@ -16896,6 +17280,110 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         Ok(tuple_ptr)
     }
 
+    /// 表达式产生的值类型名（若是值类型）
+    fn value_type_name_of(&self, expr: &Expr) -> Option<String> {
+        match self.normalize_bolide_type(&self.infer_expr_type(expr)) {
+            BolideType::Custom(name) if self.value_types.contains_key(&name) => Some(name),
+            _ => None,
+        }
+    }
+
+    /// 编译产生值类型的表达式，返回其字段标量值数组（零分配，全程在寄存器/栈中）
+    ///
+    /// 这是值类型的统一消费入口：构造、变量、函数调用返回都在此展开为字段值。
+    fn compile_value_expr(&mut self, expr: &Expr) -> Result<Vec<Value>, String> {
+        match expr {
+            // 构造：Vec3 { x: .., y: .., z: .. }
+            Expr::ValueConstruct(type_name, fields) => {
+                let def_fields = self
+                    .value_types
+                    .get(type_name)
+                    .cloned()
+                    .ok_or_else(|| format!("Value type '{}' not found", type_name))?;
+                let mut vals = Vec::with_capacity(def_fields.len());
+                for df in &def_fields {
+                    if let Some((_, fexpr)) = fields.iter().find(|(n, _)| n == &df.name) {
+                        vals.push(self.compile_expr(fexpr)?);
+                    } else {
+                        return Err(format!(
+                            "Missing field '{}' in value construct for '{}'",
+                            df.name, type_name
+                        ));
+                    }
+                }
+                Ok(vals)
+            }
+            // 变量：从字段变量 name$i 读取（局部）或从全局数据段加载
+            Expr::Ident(name) => {
+                let vt_name = self
+                    .value_type_name_of(expr)
+                    .ok_or_else(|| format!("'{}' is not a value-typed variable", name))?;
+                let fields = self
+                    .value_types
+                    .get(&vt_name)
+                    .cloned()
+                    .unwrap_or_default();
+
+                // 局部值类型变量：读 Cranelift 变量 name$i
+                if self.value_var_fields.contains_key(name) {
+                    let mut vals = Vec::with_capacity(fields.len());
+                    for fi in 0..fields.len() {
+                        let fvar_name = format!("{}${}", name, fi);
+                        let var = *self.variables.get(&fvar_name).ok_or_else(|| {
+                            format!("internal: value field var '{}' not found", fvar_name)
+                        })?;
+                        vals.push(self.builder.use_var(var));
+                    }
+                    return Ok(vals);
+                }
+
+                // 全局值类型变量：从全局数据段中逐字段加载
+                let data_id = *self
+                    .global_data_ids
+                    .get(name)
+                    .ok_or_else(|| format!("global value var '{}' not found", name))?;
+                let gv = self.module.declare_data_in_func(data_id, self.builder.func);
+                let base = self.builder.ins().global_value(self.ptr_type, gv);
+                let mut vals = Vec::with_capacity(fields.len());
+                for (fi, field) in fields.iter().enumerate() {
+                    let ft = self.bolide_type_to_cranelift(&field.ty);
+                    let v = self
+                        .builder
+                        .ins()
+                        .load(ft, MemFlags::new(), base, (fi * 8) as i32);
+                    vals.push(v);
+                }
+                Ok(vals)
+            }
+            // 字段访问 a.x 当 a 是值类型
+            Expr::Member(base, member) => {
+                // 先获取 base 的字段值
+                let field_vals = self.compile_value_expr(base)?;
+                let vt_name = self
+                    .value_type_name_of(base)
+                    .ok_or("member access on non-value-type")?;
+                let fields = self
+                    .value_types
+                    .get(&vt_name)
+                    .ok_or_else(|| format!("value type '{}' not found", vt_name))?;
+                let fi = fields
+                    .iter()
+                    .position(|f| f.name == *member)
+                    .ok_or_else(|| format!("field '{}' not found in '{}'", member, vt_name))?;
+                Ok(vec![field_vals[fi]])
+            }
+            // 函数调用：调用方按值类型 ABI 展开返回值，经 value_packs 桥接取回
+            Expr::Call(callee, args) => {
+                let handle = self.compile_call(callee, args)?;
+                self.value_packs
+                    .remove(&handle)
+                    .ok_or_else(|| "call did not produce a value pack".to_string())
+            }
+            // 字段本身是值类型（嵌套）暂不支持
+            _ => Err("unsupported value-typed expression".to_string()),
+        }
+    }
+
     /// 编译列表字面量 [a, b, c]
     fn compile_list(&mut self, items: &[Expr]) -> Result<Value, String> {
         self.compile_list_with_hint(items, None)
@@ -17172,7 +17660,16 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                     .get("@_tuple_get")
                     .ok_or("tuple_get not found")?;
                 let call = self.builder.ins().call(tuple_get, &[base_val, index_val]);
-                Ok(self.builder.inst_results(call)[0])
+                let mut val = self.builder.inst_results(call)[0];
+                if let BolideType::Tuple(ref items) = base_type {
+                    if let Expr::Int(idx) = index {
+                        let idx_usize = *idx as usize;
+                        if idx_usize < items.len() && matches!(items[idx_usize], BolideType::Float) {
+                            val = self.builder.ins().bitcast(types::F64, MemFlags::new(), val);
+                        }
+                    }
+                }
+                Ok(val)
             }
         }
     }
@@ -17964,6 +18461,23 @@ impl<'a, 'b> CompileContext<'a, 'b> {
 
     /// 编译成员访问 (obj.field)
     fn compile_member_access(&mut self, base: &Expr, member: &str) -> Result<Value, String> {
+        // 值类型字段访问：展开 base 的字段值，取对应字段（零分配）
+        if let Some(vt_name) = self.value_type_name_of(base) {
+            let fields = self
+                .value_types
+                .get(&vt_name)
+                .cloned()
+                .ok_or_else(|| format!("Value type '{}' not found", vt_name))?;
+            let fi = fields
+                .iter()
+                .position(|f| f.name == member)
+                .ok_or_else(|| {
+                    format!("Field '{}' not found in value type '{}'", member, vt_name)
+                })?;
+            let field_vals = self.compile_value_expr(base)?;
+            return Ok(field_vals[fi]);
+        }
+
         // 特殊处理模块成员访问
         if let Expr::Ident(name) = base {
             // 检查是否是模块名
@@ -18018,7 +18532,12 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                     ));
                 }
             }
-            _ => return Err(format!("Member access on non-class type: {:?}", base_type)),
+            _ => {
+                return Err(format!(
+                    "Member access on non-class type: {:?}, base expr: {:?}, member: {}",
+                    base_type, base, member
+                ))
+            }
         };
 
         let class_info = self
@@ -18036,10 +18555,11 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         let field_offset = field.offset;
         let obj_ptr = self.compile_expr(base)?;
         let field_ptr = self.builder.ins().iadd_imm(obj_ptr, field_offset as i64);
+        let load_ty = self.bolide_type_to_cranelift(&field.ty);
         let value = self
             .builder
             .ins()
-            .load(types::I64, MemFlags::new(), field_ptr, 0);
+            .load(load_ty, MemFlags::new(), field_ptr, 0);
 
         Ok(value)
     }
@@ -18104,6 +18624,19 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                     .map(|item| self.infer_expr_type(item))
                     .collect(),
             )),
+            Expr::BinOp(_, _, _)
+            | Expr::UnaryOp(_, _)
+            | Expr::Slice(_, _, _, _)
+            | Expr::Spawn(_, _)
+            | Expr::SpawnThread(_, _)
+            | Expr::Await(_)
+            | Expr::SpawnAll(_)
+            | Expr::Propagate(_)
+            | Expr::Raise(_)
+            | Expr::TryExpr(_)
+            | Expr::Closure { .. }
+            | Expr::ListComprehension { .. } => Ok(self.infer_expr_type(expr)),
+            Expr::ValueConstruct(type_name, _) => Ok(BolideType::Custom(type_name.clone())),
             Expr::Index(base, idx) => {
                 let base_ty = self.get_expr_type(base)?;
                 match base_ty {
@@ -18275,6 +18808,14 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                 }
 
                 let base_type = self.get_expr_type(base)?;
+                // 值类型字段类型查找
+                if let BolideType::Custom(vt_name) = &base_type {
+                    if let Some(fields) = self.value_types.get(vt_name) {
+                        if let Some(field) = fields.iter().find(|f| f.name == *member) {
+                            return Ok(field.ty.clone());
+                        }
+                    }
+                }
                 // 处理 Weak/Unowned 类型，提取内部的 Custom 类型
                 let class_name = match &base_type {
                     BolideType::Custom(name) => name.clone(),
@@ -18298,7 +18839,12 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                             ));
                         }
                     }
-                    _ => return Err(format!("Member access on non-class type: {:?}", base_type)),
+                    _ => {
+                        return Err(format!(
+                            "Member access on non-class type: {:?}, base expr: {:?}, member: {}",
+                            base_type, base, member
+                        ))
+                    }
                 };
                 let class_info = self
                     .classes
@@ -18313,13 +18859,19 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                     })?;
                 Ok(field.ty.clone())
             }
-            _ => Err("Cannot determine expression type".to_string()),
+            _ => Err(format!("Cannot determine expression type for expr: {:?}", expr)),
         }
     }
 
     /// 编译模块函数调用 (module.func())
     fn compile_module_call(&mut self, func_name: &str, args: &[Expr]) -> Result<Value, String> {
         let func_name = self.resolve_overloaded_function_name(func_name, args);
+
+        // Intrinsic: math.sqrt -> direct Cranelift sqrt instruction
+        if func_name == "@_math_sqrt" && args.len() == 1 {
+            let arg = self.compile_expr(&args[0])?;
+            return Ok(self.builder.ins().sqrt(arg));
+        }
         let func_ref = *self
             .func_refs
             .get(&func_name)

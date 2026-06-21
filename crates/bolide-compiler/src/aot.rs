@@ -6,7 +6,7 @@ use crate::ffi_spec::{is_dynamic_lib_spec, resolve_dynamic_lib_spec, validate_ex
 use crate::inject_builtin_classes;
 use bolide_parser::{
     BinOp, CType, Expr, ExternBlock, ExternDecl, ForStmt, FuncDef, IfStmt, Param, ParamMode,
-    Program, Statement, Type as BolideType, UnaryOp, VarDecl,
+    Program, Statement, Type as BolideType, UnaryOp, ValueField, VarDecl,
 };
 use cranelift::prelude::isa::{CallConv, TargetIsa};
 use cranelift::prelude::*;
@@ -240,6 +240,8 @@ pub struct AotCompiler {
     ptr_type: types::Type,
     /// 类名 -> 类信息 映射
     classes: HashMap<String, ClassInfo>,
+    /// 值类型定义: 类型名 -> 字段列表
+    value_types: HashMap<String, Vec<ValueField>>,
     adts: HashMap<String, AdtInfo>,
     /// 类名 -> 异常类型标签（>=100，按声明顺序分配，用于 catch 类型过滤）
     class_tags: HashMap<String, i64>,
@@ -856,6 +858,9 @@ pub const RUNTIME_SYMBOLS: &[&str] = &[
     "bolide_math_round",
     "bolide_math_trunc",
     "bolide_math_sqrt",
+    "bolide_vec3_dot",
+    "bolide_vec3_len",
+    "bolide_vec3_dist",
     "bolide_math_pow",
     "bolide_math_sin",
     "bolide_math_cos",
@@ -970,6 +975,7 @@ impl AotCompiler {
             trampoline_counter: 0,
             ptr_type,
             classes: HashMap::new(),
+            value_types: HashMap::new(),
             adts: HashMap::new(),
             class_tags: HashMap::new(),
             async_funcs: HashSet::new(),
@@ -1298,6 +1304,7 @@ impl AotCompiler {
         let program = inject_builtin_classes(program);
         // 泛型函数单态化
         let program = crate::monomorphize(program)?;
+        let program = crate::inline_expand(program)?;
         // 保存程序快照用于后续字符串扫描（类字段默认值）
         self.program_snapshot = program.clone();
 
@@ -1314,6 +1321,7 @@ impl AotCompiler {
         // 收集 ADT 和类定义
         self.collect_adts(&program)?;
         self.collect_classes(&program)?;
+        self.collect_value_types(&program)?;
 
         // 第一遍：收集函数声明
         for stmt in &program.statements {
@@ -1379,13 +1387,8 @@ impl AotCompiler {
                     .module
                     .declare_data(&data_name, Linkage::Local, true, false)
                     .map_err(|e| format!("Declare global data error: {}", e))?;
-                // 初始化为 0 (null pointer)
+                // 初始化为 0；值类型全局变量需要按字段总大小分配槽位
                 self.data_desc.clear();
-                self.data_desc.define_zeroinit(8); // 8 bytes = pointer size
-                self.module
-                    .define_data(data_id, &self.data_desc)
-                    .map_err(|e| format!("Define global data error: {}", e))?;
-                self.global_data_ids.insert(decl.name.clone(), data_id);
                 let gvar_ty = decl
                     .ty
                     .as_ref()
@@ -1397,6 +1400,12 @@ impl AotCompiler {
                         })
                     })
                     .unwrap_or(BolideType::Int);
+                let data_size = self.type_storage_size(&gvar_ty);
+                self.data_desc.define_zeroinit(data_size as usize);
+                self.module
+                    .define_data(data_id, &self.data_desc)
+                    .map_err(|e| format!("Define global data error: {}", e))?;
+                self.global_data_ids.insert(decl.name.clone(), data_id);
                 self.global_var_types.insert(decl.name.clone(), gvar_ty);
                 self.global_var_mutability
                     .insert(decl.name.clone(), decl.mutable);
@@ -1425,6 +1434,7 @@ impl AotCompiler {
                 name: "__bolide_entry__".to_string(),
                 is_async: false,
                 is_export: false,
+                is_inline: false,
                 type_params: vec![],
                 params: vec![],
                 throws: vec![],
@@ -1611,6 +1621,7 @@ impl AotCompiler {
             Expr::String(_) => Some(BolideType::Str),
             Expr::BigInt(_) => Some(BolideType::BigInt),
             Expr::Decimal(_) => Some(BolideType::Decimal),
+            Expr::ValueConstruct(type_name, _) => Some(BolideType::Custom(type_name.clone())),
             Expr::List(items) => {
                 // 跨元素加宽：类型不一致则退化为 Dynamic（与运行时 compile_list 一致）
                 let elem = if let Some(first) = items.first() {
@@ -3957,14 +3968,35 @@ impl AotCompiler {
 
         for param in &func.params {
             let param_ty = self.normalize_bolide_type(&param.ty);
-            let ty = self.bolide_type_to_cranelift(&param_ty);
+            if let BolideType::Custom(name) = &param_ty {
+                if self.value_types.contains_key(name) {
+                    for ft in self.value_type_cranelift_types(name) {
+                        sig.params.push(AbiParam::new(ft));
+                    }
+                    continue;
+                }
+            }
+            let ty = if param.mode == ParamMode::Ref {
+                self.ptr_type
+            } else {
+                self.bolide_type_to_cranelift(&param_ty)
+            };
             sig.params.push(AbiParam::new(ty));
         }
 
         if let Some(ref ret_ty) = func.return_type {
             let ret_ty = self.normalize_bolide_type(ret_ty);
-            sig.returns
-                .push(AbiParam::new(self.bolide_type_to_cranelift(&ret_ty)));
+            if let BolideType::Custom(name) = &ret_ty {
+                if self.value_types.contains_key(name) {
+                    sig.params.insert(0, AbiParam::new(self.ptr_type));
+                } else {
+                    sig.returns
+                        .push(AbiParam::new(self.bolide_type_to_cranelift(&ret_ty)));
+                }
+            } else {
+                sig.returns
+                    .push(AbiParam::new(self.bolide_type_to_cranelift(&ret_ty)));
+            }
         }
 
         let function_key = self.overload_key_for_params(&func.name, &func.params);
@@ -4008,6 +4040,34 @@ impl AotCompiler {
             self.lifetime_funcs.insert(function_key);
         }
         Ok(())
+    }
+
+    fn collect_value_types(&mut self, program: &Program) -> Result<(), String> {
+        for stmt in &program.statements {
+            if let Statement::ValueDef(vd) = stmt {
+                self.value_types.insert(vd.name.clone(), vd.fields.clone());
+            }
+        }
+        Ok(())
+    }
+
+    fn value_type_cranelift_types(&self, name: &str) -> Vec<types::Type> {
+        match self.value_types.get(name) {
+            Some(fields) => fields
+                .iter()
+                .map(|field| self.bolide_type_to_cranelift(&field.ty))
+                .collect(),
+            None => vec![],
+        }
+    }
+
+    fn type_storage_size(&self, ty: &BolideType) -> u64 {
+        match ty {
+            BolideType::Custom(name) if self.value_types.contains_key(name) => {
+                (self.value_types.get(name).map(|fields| fields.len()).unwrap_or(0) * 8) as u64
+            }
+            _ => 8,
+        }
     }
 
     /// 声明类构造函数
@@ -5752,6 +5812,7 @@ impl AotCompiler {
                 self.lifetime_funcs.clone(),
                 self.funcsig_return_sources.clone(),
                 self.funcsig_closure_param_indices.clone(),
+                self.value_types.clone(),
                 self.overloaded_methods.clone(),
             );
             let params: Vec<_> = ctx.builder.block_params(entry).to_vec();
@@ -5877,15 +5938,39 @@ impl AotCompiler {
         self.add_dynamic_extern_c_strings(&mut string_data_ids)?;
 
         let mut sig = self.module.make_signature();
-        for param in &func.params {
-            let param_ty = self.normalize_bolide_type(&param.ty);
-            sig.params
-                .push(AbiParam::new(self.bolide_type_to_cranelift(&param_ty)));
-        }
+        let mut has_sret = false;
         if let Some(ref ret_ty) = func.return_type {
             let ret_ty = self.normalize_bolide_type(ret_ty);
-            sig.returns
-                .push(AbiParam::new(self.bolide_type_to_cranelift(&ret_ty)));
+            if let BolideType::Custom(name) = &ret_ty {
+                if self.value_types.contains_key(name) {
+                    sig.params.push(AbiParam::new(self.ptr_type));
+                    has_sret = true;
+                }
+            }
+        }
+        for param in &func.params {
+            let param_ty = self.normalize_bolide_type(&param.ty);
+            if let BolideType::Custom(name) = &param_ty {
+                if self.value_types.contains_key(name) {
+                    for ft in self.value_type_cranelift_types(name) {
+                        sig.params.push(AbiParam::new(ft));
+                    }
+                    continue;
+                }
+            }
+            let sig_ty = if param.mode == ParamMode::Ref {
+                self.ptr_type
+            } else {
+                self.bolide_type_to_cranelift(&param_ty)
+            };
+            sig.params.push(AbiParam::new(sig_ty));
+        }
+        if !has_sret {
+            if let Some(ref ret_ty) = func.return_type {
+                let ret_ty = self.normalize_bolide_type(ret_ty);
+                sig.returns
+                    .push(AbiParam::new(self.bolide_type_to_cranelift(&ret_ty)));
+            }
         }
 
         self.ctx.func.signature = sig;
@@ -5942,16 +6027,37 @@ impl AotCompiler {
                 self.lifetime_funcs.clone(),
                 self.funcsig_return_sources.clone(),
                 self.funcsig_closure_param_indices.clone(),
+                self.value_types.clone(),
                 self.overloaded_methods.clone(),
             );
 
             // 设置参数变量
             let params: Vec<_> = ctx.builder.block_params(entry).to_vec();
+            let mut flat: usize = 0;
+            if has_sret {
+                flat = 1;
+                ctx.sret_ptr = Some(params[0]);
+            }
             for (i, param) in func.params.iter().enumerate() {
                 let param_ty = ctx.normalize_bolide_type(&param.ty);
+                ctx.var_types.insert(param.name.clone(), param_ty.clone());
+
+                if let BolideType::Custom(vt_name) = &param_ty {
+                    if let Some(fields) = ctx.value_types.get(vt_name).cloned() {
+                        for (fi, field) in fields.iter().enumerate() {
+                            let ft = ctx.bolide_type_to_cranelift(&field.ty);
+                            let fvar_name = format!("{}${}", param.name, fi);
+                            let var = ctx.declare_variable(&fvar_name, ft);
+                            ctx.builder.def_var(var, params[flat]);
+                            flat += 1;
+                        }
+                        ctx.value_var_fields.insert(param.name.clone(), fields);
+                        continue;
+                    }
+                }
+
                 let ty = ctx.bolide_type_to_cranelift(&param_ty);
                 let var = ctx.declare_variable(&param.name, ty);
-                ctx.var_types.insert(param.name.clone(), param_ty.clone());
                 if matches!(param_ty, BolideType::FuncSig(_, _) | BolideType::Func)
                     && ctx
                         .funcsig_closure_param_indices
@@ -5964,22 +6070,23 @@ impl AotCompiler {
                 match param.mode {
                     ParamMode::Ref => {
                         // ref 参数：传入的是指针地址，解引用取真实值；返回前写回
-                        let ptr_addr = params[i];
+                        let ptr_addr = params[flat];
                         let val = ctx.builder.ins().load(ty, MemFlags::new(), ptr_addr, 0);
                         ctx.builder.def_var(var, val);
                         ctx.ref_params.push((param.name.clone(), var, ptr_addr));
                         ctx.caller_owned_params.insert(param.name.clone());
                     }
                     ParamMode::Owned => {
-                        ctx.builder.def_var(var, params[i]);
+                        ctx.builder.def_var(var, params[flat]);
                         ctx.track_rc_variable(&param.name, &param_ty);
                     }
                     ParamMode::Borrow => {
                         // 借用：直接使用，不负责释放
-                        ctx.builder.def_var(var, params[i]);
+                        ctx.builder.def_var(var, params[flat]);
                         ctx.caller_owned_params.insert(param.name.clone());
                     }
                 }
+                flat += 1;
             }
 
             // 编译函数体
@@ -5996,8 +6103,37 @@ impl AotCompiler {
                 ctx.write_back_ref_params();
                 ctx.emit_rc_cleanup();
                 if func.return_type.is_some() {
-                    let zero = ctx.builder.ins().iconst(types::I64, 0);
-                    ctx.builder.ins().return_(&[zero]);
+                    if has_sret {
+                        let zero_i64 = ctx.builder.ins().iconst(types::I64, 0);
+                        let zero_f64 = ctx.builder.ins().f64const(0.0);
+                        if let Some(sret_ptr) = ctx.sret_ptr {
+                            if let Some(BolideType::Custom(vt_name)) = func
+                                .return_type
+                                .as_ref()
+                                .map(|ty| ctx.normalize_bolide_type(ty))
+                            {
+                                if let Some(fields) = ctx.value_types.get(&vt_name).cloned() {
+                                    for (fi, field) in fields.iter().enumerate() {
+                                        let z = if field.ty == BolideType::Float {
+                                            zero_f64
+                                        } else {
+                                            zero_i64
+                                        };
+                                        ctx.builder.ins().store(
+                                            MemFlags::new(),
+                                            z,
+                                            sret_ptr,
+                                            (fi * 8) as i32,
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                        ctx.builder.ins().return_(&[]);
+                    } else {
+                        let zero = ctx.builder.ins().iconst(types::I64, 0);
+                        ctx.builder.ins().return_(&[zero]);
+                    }
                 } else {
                     ctx.builder.ins().return_(&[]);
                 }
@@ -6105,6 +6241,7 @@ impl AotCompiler {
                 self.lifetime_funcs.clone(),
                 self.funcsig_return_sources.clone(),
                 self.funcsig_closure_param_indices.clone(),
+                self.value_types.clone(),
                 self.overloaded_methods.clone(),
             );
 
@@ -6272,6 +6409,14 @@ struct AotCompileContext<'a, 'b> {
     closure_env_ptr: Option<Value>,
     /// 当前 lifted closure 捕获变量布局。
     closure_captures: Vec<(String, BolideType)>,
+    /// 值类型定义: 类型名 -> 字段列表
+    value_types: HashMap<String, Vec<ValueField>>,
+    /// 值类型局部变量名 -> 字段定义（字段值存于 Cranelift 变量 `name$i`）
+    value_var_fields: HashMap<String, Vec<ValueField>>,
+    /// 临时句柄 -> 字段值数组（仅用于函数调用返回值桥接）
+    value_packs: HashMap<Value, Vec<Value>>,
+    /// sret 指针（值类型返回函数入口块的第一个 block param）
+    sret_ptr: Option<Value>,
     /// 方法重载映射: (类名, 方法名) -> [(参数数量, 内部全名), ...]
     overloaded_methods: HashMap<String, Vec<(usize, String)>>,
 }
@@ -6299,6 +6444,7 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         lifetime_funcs: HashSet<String>,
         funcsig_return_sources: HashMap<String, FuncSigReturnSource>,
         funcsig_closure_param_indices: HashMap<String, HashSet<usize>>,
+        value_types: HashMap<String, Vec<ValueField>>,
         overloaded_methods: HashMap<String, Vec<(usize, String)>>,
     ) -> Self {
         Self {
@@ -6354,6 +6500,10 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             scope_bindings: Vec::new(),
             closure_env_ptr: None,
             closure_captures: Vec::new(),
+            value_types,
+            value_var_fields: HashMap::new(),
+            value_packs: HashMap::new(),
+            sret_ptr: None,
             overloaded_methods,
         }
     }
@@ -6852,6 +7002,29 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             .cloned()
             .flatten();
         match return_ty {
+            Some(BolideType::Custom(name)) if self.value_types.contains_key(&name) => {
+                let zero_i64 = self.builder.ins().iconst(types::I64, 0);
+                let zero_f64 = self.builder.ins().f64const(0.0);
+                if let (Some(sret_ptr), Some(fields)) = (
+                    self.sret_ptr,
+                    self.value_types.get(&name).cloned(),
+                ) {
+                    for (fi, field) in fields.iter().enumerate() {
+                        let zero = if field.ty == BolideType::Float {
+                            zero_f64
+                        } else {
+                            zero_i64
+                        };
+                        self.builder.ins().store(
+                            MemFlags::new(),
+                            zero,
+                            sret_ptr,
+                            (fi * 8) as i32,
+                        );
+                    }
+                }
+                self.builder.ins().return_(&[]);
+            }
             Some(BolideType::Float) => {
                 let zero = self.builder.ins().f64const(0.0);
                 self.builder.ins().return_(&[zero]);
@@ -7119,6 +7292,96 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             BolideType::Custom(_) => self.ptr_type,
             BolideType::Weak(_) => self.ptr_type,
             BolideType::Unowned(_) => self.ptr_type,
+        }
+    }
+
+    fn value_type_name_of(&self, expr: &Expr) -> Option<String> {
+        match self
+            .infer_expr_type(expr)
+            .map(|ty| self.normalize_bolide_type(&ty))
+        {
+            Some(BolideType::Custom(name)) if self.value_types.contains_key(&name) => Some(name),
+            _ => None,
+        }
+    }
+
+    fn compile_value_expr(&mut self, expr: &Expr) -> Result<Vec<Value>, String> {
+        match expr {
+            Expr::ValueConstruct(type_name, fields) => {
+                let def_fields = self
+                    .value_types
+                    .get(type_name)
+                    .cloned()
+                    .ok_or_else(|| format!("Value type '{}' not found", type_name))?;
+                let mut vals = Vec::with_capacity(def_fields.len());
+                for field in &def_fields {
+                    if let Some((_, fexpr)) = fields.iter().find(|(name, _)| name == &field.name) {
+                        vals.push(self.compile_expr(fexpr)?);
+                    } else {
+                        return Err(format!(
+                            "Missing field '{}' in value construct for '{}'",
+                            field.name, type_name
+                        ));
+                    }
+                }
+                Ok(vals)
+            }
+            Expr::Ident(name) => {
+                let vt_name = self
+                    .value_type_name_of(expr)
+                    .ok_or_else(|| format!("'{}' is not a value-typed variable", name))?;
+                let fields = self.value_types.get(&vt_name).cloned().unwrap_or_default();
+
+                if self.value_var_fields.contains_key(name) {
+                    let mut vals = Vec::with_capacity(fields.len());
+                    for fi in 0..fields.len() {
+                        let fvar_name = format!("{}${}", name, fi);
+                        let var = *self.variables.get(&fvar_name).ok_or_else(|| {
+                            format!("internal: value field var '{}' not found", fvar_name)
+                        })?;
+                        vals.push(self.builder.use_var(var));
+                    }
+                    return Ok(vals);
+                }
+
+                let gv = *self
+                    .global_refs
+                    .get(&self.resolved_global_name(name))
+                    .ok_or_else(|| format!("global value var '{}' not found", name))?;
+                let base = self.builder.ins().global_value(self.ptr_type, gv);
+                let mut vals = Vec::with_capacity(fields.len());
+                for (fi, field) in fields.iter().enumerate() {
+                    let ft = self.bolide_type_to_cranelift(&field.ty);
+                    vals.push(
+                        self.builder
+                            .ins()
+                            .load(ft, MemFlags::new(), base, (fi * 8) as i32),
+                    );
+                }
+                Ok(vals)
+            }
+            Expr::Member(base, member) => {
+                let field_vals = self.compile_value_expr(base)?;
+                let vt_name = self
+                    .value_type_name_of(base)
+                    .ok_or_else(|| "member access on non-value-type".to_string())?;
+                let fields = self
+                    .value_types
+                    .get(&vt_name)
+                    .ok_or_else(|| format!("value type '{}' not found", vt_name))?;
+                let fi = fields
+                    .iter()
+                    .position(|field| field.name == *member)
+                    .ok_or_else(|| format!("field '{}' not found in '{}'", member, vt_name))?;
+                Ok(vec![field_vals[fi]])
+            }
+            Expr::Call(callee, args) => {
+                let handle = self.compile_call(callee, args)?;
+                self.value_packs
+                    .remove(&handle)
+                    .ok_or_else(|| "call did not produce a value pack".to_string())
+            }
+            _ => Err("unsupported value-typed expression".to_string()),
         }
     }
 
@@ -7599,6 +7862,10 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             Expr::Await(inner) => self.compile_await(inner),
             Expr::SpawnAll(exprs) => self.compile_spawn_all(exprs),
             Expr::Propagate(inner) => self.compile_propagate(inner),
+            Expr::ValueConstruct(type_name, _) => Err(format!(
+                "value type '{}' cannot be used as a single scalar here; assign it to a variable, pass it to a function, or return it",
+                type_name
+            )),
             Expr::Raise(inner) => self.compile_raise(inner),
             Expr::TryExpr(body) => self.compile_try_expr(body),
             Expr::Closure {
@@ -10141,12 +10408,12 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             .get(&func_name)
             .cloned()
             .unwrap_or_default();
-        let mut arg_vals: Vec<Option<Value>> = vec![None; params.len()];
+        let mut arg_vals: Vec<Option<Vec<Value>>> = vec![None; params.len()];
         for (i, param) in params.iter().enumerate() {
             if param.is_variadic {
-                arg_vals[i] = Some(self.new_packed_args(&param.ty)?);
+                arg_vals[i] = Some(vec![self.new_packed_args(&param.ty)?]);
             } else if param.is_kw_variadic {
-                arg_vals[i] = Some(self.new_packed_kwargs(&param.ty)?);
+                arg_vals[i] = Some(vec![self.new_packed_kwargs(&param.ty)?]);
             }
         }
         let mut ref_slots: Vec<(String, Value)> = Vec::new();
@@ -10160,6 +10427,10 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             match mode {
                 ParamMode::Borrow => match arg {
                     PreparedArg::Expr { expr, .. } => {
+                        if self.value_type_name_of(expr).is_some() {
+                            arg_vals[target_index] = Some(self.compile_value_expr(expr)?);
+                            continue;
+                        }
                         let val = self.compile_expr(expr)?;
                         let target_ty = params.get(target_index).map(|param| param.ty.clone());
                         let val = if let Some(target_ty) = target_ty {
@@ -10192,16 +10463,22 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
                         } else {
                             val
                         };
-                        arg_vals[target_index] = Some(val);
+                        arg_vals[target_index] = Some(vec![val]);
                     }
                     PreparedArg::PackedArgItem { elem_ty, item, .. } => {
-                        let list_ptr = arg_vals[target_index].ok_or_else(|| {
+                        let list_ptr = arg_vals[target_index]
+                            .as_ref()
+                            .and_then(|vals| vals.first().copied())
+                            .ok_or_else(|| {
                             "internal error: missing variadic container".to_string()
                         })?;
                         self.append_packed_arg_item(list_ptr, elem_ty, item)?;
                     }
                     PreparedArg::PackedKwargItem { value_ty, item, .. } => {
-                        let dict_ptr = arg_vals[target_index].ok_or_else(|| {
+                        let dict_ptr = arg_vals[target_index]
+                            .as_ref()
+                            .and_then(|vals| vals.first().copied())
+                            .ok_or_else(|| {
                             "internal error: missing kwargs container".to_string()
                         })?;
                         self.append_packed_kwarg_item(dict_ptr, value_ty, item)?;
@@ -10211,6 +10488,10 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
                     let expr = arg.expr().ok_or_else(|| {
                         "owned parameter cannot receive packed arguments".to_string()
                     })?;
+                    if self.value_type_name_of(expr).is_some() {
+                        arg_vals[target_index] = Some(self.compile_value_expr(expr)?);
+                        continue;
+                    }
                     let raw_val = self.compile_expr(expr)?;
                     let target_ty = params.get(target_index).map(|param| param.ty.clone());
                     let val = if let Some(target_ty) = target_ty {
@@ -10237,7 +10518,7 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
                     } else {
                         raw_val
                     };
-                    arg_vals[target_index] = Some(val);
+                    arg_vals[target_index] = Some(vec![val]);
                     if let Expr::Ident(var_name) = expr {
                         // 变量所有权移交被调方：置空并停止在本作用域释放
                         self.moved_variables.insert(var_name.clone());
@@ -10273,14 +10554,14 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
                             self.builder
                                 .ins()
                                 .store(MemFlags::new(), current, slot_addr, 0);
-                            arg_vals[target_index] = Some(slot_addr);
+                            arg_vals[target_index] = Some(vec![slot_addr]);
                             ref_slots.push((var_name.clone(), slot_addr));
                         } else if let Some(&gv) =
                             self.global_refs.get(&self.resolved_global_name(var_name))
                         {
                             // 全局变量：直接传递其数据段地址，被调函数原地读写
                             let addr = self.builder.ins().global_value(self.ptr_type, gv);
-                            arg_vals[target_index] = Some(addr);
+                            arg_vals[target_index] = Some(vec![addr]);
                             ref_slots.push((var_name.clone(), addr));
                         } else {
                             return Err(format!("Undefined variable for ref: {}", var_name));
@@ -10292,14 +10573,36 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             }
         }
 
-        let arg_vals: Vec<Value> = arg_vals
-            .into_iter()
-            .map(|value| {
-                value.ok_or_else(|| "internal error: missing prepared argument".to_string())
-            })
-            .collect::<Result<_, _>>()?;
+        let ret_is_vt = self
+            .func_return_types
+            .get(&func_name)
+            .cloned()
+            .flatten()
+            .and_then(|rt| match self.normalize_bolide_type(&rt) {
+                BolideType::Custom(name) if self.value_types.contains_key(&name) => Some(name),
+                _ => None,
+            });
+        let sret_slot = if let Some(vt_name) = ret_is_vt.as_ref() {
+            let fields = self.value_types.get(vt_name).cloned().unwrap_or_default();
+            let size = (fields.len() * 8) as u32;
+            let slot = self.builder.create_sized_stack_slot(StackSlotData::new(
+                StackSlotKind::ExplicitSlot,
+                size,
+                8,
+            ));
+            Some(self.builder.ins().stack_addr(self.ptr_type, slot, 0))
+        } else {
+            None
+        };
+
+        let mut flat_args: Vec<Value> = if let Some(ptr) = sret_slot { vec![ptr] } else { vec![] };
+        for value in arg_vals.into_iter() {
+            let vals = value.ok_or_else(|| "internal error: missing prepared argument".to_string())?;
+            flat_args.extend(vals);
+        }
+
         // 调用函数
-        let call = self.builder.ins().call(func_ref, &arg_vals);
+        let call = self.builder.ins().call(func_ref, &flat_args);
         self.emit_exception_pending_check()?;
 
         // ref 参数：从栈槽读回新值写回变量
@@ -10325,6 +10628,23 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
                 // 全局变量：被调函数已原地写入新值（ref 参数传递了数据段地址）。
                 // swap 操作交换指针，总引用数不变，无需释放旧值。
             }
+        }
+
+        if let Some(sret_ptr) = sret_slot {
+            let vt_name = ret_is_vt.unwrap();
+            let fields = self.value_types.get(&vt_name).cloned().unwrap_or_default();
+            let mut field_vals = Vec::with_capacity(fields.len());
+            for (fi, field) in fields.iter().enumerate() {
+                let ft = self.bolide_type_to_cranelift(&field.ty);
+                field_vals.push(
+                    self.builder
+                        .ins()
+                        .load(ft, MemFlags::new(), sret_ptr, (fi * 8) as i32),
+                );
+            }
+            let handle = field_vals[0];
+            self.value_packs.insert(handle, field_vals);
+            return Ok(handle);
         }
 
         let results = self.builder.inst_results(call);
@@ -11977,14 +12297,20 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
                 let call = self.builder.ins().call(func_ref, &[base_val, index_val]);
                 Ok(self.builder.inst_results(call)[0])
             }
-            Some(BolideType::Tuple(_inner_types)) => {
+            Some(BolideType::Tuple(ref inner_types)) => {
                 let func_ref = *self
                     .func_refs
                     .get("@_tuple_get")
                     .ok_or("tuple_get not found")?;
                 let call = self.builder.ins().call(func_ref, &[base_val, index_val]);
-                let val = self.builder.inst_results(call)[0];
-                // 返回容器内的借用引用，不 clone（对齐 JIT）
+                let mut val = self.builder.inst_results(call)[0];
+                // tuple_get returns i64 for all types; bitcast to F64 for float elements
+                if let Expr::Int(idx) = index {
+                    let idx = *idx as usize;
+                    if idx < inner_types.len() && matches!(inner_types[idx], BolideType::Float) {
+                        val = self.builder.ins().bitcast(types::F64, MemFlags::new(), val);
+                    }
+                }
                 Ok(val)
             }
             Some(BolideType::Str) => {
@@ -12157,6 +12483,20 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
 
     /// 编译成员访问
     fn compile_member(&mut self, base: &Expr, member: &str) -> Result<Value, String> {
+        if let Some(vt_name) = self.value_type_name_of(base) {
+            let fields = self
+                .value_types
+                .get(&vt_name)
+                .cloned()
+                .ok_or_else(|| format!("Value type '{}' not found", vt_name))?;
+            let fi = fields
+                .iter()
+                .position(|field| field.name == member)
+                .ok_or_else(|| format!("Field '{}' not found in value type '{}'", member, vt_name))?;
+            let field_vals = self.compile_value_expr(base)?;
+            return Ok(field_vals[fi]);
+        }
+
         if let Expr::Ident(name) = base {
             if self.is_unshadowed_module_name(name) {
                 let global_name = format!("@{}_{}", name, member);
@@ -12268,6 +12608,7 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             Expr::String(_) => Some(BolideType::Str),
             Expr::BigInt(_) => Some(BolideType::BigInt),
             Expr::Decimal(_) => Some(BolideType::Decimal),
+            Expr::ValueConstruct(type_name, _) => Some(BolideType::Custom(type_name.clone())),
             Expr::List(items) => {
                 if let Some(first) = items.first() {
                     let elem_ty = self.infer_expr_type(first).unwrap_or(BolideType::Dynamic);
@@ -12543,6 +12884,11 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
                 if let Some(class_name) = class_name {
                     if let Some(class_info) = self.classes.get(&class_name) {
                         if let Some(field) = class_info.fields.iter().find(|f| f.name == *member) {
+                            return Some(field.ty.clone());
+                        }
+                    }
+                    if let Some(fields) = self.value_types.get(&class_name) {
+                        if let Some(field) = fields.iter().find(|f| f.name == *member) {
                             return Some(field.ty.clone());
                         }
                     }
@@ -13833,6 +14179,7 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             | Statement::ExternBlock(_)
             | Statement::FuncDef(_)
             | Statement::ClassDef(_)
+            | Statement::ValueDef(_)
             | Statement::EnumDef(_) => {
                 // 这些语句在顶层处理，函数体内忽略（throw/try 稍后实现）
                 false
@@ -14724,6 +15071,26 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         if is_main && self.global_refs.contains_key(&decl.name) {
             if let Some(ref value) = decl.value {
                 let target_ty = self.global_var_types.get(&decl.name).cloned();
+                if let Some(BolideType::Custom(vt_name)) = target_ty.clone() {
+                    if let Some(fields) = self.value_types.get(&vt_name).cloned() {
+                        let field_vals = self.compile_value_expr(value)?;
+                        let gv = self.global_refs[&decl.name];
+                        let base = self.builder.ins().global_value(self.ptr_type, gv);
+                        for (fi, _) in fields.iter().enumerate() {
+                            self.builder.ins().store(
+                                MemFlags::new(),
+                                field_vals[fi],
+                                base,
+                                (fi * 8) as i32,
+                            );
+                        }
+                        self.spawn_func_map.remove(&decl.name);
+                        self.task_func_map.remove(&decl.name);
+                        self.force_thread_tasks.remove(&decl.name);
+                        return Ok(());
+                    }
+                }
+
                 let raw_val = match value {
                     Expr::List(items)
                         if matches!(target_ty.as_ref(), Some(BolideType::List(_))) =>
@@ -14834,6 +15201,63 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             .clone()
             .or(inferred_bolide_ty.clone())
             .unwrap_or(BolideType::Int);
+
+        if let BolideType::Custom(vt_name) = &bolide_ty {
+            if let Some(fields) = self.value_types.get(vt_name).cloned() {
+                let value = decl
+                    .value
+                    .as_ref()
+                    .ok_or_else(|| format!("value type '{}' must be initialized", vt_name))?;
+                let field_vals = self.compile_value_expr(value)?;
+                if field_vals.len() != fields.len() {
+                    return Err(format!(
+                        "value '{}' expected {} fields, got {}",
+                        vt_name,
+                        fields.len(),
+                        field_vals.len()
+                    ));
+                }
+                for (fi, field) in fields.iter().enumerate() {
+                    let ft = self.bolide_type_to_cranelift(&field.ty);
+                    let fvar_name = format!("{}${}", decl.name, fi);
+                    let var = self.declare_variable(&fvar_name, ft);
+                    self.builder.def_var(var, field_vals[fi]);
+                }
+                self.var_types.insert(decl.name.clone(), bolide_ty.clone());
+                self.var_mutability.insert(decl.name.clone(), decl.mutable);
+                self.value_var_fields.insert(decl.name.clone(), fields);
+                self.spawn_func_map.remove(&decl.name);
+                self.task_func_map.remove(&decl.name);
+                self.force_thread_tasks.remove(&decl.name);
+                match value {
+                    Expr::Spawn(func_name, _) => {
+                        self.spawn_func_map
+                            .insert(decl.name.clone(), func_name.clone());
+                        self.task_func_map
+                            .insert(decl.name.clone(), func_name.clone());
+                    }
+                    Expr::SpawnThread(func_name, _) => {
+                        self.spawn_func_map
+                            .insert(decl.name.clone(), func_name.clone());
+                        self.task_func_map
+                            .insert(decl.name.clone(), func_name.clone());
+                        self.force_thread_tasks.insert(decl.name.clone());
+                    }
+                    Expr::Call(func_expr, _) => {
+                        if let Expr::Ident(func_name) = func_expr.as_ref() {
+                            if self.async_funcs.contains(func_name) {
+                                self.spawn_func_map
+                                    .insert(decl.name.clone(), func_name.clone());
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+                self.record_var_scope(&decl.name);
+                return Ok(());
+            }
+        }
+
         let ty = self.bolide_type_to_cranelift(&bolide_ty);
         let init_value = if let Some(ref value) = decl.value {
             // 列表/字典字面量需用类型标注确定元素类型（包括非空）
@@ -15027,10 +15451,37 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
                 let is_global = !self.variables.contains_key(var_name)
                     && self.global_refs.contains_key(&resolved_global);
 
+                if self.value_var_fields.contains_key(var_name) {
+                    let field_vals = self.compile_value_expr(&assign.value)?;
+                    let fields = self.value_var_fields.get(var_name).cloned().unwrap_or_default();
+                    for (fi, _) in fields.iter().enumerate() {
+                        let fvar_name = format!("{}${}", var_name, fi);
+                        if let Some(&var) = self.variables.get(&fvar_name) {
+                            self.builder.def_var(var, field_vals[fi]);
+                        }
+                    }
+                    return Ok(());
+                }
+
                 if is_global {
                     let gv = self.global_refs[&resolved_global];
                     let addr = self.builder.ins().global_value(self.ptr_type, gv);
                     let global_ty = self.global_var_types.get(&resolved_global).cloned();
+
+                    if let Some(BolideType::Custom(vt_name)) = global_ty.clone() {
+                        if let Some(fields) = self.value_types.get(&vt_name).cloned() {
+                            let field_vals = self.compile_value_expr(&assign.value)?;
+                            for (fi, _) in fields.iter().enumerate() {
+                                self.builder.ins().store(
+                                    MemFlags::new(),
+                                    field_vals[fi],
+                                    addr,
+                                    (fi * 8) as i32,
+                                );
+                            }
+                            return Ok(());
+                        }
+                    }
 
                     // 先编译新值
                     let raw_val = match &assign.value {
@@ -15254,6 +15705,23 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         member: &str,
         value: &Expr,
     ) -> Result<(), String> {
+        if let Expr::Ident(var_name) = base {
+            if let Some(vt_name) = self.value_type_name_of(base) {
+                let fields = self.value_types.get(&vt_name).cloned().unwrap_or_default();
+                let fi = fields
+                    .iter()
+                    .position(|field| field.name == *member)
+                    .ok_or_else(|| format!("Field '{}' not found in value type '{}'", member, vt_name))?;
+                let val = self.compile_expr(value)?;
+                let fvar_name = format!("{}${}", var_name, fi);
+                if let Some(&var) = self.variables.get(&fvar_name) {
+                    self.builder.def_var(var, val);
+                    return Ok(());
+                }
+                return Err(format!("value field var '{}' not found", fvar_name));
+            }
+        }
+
         let base_val = self.compile_expr(base)?;
         let mut val = self.compile_expr(value)?;
 
@@ -15407,6 +15875,19 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
     fn compile_return(&mut self, expr: Option<&Expr>) -> Result<(), String> {
         self.emit_active_finallys_from(0)?;
         if let Some(e) = expr {
+            if self.value_type_name_of(e).is_some() {
+                let field_vals = self.compile_value_expr(e)?;
+                if let Some(sret_ptr) = self.sret_ptr {
+                    for (fi, &v) in field_vals.iter().enumerate() {
+                        self.builder
+                            .ins()
+                            .store(MemFlags::new(), v, sret_ptr, (fi * 8) as i32);
+                    }
+                    self.builder.ins().return_(&[]);
+                    return Ok(());
+                }
+            }
+
             // 生命周期模式：验证返回值来源
             if self.uses_lifetime_mode() {
                 self.validate_lifetime_return(e)?;

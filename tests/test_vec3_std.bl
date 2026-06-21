@@ -1,0 +1,25 @@
+import "std/vec3/vec3.bl" as vec3;
+
+let a: (float,float,float) = vec3.new(1.0, 2.0, 3.0);
+let b: (float,float,float) = vec3.new(4.0, 5.0, 6.0);
+
+print("dot: ");
+print(vec3.dot(a, b));      // 32
+print("\n");
+
+print("len: ");
+print(vec3.length(a));       // ~3.742
+print("\n");
+
+print("dist: ");
+print(vec3.distance(a, b));  // ~5.196
+print("\n");
+
+print("add: ");
+let s: (float,float,float) = vec3.add(a, b);
+print(s[0]); print(" "); print(s[1]); print(" "); print(s[2]);
+print("\n");
+
+print("normalize: ");
+let n: (float,float,float) = vec3.normalize(b);
+print(n[0]); print(" "); print(n[1]); print(" "); print(n[2]);

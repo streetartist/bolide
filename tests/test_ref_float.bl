@@ -1,0 +1,13 @@
+
+fn add_to(x: float, ref out: float) {
+    out = out + x;
+}
+
+var v: float = 3.0;
+add_to(2.0, v);
+print(v);
+print("\n");
+
+var w: float = 10.0;
+add_to(5.0, w);
+print(w);

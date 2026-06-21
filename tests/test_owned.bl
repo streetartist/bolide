@@ -1,0 +1,16 @@
+fn take_owned(owned x: int) {
+    print("owned value: ");
+    print(x);
+    print("\n");
+}
+
+fn take_owned_str(owned s: str) {
+    print("owned str: ");
+    print(s);
+    print("\n");
+}
+
+var a: int = 42;
+take_owned(a);
+var b: str = "hello owned";
+take_owned_str(b);

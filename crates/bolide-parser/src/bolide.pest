@@ -17,6 +17,7 @@ kw_from  = @{ "from" ~ !id_char }
 kw_await  = @{ "await"  ~ !id_char }
 kw_spawn  = @{ "spawn"  ~ !id_char }
 kw_thread = @{ "thread" ~ !id_char }
+kw_inline = @{ "inline" ~ !id_char }
 kw_throws = @{ "throws" ~ !id_char }
 kw_let    = @{ "let"    ~ !id_char }
 kw_var    = @{ "var"    ~ !id_char }
@@ -30,6 +31,7 @@ statement = {
     func_def |
     enum_def |
     class_def |
+    value_def |
     if_stmt |
     while_stmt |
     for_stmt |
@@ -48,6 +50,10 @@ statement = {
     assign_stmt |
     expr_stmt
 }
+
+value_def = { "value" ~ ident ~ "{" ~ value_fields ~ "}" }
+value_fields = { value_field* }
+value_field = { ident ~ ":" ~ type_expr ~ ";" }
 
 throw_stmt = { "throw" ~ expr ~ ";" }
 try_stmt  = { "try" ~ block ~ catch_clause+ ~ finally? }
@@ -83,8 +89,9 @@ extern_typedef = { "type" ~ ident ~ "=" ~ c_type ~ ";" }
 // 函数定义（支持 async）
 // 生命周期注解: fn foo(ref x: bigint) -> str from x
 func_def = {
-    export_keyword? ~ async_keyword? ~ "fn" ~ ident ~ generic_param_list? ~ "(" ~ param_list? ~ ")" ~ throws_clause? ~ ("->" ~ type_expr)? ~ lifetime_clause? ~ block
+    export_keyword? ~ async_keyword? ~ inline? ~ "fn" ~ ident ~ generic_param_list? ~ "(" ~ param_list? ~ ")" ~ throws_clause? ~ ("->" ~ type_expr)? ~ lifetime_clause? ~ block
 }
+inline = @{ "inline" ~ !id_char }
 async_keyword = { "async" }
 export_keyword = { "export" }
 generic_param_list = { "<" ~ ident ~ ("," ~ ident)* ~ ","? ~ ">" }
@@ -224,14 +231,20 @@ primary = {
     bigint_lit |
     decimal_lit |
     float_lit |
+    sci_lit |
     int_lit |
     string_lit |
     bool_lit |
     none_lit |
     self_lit |
     super_lit |
+    value_construct |
     ident
 }
+
+value_construct = { ident ~ "{" ~ value_args ~ "}" }
+value_args = { value_arg ~ ("," ~ value_arg)* ~ ","? }
+value_arg = { ident ~ ":" ~ expr }
 
 // try 表达式: try { stmt* }，最后一个表达式语句作为 Ok 值；无表达式则 Ok(0)
 try_expr = { "try" ~ block }
@@ -277,7 +290,9 @@ decimal_lit = @{ digits ~ ("." ~ digits)? ~ ("D" | "d") }
 // 普通字面量
 hex_lit = @{ "0x" ~ ASCII_HEX_DIGIT ~ (ASCII_HEX_DIGIT | "_")* }
 int_lit = @{ hex_lit | digits }
-float_lit = @{ digits ~ "." ~ digits }
+float_lit = @{ digits ~ (("." ~ digits ~ exponent?) | exponent) }
+sci_lit = @{ digits ~ exponent }
+exponent = @{ ("e" | "E") ~ ("+" | "-")? ~ digits }
 // 字符串支持转义: \" \\ \n \t \r \0 等
 string_lit = @{ "\"" ~ ("\\" ~ ANY | !("\"" | "\\") ~ ANY)* ~ "\"" }
 bool_lit = @{ ("true" | "false") ~ !id_char }
@@ -309,7 +324,7 @@ basic_type = { qualified_type | ident }
 ident = @{ !reserved_ident ~ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
 
 reserved_ident = {
-    ("true" | "false" | "none" | "self" | "super") ~ !(ASCII_ALPHANUMERIC | "_")
+    ("true" | "false" | "inline" | "none" | "self" | "super") ~ !(ASCII_ALPHANUMERIC | "_")
 }
 
 // C 类型系统
