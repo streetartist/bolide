@@ -86,6 +86,8 @@ pub struct FuncDef {
     /// 当指定时，跳过 ARC 并执行生命周期检查
     pub lifetime_deps: Option<Vec<String>>,
     pub body: Vec<Statement>,
+    /// 函数定义在源文件中的起始字节偏移（用于错误信息定位行号）
+    pub def_span_start: Option<usize>,
 }
 
 /// 参数传递模式

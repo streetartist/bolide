@@ -1,7 +1,12 @@
 # Changelog
 
-## 0.13.5
+## 0.13.6
 
+- 编译器错误信息改进：导入模块内函数体的编译错误现在会显示实际源文件名、函数名和行号
+  （"in 'file.bl' (function '@module_fn' at line N)"），不再指向 import 行。
+- AST 增加源位置信息：`FuncDef` 新增 `def_span_start` 字段记录函数定义在源文件中的字节偏移。
+
+## 0.13.5
 - `std/json` 新增完整 JSON 解析器与序列化器（运行时实现，JIT/AOT 双后端）：
   `parse(text) -> dynamic`、`stringify(value)` / `stringify_pretty(value, indent)`、
   `get_path(value, "a.b.0")`，以及容器访问 `get`/`at`/`keys`/`length`、类型自省

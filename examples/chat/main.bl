@@ -1,10 +1,10 @@
 import "std/web/web.bl";
 import "std/fs/fs.bl" as fs;
 
-let next_id: int = 1;
-let message_ids: list<int> = [];
-let message_names: list<str> = [];
-let message_texts: list<str> = [];
+var next_id: int = 1;
+var message_ids: list<int> = [];
+var message_names: list<str> = [];
+var message_texts: list<str> = [];
 
 fn json_escape(value: str) -> str {
     return value
@@ -53,8 +53,8 @@ fn message_json(index: int) -> str {
 }
 
 fn messages_payload(after: int) -> str {
-    let out: str = "{\"messages\":[";
-    let first: bool = true;
+    var out: str = "{\"messages\":[";
+    var first: bool = true;
     for i in range(message_ids.len()) {
         if message_ids[i] > after {
             if first {

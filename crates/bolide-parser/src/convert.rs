@@ -249,6 +249,7 @@ fn parse_assign_target(pair: Pair<Rule>) -> Result<Expr, String> {
 }
 
 fn parse_func_def(pair: Pair<Rule>) -> Result<FuncDef, String> {
+    let span_start = pair.as_span().start();
     let mut inner = pair.into_inner();
     let mut is_async = false;
     let mut is_export = false;
@@ -318,7 +319,6 @@ fn parse_func_def(pair: Pair<Rule>) -> Result<FuncDef, String> {
     for throw_ty in &mut throws {
         rewrite_type_generics(throw_ty, &type_params);
     }
-
     Ok(FuncDef {
         name,
         is_async,
@@ -329,6 +329,7 @@ fn parse_func_def(pair: Pair<Rule>) -> Result<FuncDef, String> {
         return_type,
         lifetime_deps,
         body,
+        def_span_start: Some(span_start),
     })
 }
 

@@ -262,6 +262,8 @@ pub struct JitCompiler {
     extern_funcs: HashMap<String, (String, bolide_parser::ExternFunc)>,
     /// 模块名映射: 模块名 -> 文件路径
     modules: HashMap<String, String>,
+    /// 模块源文件内容: 文件路径 -> 源文本（用于错误信息行号计算）
+    module_sources: HashMap<String, String>,
     /// 使用生命周期模式的函数集合（返回借用而非拥有的值）
     lifetime_funcs: HashSet<String>,
     /// 函数名 -> 函数值返回来源。
@@ -2804,6 +2806,7 @@ impl JitCompiler {
             global_spawn_funcs: HashMap::new(),
             extern_funcs: HashMap::new(),
             modules: HashMap::new(),
+            module_sources: HashMap::new(),
             lifetime_funcs: HashSet::new(),
             global_data_ids: HashMap::new(),
             global_var_types: HashMap::new(),
@@ -2896,7 +2899,8 @@ impl JitCompiler {
         for stmt in &program.statements {
             match stmt {
                 Statement::FuncDef(func) => {
-                    self.compile_function(func)?;
+                    let location = self.func_location(&func.name, func.def_span_start);
+                    self.compile_function(func).map_err(|e| format!("{}{}", location, e))?;
                 }
                 Statement::ClassDef(_) => {
                     // 类定义已经在 collect_classes 中处理
@@ -2918,6 +2922,7 @@ impl JitCompiler {
             return_type: Some(BolideType::Int),
             lifetime_deps: None,
             body: toplevel_stmts,
+            def_span_start: None,
         };
         self.declare_function(&main_func)?;
         self.compile_function(&main_func)?;
@@ -3066,6 +3071,34 @@ impl JitCompiler {
         })
     }
 
+    /// 根据函数名和定义偏移解析源文件和行号，用于错误信息定位。
+    fn func_location(&self, func_name: &str, def_span_start: Option<usize>) -> String {
+        if !func_name.starts_with('@') {
+            return String::new();
+        }
+        self.modules
+            .iter()
+            .filter(|(module, _)| {
+                let prefix = format!("@{}_", module);
+                func_name.starts_with(&prefix)
+            })
+            .max_by_key(|(module, _)| module.len())
+            .map(|(_, file_path)| {
+                let line_info = match def_span_start {
+                    Some(off) => self.module_sources
+                        .get(file_path.as_str())
+                        .map(|source| {
+                            let line =
+                                source[..off].bytes().filter(|b| *b == b'\n').count() + 1;
+                            format!(" at line {}", line)
+                        })
+                        .unwrap_or_default(),
+                    None => String::new(),
+                };
+                format!("in '{}' (function '{}'{}) ", file_path, func_name, line_info)
+            })
+            .unwrap_or_default()
+    }
     fn resolve_import_module(&self, import: &bolide_parser::Import) -> Option<(String, String)> {
         let mut import = import.clone();
         let mut pkg_module_name: Option<String> = None;
@@ -4186,11 +4219,12 @@ impl JitCompiler {
     }
 
     /// 加载模块文件（相对路径基于导入方源文件所在目录解析）
-    fn load_module(&self, file_path: &str) -> Result<Program, String> {
+    fn load_module(&mut self, file_path: &str) -> Result<Program, String> {
         let resolved = self.resolve_import_path(file_path);
         let content = std::fs::read_to_string(&resolved)
             .map_err(|e| format!("Failed to load module '{}': {}", resolved, e))?;
 
+        self.module_sources.insert(resolved.clone(), content.clone());
         bolide_parser::parse_source(&content)
             .map_err(|e| format!("Failed to parse module '{}': {}", resolved, e))
     }

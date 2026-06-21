@@ -1,11 +1,11 @@
 import "std/gui/gui.bl";
 
-let result: int = 0;
-let current: int = 0;
-let op: str = "";
-let fresh: bool = true;
-let display: str = "0";
-let hint: str = "准备输入";
+var result: int = 0;
+var current: int = 0;
+var op: str = "";
+var fresh: bool = true;
+var display: str = "0";
+var hint: str = "准备输入";
 
 fn refresh_display() {
     display = str(current);
