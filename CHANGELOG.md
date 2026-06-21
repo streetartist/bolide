@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.13.5
+
+- `std/json` 新增完整 JSON 解析器与序列化器（运行时实现，JIT/AOT 双后端）：
+  `parse(text) -> dynamic`、`stringify(value)` / `stringify_pretty(value, indent)`、
+  `get_path(value, "a.b.0")`，以及容器访问 `get`/`at`/`keys`/`length`、类型自省
+  `type_of`/`is_*`、标量取值 `as_int`/`as_float`/`as_str`/`as_bool`/`as_array`。
+  对象解析为 `dict<str, dynamic>`、数组解析为 `list<dynamic>`，整数走 `int`、含小数或
+  指数走 `float`；支持 `\uXXXX`（含代理对）转义，解析失败返回 `null` 并可由
+  `parse_error()` 读取原因。原有 JSON 生成辅助（`escape`/`quote`/`object`/`dict_*` 等）保持不变。
+
 ## 0.13.4
 
 - 新增一批实用标准库：`std/assert`、`std/text`、`std/csv`、`std/encoding`、`std/http`、`std/uuid`、`std/table`、`std/cache`。

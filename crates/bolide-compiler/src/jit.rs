@@ -2167,6 +2167,52 @@ impl JitCompiler {
             "bolide_template_render_file",
             bolide_runtime::bolide_template_render_file as *const u8,
         );
+        // JSON parse / stringify / navigation
+        builder.symbol(
+            "bolide_json_parse",
+            bolide_runtime::bolide_json_parse as *const u8,
+        );
+        builder.symbol(
+            "bolide_json_error",
+            bolide_runtime::bolide_json_error as *const u8,
+        );
+        builder.symbol(
+            "bolide_json_stringify",
+            bolide_runtime::bolide_json_stringify as *const u8,
+        );
+        builder.symbol(
+            "bolide_json_stringify_pretty",
+            bolide_runtime::bolide_json_stringify_pretty as *const u8,
+        );
+        builder.symbol(
+            "bolide_json_get_path",
+            bolide_runtime::bolide_json_get_path as *const u8,
+        );
+        builder.symbol(
+            "bolide_json_get",
+            bolide_runtime::bolide_json_get as *const u8,
+        );
+        builder.symbol("bolide_json_at", bolide_runtime::bolide_json_at as *const u8);
+        builder.symbol(
+            "bolide_json_length",
+            bolide_runtime::bolide_json_length as *const u8,
+        );
+        builder.symbol(
+            "bolide_json_keys",
+            bolide_runtime::bolide_json_keys as *const u8,
+        );
+        builder.symbol(
+            "bolide_json_type",
+            bolide_runtime::bolide_json_type as *const u8,
+        );
+        builder.symbol(
+            "bolide_dynamic_as_list",
+            bolide_runtime::bolide_dynamic_as_list as *const u8,
+        );
+        builder.symbol(
+            "bolide_dynamic_as_bool",
+            bolide_runtime::bolide_dynamic_as_bool as *const u8,
+        );
         builder.symbol(
             "bolide_db_open",
             bolide_runtime::bolide_db_open as *const u8,

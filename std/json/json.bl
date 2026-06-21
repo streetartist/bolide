@@ -1,9 +1,142 @@
 // Bolide JSON helper library.
 // Usage: import "std/json/json.bl" as json;
 //
-// This module intentionally starts with safe JSON generation. A full parser is
-// a larger piece of work; these helpers remove the common need to hand-roll
-// fragile JSON string concatenation in web handlers.
+// Two layers:
+//   1. Safe JSON *generation* helpers (escape/quote/object/array/dict_*),
+//      for hand-building JSON strings in web handlers.
+//   2. A full JSON *parser* and serializer backed by the runtime:
+//        parse(text)            -> dynamic   (objects -> dict, arrays -> list)
+//        stringify(value)       -> str
+//        stringify_pretty(v, n) -> str
+//        get_path(value, "a.b.0") -> dynamic
+//      plus type predicates (is_object/is_array/...) and accessors
+//      (as_int/as_float/as_str/as_bool/as_array, get/at/keys/length).
+//
+// Parsed values are `dynamic`. Inspect them with type_of()/is_*(), then pull
+// scalars out with as_int/as_float/as_str/as_bool, or walk containers with
+// get/at/get_path/keys/as_array.
+
+extern "bolide" {
+    fn bolide_json_parse(text: str) -> dynamic;
+    fn bolide_json_error() -> str;
+    fn bolide_json_stringify(value: dynamic) -> str;
+    fn bolide_json_stringify_pretty(value: dynamic, indent: i64) -> str;
+    fn bolide_json_get_path(value: dynamic, path: str) -> dynamic;
+    fn bolide_json_get(value: dynamic, key: str) -> dynamic;
+    fn bolide_json_at(value: dynamic, index: i64) -> dynamic;
+    fn bolide_json_length(value: dynamic) -> i64;
+    fn bolide_json_keys(value: dynamic) -> list;
+    fn bolide_json_type(value: dynamic) -> str;
+    fn bolide_dynamic_as_list(value: dynamic) -> list;
+    fn bolide_dynamic_as_bool(value: dynamic) -> i64;
+}
+
+// ---- Parsing & serialization ----
+
+// Parse JSON text into a dynamic value tree. On failure returns a null value;
+// call parse_error() to get the message.
+fn parse(text: str) -> dynamic {
+    return bolide_json_parse(text);
+}
+
+// Message for the most recent parse() failure ("" if it succeeded).
+fn parse_error() -> str {
+    return bolide_json_error();
+}
+
+// Serialize a dynamic value back to a compact JSON string.
+fn stringify(value: dynamic) -> str {
+    return bolide_json_stringify(value);
+}
+
+// Serialize with newlines and `indent` spaces per level.
+fn stringify_pretty(value: dynamic, indent: int) -> str {
+    return bolide_json_stringify_pretty(value, indent);
+}
+
+// Navigate a dotted path; array indices are numeric segments ("users.0.name").
+// Returns a null value if any step is missing.
+fn get_path(value: dynamic, path: str) -> dynamic {
+    return bolide_json_get_path(value, path);
+}
+
+// ---- Container access ----
+
+// Object field by key; null value if missing or not an object.
+fn get(value: dynamic, key: str) -> dynamic {
+    return bolide_json_get(value, key);
+}
+
+// Array element by index; null value if out of range or not an array.
+fn at(value: dynamic, index: int) -> dynamic {
+    return bolide_json_at(value, index);
+}
+
+// Length of an array/object/string, else 0.
+fn length(value: dynamic) -> int {
+    return bolide_json_length(value);
+}
+
+// Object keys as a list of string values (empty list if not an object).
+fn keys(value: dynamic) -> list<dynamic> {
+    return bolide_json_keys(value);
+}
+
+// Array elements as list<dynamic> (empty list if not an array).
+fn as_array(value: dynamic) -> list<dynamic> {
+    return bolide_dynamic_as_list(value);
+}
+
+// ---- Type inspection ----
+
+// JSON type name: "null" | "bool" | "number" | "string" | "array" | "object".
+fn type_of(value: dynamic) -> str {
+    return bolide_json_type(value);
+}
+
+fn is_null(value: dynamic) -> bool {
+    return type_of(value) == "null";
+}
+
+fn is_bool(value: dynamic) -> bool {
+    return type_of(value) == "bool";
+}
+
+fn is_number(value: dynamic) -> bool {
+    return type_of(value) == "number";
+}
+
+fn is_string(value: dynamic) -> bool {
+    return type_of(value) == "string";
+}
+
+fn is_array(value: dynamic) -> bool {
+    return type_of(value) == "array";
+}
+
+fn is_object(value: dynamic) -> bool {
+    return type_of(value) == "object";
+}
+
+// ---- Scalar accessors ----
+
+fn as_int(value: dynamic) -> int {
+    return int(value);
+}
+
+fn as_float(value: dynamic) -> float {
+    return float(value);
+}
+
+fn as_str(value: dynamic) -> str {
+    return str(value);
+}
+
+fn as_bool(value: dynamic) -> bool {
+    return bolide_dynamic_as_bool(value) != 0;
+}
+
+// ---- JSON generation helpers ----
 
 class Pair {
     key: str;
@@ -51,8 +184,8 @@ fn pair(key: str, value_json: str) -> Pair {
 }
 
 fn raw_array(items: list<str>) -> str {
-    let out: str = "[";
-    let first: bool = true;
+    var out: str = "[";
+    var first: bool = true;
     for item in items {
         if first {
             first = false;
@@ -65,7 +198,7 @@ fn raw_array(items: list<str>) -> str {
 }
 
 fn string_array(items: list<str>) -> str {
-    let values: list<str> = [];
+    var values: list<str> = [];
     for item in items {
         values.push(value(item));
     }
@@ -73,7 +206,7 @@ fn string_array(items: list<str>) -> str {
 }
 
 fn int_array(items: list<int>) -> str {
-    let values: list<str> = [];
+    var values: list<str> = [];
     for item in items {
         values.push(value(item));
     }
@@ -81,7 +214,7 @@ fn int_array(items: list<int>) -> str {
 }
 
 fn float_array(items: list<float>) -> str {
-    let values: list<str> = [];
+    var values: list<str> = [];
     for item in items {
         values.push(value(item));
     }
@@ -89,7 +222,7 @@ fn float_array(items: list<float>) -> str {
 }
 
 fn bool_array(items: list<bool>) -> str {
-    let values: list<str> = [];
+    var values: list<str> = [];
     for item in items {
         values.push(value(item));
     }
@@ -97,8 +230,8 @@ fn bool_array(items: list<bool>) -> str {
 }
 
 fn object(pairs: list<Pair>) -> str {
-    let out: str = "{";
-    let first: bool = true;
+    var out: str = "{";
+    var first: bool = true;
     for item in pairs {
         if first {
             first = false;
@@ -111,7 +244,7 @@ fn object(pairs: list<Pair>) -> str {
 }
 
 fn dict_str(values: dict<str, str>) -> str {
-    let pairs: list<Pair> = [];
+    var pairs: list<Pair> = [];
     for key in values.keys() {
         pairs.push(pair(key, value(values[key])));
     }
@@ -119,7 +252,7 @@ fn dict_str(values: dict<str, str>) -> str {
 }
 
 fn dict_int(values: dict<str, int>) -> str {
-    let pairs: list<Pair> = [];
+    var pairs: list<Pair> = [];
     for key in values.keys() {
         pairs.push(pair(key, value(values[key])));
     }
@@ -127,7 +260,7 @@ fn dict_int(values: dict<str, int>) -> str {
 }
 
 fn dict_bool(values: dict<str, bool>) -> str {
-    let pairs: list<Pair> = [];
+    var pairs: list<Pair> = [];
     for key in values.keys() {
         pairs.push(pair(key, value(values[key])));
     }
@@ -135,7 +268,7 @@ fn dict_bool(values: dict<str, bool>) -> str {
 }
 
 fn dict_json(values: dict<str, str>) -> str {
-    let pairs: list<Pair> = [];
+    var pairs: list<Pair> = [];
     for key in values.keys() {
         pairs.push(pair(key, values[key]));
     }

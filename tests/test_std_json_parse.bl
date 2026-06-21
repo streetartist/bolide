@@ -1,0 +1,136 @@
+import "std/json/json.bl" as json;
+
+fn check_bool(name: str, got: bool, want: bool) {
+    if got == want {
+        print("ok " + name + "\n");
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want) + "\n");
+    }
+}
+
+fn check_int(name: str, got: int, want: int) {
+    if got == want {
+        print("ok " + name + "\n");
+    } else {
+        print("FAIL " + name + " got=" + str(got) + " want=" + str(want) + "\n");
+    }
+}
+
+fn check_str(name: str, got: str, want: str) {
+    if got == want {
+        print("ok " + name + "\n");
+    } else {
+        print("FAIL " + name + " got=" + got + " want=" + want + "\n");
+    }
+}
+
+// ---- scalars ----
+check_int("parse int", json.as_int(json.parse("42")), 42);
+check_int("parse neg int", json.as_int(json.parse("-7")), -7);
+check_str("parse float", json.as_str(json.parse("3.14")), "3.14");
+check_bool("parse true", json.as_bool(json.parse("true")), true);
+check_bool("parse false", json.as_bool(json.parse("false")), false);
+check_bool("parse null", json.is_null(json.parse("null")), true);
+check_str("parse string", json.as_str(json.parse("\"hi\"")), "hi");
+
+// ---- type_of ----
+check_str("type number", json.type_of(json.parse("1")), "number");
+check_str("type string", json.type_of(json.parse("\"x\"")), "string");
+check_str("type bool", json.type_of(json.parse("true")), "bool");
+check_str("type null", json.type_of(json.parse("null")), "null");
+check_str("type array", json.type_of(json.parse("[]")), "array");
+check_str("type object", json.type_of(json.parse("{}")), "object");
+
+// ---- escapes ----
+check_str("parse escapes", json.as_str(json.parse("\"a\\nb\\tc\"")), "a\nb\tc");
+check_str("parse unicode", json.as_str(json.parse("\"\\u0041\\u4e2d\"")), "A中");
+
+// ---- object ----
+let obj: dynamic = json.parse(
+    "{\"name\":\"Bolide\",\"count\":3,\"ok\":true,\"tags\":[\"web\",\"json\"],\"nested\":{\"id\":9}}"
+);
+check_bool("obj is_object", json.is_object(obj), true);
+check_int("obj length", json.length(obj), 5);
+check_str("obj name", json.as_str(json.get(obj, "name")), "Bolide");
+check_int("obj count", json.as_int(json.get(obj, "count")), 3);
+check_bool("obj ok", json.as_bool(json.get(obj, "ok")), true);
+check_int("obj tags length", json.length(json.get(obj, "tags")), 2);
+check_str("path tags.0", json.as_str(json.get_path(obj, "tags.0")), "web");
+check_str("path tags.1", json.as_str(json.get_path(obj, "tags.1")), "json");
+check_int("path nested.id", json.as_int(json.get_path(obj, "nested.id")), 9);
+check_bool("missing key null", json.is_null(json.get(obj, "nope")), true);
+check_bool("missing path null", json.is_null(json.get_path(obj, "nope.x")), true);
+
+// object keys
+let ks: list<dynamic> = json.keys(obj);
+var kcount: int = 0;
+for k in ks {
+    kcount = kcount + 1;
+}
+check_int("keys count", kcount, 5);
+
+// ---- array ----
+let arr: dynamic = json.parse("[10, 20, 30]");
+check_bool("arr is_array", json.is_array(arr), true);
+check_int("arr length", json.length(arr), 3);
+check_int("arr at 0", json.as_int(json.at(arr, 0)), 10);
+check_int("arr at 2", json.as_int(json.at(arr, 2)), 30);
+check_bool("arr at oob null", json.is_null(json.at(arr, 9)), true);
+
+let items: list<dynamic> = json.as_array(arr);
+var total: int = 0;
+for item in items {
+    total = total + json.as_int(item);
+}
+check_int("arr sum", total, 60);
+
+// ---- stringify (deterministic shapes) ----
+check_str("stringify int", json.stringify(json.parse("42")), "42");
+check_str("stringify string", json.stringify(json.parse("\"hi\"")), "\"hi\"");
+check_str("stringify array", json.stringify(json.parse("[1,2,3]")), "[1,2,3]");
+check_str("stringify nested array", json.stringify(json.parse("[[1,2],[3]]")), "[[1,2],[3]]");
+check_str("stringify one-key obj", json.stringify(json.parse("{\"a\":1}")), "{\"a\":1}");
+check_str("stringify bool", json.stringify(json.parse("[true,false,null]")), "[true,false,null]");
+check_str("pretty array", json.stringify_pretty(json.parse("[1,2]"), 2), "[\n  1,\n  2\n]");
+
+// ---- roundtrip object (order-independent via accessors) ----
+let rt: dynamic = json.parse(json.stringify(obj));
+check_str("roundtrip name", json.as_str(json.get(rt, "name")), "Bolide");
+check_int("roundtrip nested.id", json.as_int(json.get_path(rt, "nested.id")), 9);
+
+// ---- errors ----
+let bad: dynamic = json.parse("{ not valid ]");
+check_bool("bad is null", json.is_null(bad), true);
+check_bool("bad has error", json.parse_error() != "", true);
+let good: dynamic = json.parse("[1, 2]");
+check_bool("good no error", json.parse_error() == "", true);
+
+// ---- empty containers ----
+check_int("empty obj length", json.length(json.parse("{}")), 0);
+check_int("empty arr length", json.length(json.parse("[]")), 0);
+check_bool("empty arr is_array", json.is_array(json.parse("[]")), true);
+check_str("stringify empty obj", json.stringify(json.parse("{}")), "{}");
+check_str("stringify empty arr", json.stringify(json.parse("[]")), "[]");
+
+// ---- array of objects ----
+let aoo: dynamic = json.parse("[{\"k\":1},{\"k\":2},{\"k\":3}]");
+check_int("aoo length", json.length(aoo), 3);
+check_int("aoo path 1.k", json.as_int(json.get_path(aoo, "1.k")), 2);
+let rows: list<dynamic> = json.as_array(aoo);
+var ksum: int = 0;
+for row in rows {
+    ksum = ksum + json.as_int(json.get(row, "k"));
+}
+check_int("aoo k sum", ksum, 6);
+
+// ---- type mismatch is lenient ----
+check_bool("get on array null", json.is_null(json.get(arr, "k")), true);
+check_bool("at on object null", json.is_null(json.at(obj, 0)), true);
+let empty_items: list<dynamic> = json.as_array(json.parse("5"));
+var ecount: int = 0;
+for e in empty_items {
+    ecount = ecount + 1;
+}
+check_int("as_array scalar empty", ecount, 0);
+
+print("std json parse done\n");
