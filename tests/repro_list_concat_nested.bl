@@ -1,0 +1,20 @@
+fn build_rows() -> list<list<int>> {
+    var rows: list<list<int>> = [];
+    var row0: list<int> = [];
+    row0.push(1);
+    row0.push(2);
+    rows = rows + [row0];
+
+    var row1: list<int> = [];
+    row1.push(3);
+    row1.push(4);
+    rows = rows + [row1];
+    return rows;
+}
+
+fn main() {
+    let rows: list<list<int>> = build_rows();
+    print(str(rows[0][0]) + "," + str(rows[0][1]) + "," + str(rows[1][0]) + "," + str(rows[1][1]) + "\n");
+}
+
+main();

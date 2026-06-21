@@ -1,0 +1,190 @@
+// ============================================================
+// Conway's Game of Life — 终端动画版
+// 60×30 toroidal grid, 200 generations, ANSI 清屏
+// ============================================================
+
+import "std/math/math.bl" as math;
+import "std/time/time.bl" as time;
+
+// ---------- 简易 LCG 随机数（避免外部依赖，行为可控） ----------
+var LCG_STATE: int = 0;
+
+fn rand_seed(s: int) {
+    LCG_STATE = s;
+}
+
+fn rand_next() -> int {
+    // Numerical Recipes 常数, 32-bit 溢出在 i64 下不会发生, 我们手动截断
+    LCG_STATE = (LCG_STATE * 1664525 + 1013904223) & 0x7fffffff;
+    return LCG_STATE;
+}
+
+fn rand_pick(max: int) -> int {
+    return rand_next() % max;
+}
+
+// ---------- 网格操作 ----------
+// 0 = 死, 1 = 活
+fn make_grid(w: int, h: int) -> list<list<int>> {
+    var rows: list<list<int>> = [];
+    var r: int = 0;
+    while r < h {
+        var row: list<int> = [];
+        var c: int = 0;
+        while c < w {
+            row.push(0);
+            c = c + 1;
+        }
+        rows.push(row);
+        r = r + 1;
+    }
+    return rows;
+}
+
+fn grid_get(g: list<list<int>>, x: int, y: int, w: int, h: int) -> int {
+    // 环面 (toroidal) 边界
+    var ix: int = x;
+    var iy: int = y;
+    if ix < 0 { ix = ix + w; }
+    if iy < 0 { iy = iy + h; }
+    if ix >= w { ix = ix - w; }
+    if iy >= h { iy = iy - h; }
+    return g[iy][ix];
+}
+
+fn live_neighbors(g: list<list<int>>, x: int, y: int, w: int, h: int) -> int {
+    var n: int = 0;
+    n = n + grid_get(g, x - 1, y - 1, w, h);
+    n = n + grid_get(g, x,     y - 1, w, h);
+    n = n + grid_get(g, x + 1, y - 1, w, h);
+    n = n + grid_get(g, x - 1, y,     w, h);
+    n = n + grid_get(g, x + 1, y,     w, h);
+    n = n + grid_get(g, x - 1, y + 1, w, h);
+    n = n + grid_get(g, x,     y + 1, w, h);
+    n = n + grid_get(g, x + 1, y + 1, w, h);
+    return n;
+}
+
+fn step(g: list<list<int>>, w: int, h: int) -> list<list<int>> {
+    var next: list<list<int>> = [];
+    var y: int = 0;
+    while y < h {
+        var row: list<int> = [];
+        var x: int = 0;
+        while x < w {
+            let alive: int = g[y][x];
+            let n: int = live_neighbors(g, x, y, w, h);
+            var v: int = 0;
+            if alive == 1 {
+                if n == 2 or n == 3 { v = 1; }
+            } else {
+                if n == 3 { v = 1; }
+            }
+            row.push(v);
+            x = x + 1;
+        }
+        next.push(row);
+        y = y + 1;
+    }
+    return next;
+}
+
+// ---------- 渲染 ----------
+fn render(g: list<list<int>>, w: int, h: int, gen: int, alive: int) -> str {
+    // 顶部信息行
+    var frame: str = "\x1b[H";
+    frame = frame + "  Conway's Game of Life  |  gen=" + str(gen)
+                 + "  alive=" + str(alive) + "\n";
+    frame = frame + "  " + str(w) + "x" + str(h) + " toroidal\n\n";
+
+    var y: int = 0;
+    while y < h {
+        frame = frame + "  ";
+        var x: int = 0;
+        while x < w {
+            if g[y][x] == 1 {
+                frame = frame + "█";
+            } else {
+                frame = frame + " ";
+            }
+            x = x + 1;
+        }
+        frame = frame + "\n";
+        y = y + 1;
+    }
+    return frame;
+}
+
+fn count_alive(g: list<list<int>>, w: int, h: int) -> int {
+    var n: int = 0;
+    var y: int = 0;
+    while y < h {
+        var x: int = 0;
+        while x < w {
+            n = n + g[y][x];
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+    return n;
+}
+
+// ---------- 主循环 ----------
+fn sleep_ms(ms: int) {
+    // busy-wait 短延时, 不引入额外依赖
+    let start: int = time.monotonic_ms();
+    while time.monotonic_ms() - start < ms {
+        // spin
+    }
+}
+
+fn main() {
+    let W: int = 60;
+    let H: int = 28;
+    let GENS: int = 200;
+    let DENSITY_NUM: int = 100;  // 初始活细胞概率分母
+    let DENSITY_PROB: int = 25;  // ~25%
+
+    // 用时间戳做种子, 每次运行都不一样
+    rand_seed(time.monotonic_ms() * 1000 + 17);
+
+    // 随机初始化
+    var grid: list<list<int>> = make_grid(W, H);
+    var y: int = 0;
+    while y < H {
+        var x: int = 0;
+        while x < W {
+            if rand_pick(DENSITY_NUM) < DENSITY_PROB {
+                var row: list<int> = grid[y];
+                row[x] = 1;
+                grid[y] = row;
+            }
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+
+    // 隐藏光标, 清屏
+    print("\x1b[?25l");
+    print("\x1b[2J");
+
+    var gen: int = 0;
+    while gen < GENS {
+        let alive: int = count_alive(grid, W, H);
+        print(render(grid, W, H, gen, alive));
+
+        // 早停: 全死或全活 (全活 = 不动, 不再变化)
+        if alive == 0 or alive == W * H {
+            break;
+        }
+        grid = step(grid, W, H);
+        sleep_ms(80);
+        gen = gen + 1;
+    }
+
+    // 收尾: 恢复光标
+    print("\x1b[?25h");
+    print("Done: ran " + str(gen) + " generations.");
+}
+
+main();

@@ -8630,6 +8630,20 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             }
         }
 
+        if matches!(op, BinOp::Add) {
+            if let (Some(BolideType::List(left_elem)), Some(BolideType::List(right_elem))) =
+                (&left_type, &right_type)
+            {
+                if left_elem == right_elem {
+                    return self.compile_list_concat(left, right, left_elem.as_ref());
+                }
+                return Err(format!(
+                    "Cannot concatenate list<{:?}> with list<{:?}>",
+                    left_elem, right_elem
+                ));
+            }
+        }
+
         let is_float = matches!(left_type, Some(BolideType::Float))
             || matches!(right_type, Some(BolideType::Float));
         let is_string = matches!(left_type, Some(BolideType::Str))
@@ -9002,6 +9016,29 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         let call = self.builder.ins().call(func_ref, &[array_ptr, count]);
         let result = self.builder.inst_results(call)[0];
         self.track_temp_rc_value(result, &BolideType::Str);
+        Ok(result)
+    }
+
+    fn compile_list_concat(
+        &mut self,
+        left: &Expr,
+        right: &Expr,
+        elem_ty: &BolideType,
+    ) -> Result<Value, String> {
+        let left_val = self.compile_expr(left)?;
+        let right_val = self.compile_expr(right)?;
+        let list_clone = *self
+            .func_refs
+            .get("@_list_clone")
+            .ok_or("list_clone not found")?;
+        let list_extend = *self
+            .func_refs
+            .get("@_list_extend")
+            .ok_or("list_extend not found")?;
+        let clone_call = self.builder.ins().call(list_clone, &[left_val]);
+        let result = self.builder.inst_results(clone_call)[0];
+        self.builder.ins().call(list_extend, &[result, right_val]);
+        self.track_temp_rc_value(result, &BolideType::List(Box::new(elem_ty.clone())));
         Ok(result)
     }
 
@@ -12810,6 +12847,15 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
                 let left_ty = self.infer_expr_type(left);
                 let right_ty = self.infer_expr_type(right);
                 match (&left_ty, &right_ty) {
+                    (Some(BolideType::List(left_elem)), Some(BolideType::List(right_elem))) => {
+                        match op {
+                            BinOp::Add if left_elem == right_elem => {
+                                Some(BolideType::List(left_elem.clone()))
+                            }
+                            BinOp::Eq | BinOp::Ne => Some(BolideType::Bool),
+                            _ => Some(BolideType::Int),
+                        }
+                    }
                     (Some(BolideType::Str), Some(BolideType::Str)) => match op {
                         BinOp::Add => Some(BolideType::Str),
                         BinOp::Eq | BinOp::Ne => Some(BolideType::Bool),

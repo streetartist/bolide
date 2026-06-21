@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "0.13.3",
+    [string]$Version = "0.13.7",
     [string]$LinuxTarget = "x86_64-unknown-linux-gnu",
     [string]$DistDir = "dist",
     [switch]$SkipMsi,
