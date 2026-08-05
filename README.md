@@ -29,24 +29,22 @@
 
 ## 特性
 
-- **JIT 编译** - 基于 Cranelift 的即时编译，快速启动
-- **AOT 编译** - 提前编译为原生可执行文件，无需运行时
-- **一等函数** - 函数可作为值传递、存入列表、作为参数与返回值，支持 `map`/`filter` 等高阶方法
-- **闭包** - 支持 `fn(...) -> T { ... }` 闭包字面量、自动捕获局部变量、闭包参数与返回闭包
-- **泛型函数** - 支持 `fn id<T>(x: T) -> T` 形式的类型参数，调用点自动推断并单态化
-- **值类型** - 支持 `value Vec3 { ... }` 这类零堆分配聚合类型，可按值构造、传参和返回
-- **内联函数** - 支持 `inline fn`，适合热路径上的短小计算函数
-- **函数参数** - 支持默认值、具名调用、`*args` 列表变长参数和 `**kwargs` 字典变长参数
-- **默认不可变绑定** - `let` 默认不可变，`var` 用于需要重新赋值或原地修改的状态
-- **字符串与切片** - 内置字符串方法，支持字符串、列表、元组的 Python 风格切片
-- **异步协程** - 一等公民的 async/await 支持
-- **双向 FFI** - 无缝调用 C 库（支持回调）；也可将 Bolide 编译为静态库供 C 调用（`export fn` + `.h` 生成）
-- **模块系统** - 命名空间隔离的模块导入
-- **源码级报错** - `run`、`compile` 和 REPL 输出文件名、行列号、源码片段、指针标注与修复提示
-- **丰富类型** - BigInt、Decimal、Dynamic 等
-- **并发支持** - 线程、通道、线程池、原子类型和同步原语
-- **Web 标准库** - 高性能 HTTP 服务、路由、会话、静态文件和 AOT 单文件部署
-- **内存管理** - ARC 引用计数 + 生命周期注解 + weak/unowned 引用
+- **JIT / AOT** - Cranelift 即时编译与原生可执行文件；AOT 可单文件部署
+- **一等函数与闭包** - 函数作值、`map`/`filter`、闭包字面量与捕获
+- **泛型与 trait** - 单态化泛型、`trait` / `impl`、`T: Trait` 约束、`dyn Trait` 运行时多态
+- **宏与装饰器** - 声明式 / 属性宏（调用带 `!`）、Python 风格 `@` 装饰器与 `with`
+- **生成器** - `yield` 懒迭代器（`next() -> Option`），`for` 可直接遍历
+- **运算符重载** - class 上 `__add__` / `__eq__` / 位运算 / 一元等，支持右操作数反射
+- **值类型与内联** - `value` 零堆聚合；`inline fn` 与热路径自动内联小叶子函数
+- **函数参数** - 默认值、具名调用、`*args` / `**kwargs`
+- **默认不可变绑定** - `let` 不可变，`var` 可变；`list[i]` **始终边界检查**
+- **字符串与切片** - 内置方法；字符串 / 列表 / 元组 Python 风格切片
+- **异步与并发** - async/await、线程、通道、线程池、原子与同步原语
+- **双向 FFI** - 调 C（含回调）；`export fn` 编译为静态库供 C 调用
+- **模块与包** - 命名空间 import；`bolide.toml` 依赖与短路径 `std/fs`
+- **标准库** - Web / HTTP / GUI / JSON / DB / CLI 等（见 `std/README.md`）
+- **源码级报错** - 文件名、行列、源码片段与修复提示
+- **内存管理** - ARC + 生命周期注解 + weak/unowned
 
 ## 快速开始
 
@@ -56,7 +54,7 @@
 
 ```bash
 # 克隆仓库
-git clone https://github.com/your-repo/bolide.git
+git clone https://github.com/streetartist/bolide.git
 cd bolide
 
 # 构建
@@ -64,6 +62,10 @@ cargo build --release
 
 # 运行程序
 cargo run --release -- run examples/hello.bl
+
+# 特性演示（可选）
+cargo run --release -- run examples/neon_lang.bl
+cargo run --release -- run examples/starfield.bl
 ```
 
 ### 使用 Release 版本
@@ -866,7 +868,15 @@ Unicode 码点截取。
 
 ### 列表操作
 
-Bolide 提供了丰富的 Python 风格列表操作：
+Bolide 提供了丰富的 Python 风格列表操作。
+
+**边界检查**：`list[i]` 读写始终检查下标；越界读返回 `0`/`0.0`，越界写忽略。需要预分配时用 `reserve` / `resize`：
+
+```bolide
+var flags: list<int> = [];
+flags.resize(1000, 0);   // 长度 1000，填充 0
+flags.reserve(2000);     // 只扩容不改长度
+```
 
 ```bolide
 var nums: list<int> = [3, 1, 4, 1, 5, 9];
@@ -876,7 +886,7 @@ nums.push(10);           // 追加元素
 let x: int = nums.pop(); // 弹出最后一个元素
 print(nums.len());       // 获取长度
 
-// 索引访问
+// 索引访问（有边界检查）
 print(nums[0]);          // 获取元素
 nums[0] = 100;           // 设置元素
 
@@ -1053,8 +1063,8 @@ ch.recv();                 // 纯同步：接收并丢弃返回值
 用 `set`/`swap`/`add_int` 等方法在运行时锁内完成修改。
 
 ```bolide
-import "std/atomic/atomic.bl" as atomic;
-import "std/sync/sync.bl" as sync;
+import "std/atomic" as atomic;
+import "std/sync" as sync;
 
 let counter: atomic.AtomicInt = atomic.new_int(0);
 counter.add(1);
@@ -1861,7 +1871,7 @@ Bolide 标准库通常由 `.bl` 包装层加底层实现组成。用户侧通过
    - 适合语言核心标准库、跨平台能力，以及需要和 Bolide 运行时对象配合的功能。
    - 底层实现位于 `crates/bolide-runtime/src/`，通过 `extern "bolide"` 暴露给 `.bl` 包装层。
    - AOT 时随 `bolide_runtime.lib` / `libbolide_runtime.a` 静态链接进最终程序；JIT 时由当前 `bolide` 进程直接解析 runtime 符号。
-   - 例如 `std/fs/fs.bl`、`std/web/web.bl`、`std/gui/gui.bl` 当前都使用这种模式。
+   - 例如 `std/fs`、`std/web`、`std/gui`（底层 `.bl` 包装 + runtime）当前都使用这种模式。
 
 2. **独立静态标准库**
    - 适合保持为独立模块、又希望由 Bolide 工具链自动管理的平台能力或较大组件。
@@ -1879,12 +1889,12 @@ Rust runtime；需要独立演进但仍属于 Bolide 标准库体验的组件使
 
 ## Web 标准库
 
-Bolide 提供 `std/web/web.bl`，目标是用简洁 API 写出接近 FastAPI 使用体验、但能 AOT
+Bolide 提供 `std/web`（短路径；旧路径 `std/web/web.bl` 仍可用），目标是用简洁 API 写出接近 FastAPI 使用体验、但能 AOT
 编译为原生可执行文件的 Web 服务。底层实现位于 runtime，AOT 时会静态链接进最终程序；
 发布 Web 应用时可以保持单文件可执行程序形态。
 
 ```bolide
-import "std/web/web.bl";
+import "std/web" as web;
 
 fn index(req: web.Request) -> web.Response {
     return web.html("<h1>Hello Bolide</h1><p>path=" + req.path() + "</p>");
@@ -1899,7 +1909,7 @@ app.get("/", index);
 app.get_async("/hello/{name}", hello);
 app.static_files("/static", "public");
 
-app.run("127.0.0.1", 8080);
+app.listen(8080);  // 或 app.run("127.0.0.1", 8080)
 ```
 
 当前 Web 标准库支持：
@@ -1977,8 +1987,8 @@ Bolide 现在提供轻量模板引擎和文件数据库，目标是让小型 Web
 `list<dict<str, dynamic>>` 和 `Database` 等 Bolide 类型，不需要直接处理 `ptr`。
 
 ```bolide
-import "std/db/db.bl";
-import "std/template/template.bl";
+import "std/db" as db;
+import "std/template" as template;
 
 let database: db.Database = db.open("data/blog");
 database.create_table("posts", "title,slug,body,published");
@@ -2068,7 +2078,7 @@ vsce package
 
 ## GUI 开发
 
-Bolide 提供 `std/gui/gui.bl`，当前后端为 runtime 中的 `egui/eframe`。GUI 程序使用声明式回调渲染：应用状态保存在 Bolide 全局变量或对象中，`gui.run(title, width, height, root)` 创建窗口并在每一帧调用 `root(ui)` 绘制界面。JIT 可用于开发期快速运行，AOT 会把 GUI runtime 静态链接进最终可执行文件。
+Bolide 提供 `std/gui`（短路径；旧路径 `std/gui/gui.bl` 仍可用），当前后端为 runtime 中的 `egui/eframe`。GUI 程序使用声明式回调渲染：应用状态保存在 Bolide 全局变量或对象中，`gui.run(title, width, height, root)` 创建窗口并在每一帧调用 `root(ui)` 绘制界面。JIT 可用于开发期快速运行，AOT 会把 GUI runtime 静态链接进最终可执行文件。
 
 GUI 标准库的用户层只接触 Bolide 类型：`gui.Ui`、`str`、`int`、`bool` 和 `func(gui.Ui)` 回调。底层窗口、平台事件循环和 egui 对象由 runtime 管理。
 
@@ -2090,7 +2100,7 @@ GUI 标准库的用户层只接触 Bolide 类型：`gui.Ui`、`str`、`int`、`b
 ### 基本示例
 
 ```bolide
-import "std/gui/gui.bl";
+import "std/gui" as gui;
 
 var count: int = 0;
 var status: str = "准备";
@@ -2156,7 +2166,7 @@ examples/calculator.exe
 
 ### 实现与发布
 
-`std/gui/gui.bl` 通过 `extern "bolide"` 调用 runtime 中的 GUI 后端。AOT 链接时 GUI 后端随 Bolide runtime 静态进入最终程序；Windows 下 runtime 会配置 winit event loop 兼容 AOT 入口线程。中文显示通过系统 CJK 字体回退处理。
+`std/gui` 通过 `extern "bolide"` 调用 runtime 中的 GUI 后端。AOT 链接时 GUI 后端随 Bolide runtime 静态进入最终程序；Windows 下 runtime 会配置 winit event loop 兼容 AOT 入口线程。中文显示通过系统 CJK 字体回退处理。
 
 ## 许可证
 

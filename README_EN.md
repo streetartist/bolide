@@ -25,18 +25,56 @@
 
 ## Features
 
-- **JIT Compilation** - Native performance via Cranelift, fast startup
-- **AOT Compilation** - Compile to native executables, no runtime needed
-- **First-Class Functions** - Functions as values: pass, store in lists, return; higher-order `map`/`filter`
-- **Value Types** - Define lightweight aggregate types with `value Vec3 { ... }` for by-value construction, parameters, and returns
-- **Inline Functions** - Mark hot tiny helpers with `inline fn` so calls are expanded at the call site
-- **Async Coroutines** - First-class async/await support
-- **Bidirectional FFI** - Call C libraries (with callbacks); also compile Bolide to a static library callable from C (`export fn` + `.h` generation)
-- **Module System** - Namespace-isolated module imports
-- **Source Diagnostics** - `run`, `compile`, and the REPL report filenames, line/column numbers, source snippets, carets, and targeted help
-- **Rich Types** - BigInt, Decimal, Dynamic, and more
-- **Concurrency** - Threads, channels, thread pools
-- **Memory Management** - ARC (atomic refcounts) + checked lifetime annotations + liveness-checked weak/unowned references
+- **JIT / AOT** - Cranelift JIT and native executables; single-file AOT deploy
+- **First-class functions & closures** - values, `map`/`filter`, capturing closures
+- **Generics & traits** - monomorphization, `trait` / `impl`, `T: Trait`, `dyn Trait`
+- **Macros & decorators** - declarative/attribute macros (call with `!`), Python-style `@` and `with`
+- **Generators** - lazy `yield` (`next() -> Option`), usable in `for`
+- **Operator overloading** - `__add__` / `__eq__` / bitwise / unary; reflected ops
+- **Value types & inlining** - `value` stack aggregates; `inline fn` and auto-inline of small scalar leaves
+- **Parameters** - defaults, named args, `*args` / `**kwargs`
+- **Immutable by default** - `let` vs `var`; **`list[i]` is always bounds-checked**
+- **Strings & slices** - built-ins; Python-style slices on str/list/tuple
+- **Async & concurrency** - async/await, threads, channels, pools, atomics/sync
+- **Bidirectional FFI** - call C (callbacks); `export fn` static libs for C callers
+- **Modules & packages** - namespaced import; `bolide.toml`; short paths like `std/fs`
+- **Standard library** - Web / HTTP / GUI / JSON / DB / CLI (see `std/README.md`)
+- **Source diagnostics** - file, line/column, snippets, and help text
+- **Memory** - ARC + lifetime annotations + weak/unowned
+
+> Full language reference (macros, decorators, generators, traits, std module table, Web/GUI) is maintained in Chinese: [README.md](./README.md). Package index: [std/README.md](./std/README.md). Microbenchmarks: [bench/README.md](./bench/README.md).
+
+### Language highlights (0.14.x)
+
+```bolide
+// Macros — call with !
+macro twice($x:expr) quote { ($x) + ($x); }
+print(twice!(21));
+
+// Generators
+fn count_to(n: int) {
+    var i: int = 0;
+    while i < n {
+        yield i;
+        i = i + 1;
+    }
+}
+for x in count_to(3) { print(x); }
+
+// Traits
+trait Drawable { fn draw(); }
+impl Drawable for Circle { fn draw() { print(self.r); } }
+fn paint<T: Drawable>(x: T) { x.draw(); }
+
+// Decorators / with
+@logged
+fn work() { print("hi"); }
+with Resource("db") as r { print(r.name); }
+
+// Std short import
+import "std/fs" as fs;
+import "std/web" as web;
+```
 
 ## Quick Start
 
@@ -44,7 +82,7 @@
 
 ```bash
 # Clone repository
-git clone https://github.com/your-repo/bolide.git
+git clone https://github.com/streetartist/bolide.git
 cd bolide
 
 # Build
@@ -52,6 +90,10 @@ cargo build --release
 
 # Run program
 cargo run --release -- run examples/hello.bl
+
+# Feature demos (optional)
+cargo run --release -- run examples/neon_lang.bl
+cargo run --release -- run examples/starfield.bl
 ```
 
 ### Using Release Version
@@ -313,15 +355,23 @@ while x > 0 {
 
 ### List Operations
 
+`list[i]` is **always bounds-checked**: out-of-range reads yield `0`/`0.0`, writes are ignored.
+Use `reserve` / `resize` for bulk allocation:
+
 ```bolide
-let nums: list<int> = [3, 1, 4, 1, 5, 9];
+var flags: list<int> = [];
+flags.resize(1000, 0);
+```
+
+```bolide
+var nums: list<int> = [3, 1, 4, 1, 5, 9];
 
 // Basic operations
 nums.push(10);           // append element
 let x: int = nums.pop(); // pop last element
 print(nums.len());       // get length
 
-// Index access
+// Index access (bounds-checked)
 print(nums[0]);          // get element
 nums[0] = 100;           // set element
 
