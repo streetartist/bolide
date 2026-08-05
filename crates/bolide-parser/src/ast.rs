@@ -15,6 +15,22 @@ pub enum Statement {
     ClassDef(ClassDef),
     ValueDef(ValueDef),
     EnumDef(EnumDef),
+    /// `trait Name { ... }`
+    TraitDef(TraitDef),
+    /// `impl Trait for Type { ... }`
+    TraitImpl(TraitImpl),
+    /// `macro name ...` 定义（展开阶段收集后剥离）
+    MacroDef(MacroDef),
+    /// `attr macro name ...` 定义
+    AttrMacroDef(AttrMacroDef),
+    /// `comptime fn name(...) { ... }`（展开期求值）
+    ComptimeFn(ComptimeFn),
+    /// 宏模板内 `$( stmts )*` / `$( stmts )+`
+    MacroRep {
+        body: Vec<Statement>,
+        /// 0 = `*`, 1 = `+`
+        min: usize,
+    },
     If(IfStmt),
     While(WhileStmt),
     For(ForStmt),
@@ -29,12 +45,140 @@ pub enum Statement {
     Return(Option<Expr>),
     /// throw expr; - 抛出异常
     Throw(Expr),
+    /// yield expr; - 生成器产出（展开前）
+    Yield(Expr),
     /// try { ... } catch { ... } - 异常捕获
     Try(TryStmt),
+    /// with expr [as name], ... { body } — 上下文管理器
+    With(WithStmt),
     Match(MatchStmt),
     Expr(Expr),
     Import(Import),
     ExternBlock(ExternBlock),
+}
+
+/// 属性 `@name` / `@name(args)`
+#[derive(Debug, Clone)]
+pub struct Attribute {
+    pub name: String,
+    /// 位置参数：标识符或字符串内容（不含引号）
+    pub args: Vec<AttrArg>,
+}
+
+#[derive(Debug, Clone)]
+pub enum AttrArg {
+    Ident(String),
+    Str(String),
+    Int(i64),
+}
+
+/// 宏片段分类符
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FragKind {
+    Expr,
+    Ident,
+    Lit,
+    Block,
+    Type,
+    Path,
+    Stmt,
+    Tt,
+    /// 属性宏接收的整项（class/fn/…）
+    Item,
+}
+
+/// 宏模式中的一片
+#[derive(Debug, Clone)]
+pub enum PatPiece {
+    /// `$name:kind`
+    Bind { name: String, kind: FragKind },
+    /// `$a:ident = $b:expr`
+    EqBind {
+        ident_name: String,
+        expr_name: String,
+        expr_kind: FragKind,
+    },
+    /// `$(...)*` / `$(...)+`，`sep` 为前导或片段间分隔符
+    Rep {
+        pieces: Vec<PatPiece>,
+        /// 前导分隔（如 `$(, $x:expr)*` 中的 `,`）
+        leading_sep: Option<char>,
+        /// 重复之间的分隔
+        inter_sep: Option<char>,
+        min: usize, // 0 for *, 1 for +
+    },
+}
+
+#[derive(Debug, Clone)]
+pub struct MacroPattern {
+    pub pieces: Vec<PatPiece>,
+}
+
+#[derive(Debug, Clone)]
+pub struct MacroArm {
+    pub pattern: MacroPattern,
+    /// 模板语句（可含 Splice）
+    pub body: Vec<Statement>,
+}
+
+#[derive(Debug, Clone)]
+pub struct MacroDef {
+    pub name: String,
+    pub is_export: bool,
+    pub arms: Vec<MacroArm>,
+    pub def_span_start: Option<usize>,
+}
+
+#[derive(Debug, Clone)]
+pub struct AttrMacroDef {
+    pub name: String,
+    pub is_export: bool,
+    pub pattern: MacroPattern,
+    pub body: Vec<Statement>,
+    pub def_span_start: Option<usize>,
+}
+
+/// `comptime fn name(params) -> T { body }`
+#[derive(Debug, Clone)]
+pub struct ComptimeFn {
+    pub name: String,
+    pub params: Vec<(String, Type)>,
+    pub return_type: Option<Type>,
+    pub body: Vec<Statement>,
+    pub def_span_start: Option<usize>,
+}
+
+/// 宏调用参数
+#[derive(Debug, Clone)]
+pub enum MacroArg {
+    Expr(Expr),
+    /// `name = expr`
+    Named { name: String, value: Expr },
+}
+
+#[derive(Debug, Clone)]
+pub enum MacroArgs {
+    /// `name!(...)`
+    Paren(Vec<MacroArg>),
+    /// `name! { stmts }`
+    Brace(Vec<Statement>),
+}
+
+/// `foo!(...)` / `m.foo!(...)`
+#[derive(Debug, Clone)]
+pub struct MacroInvoke {
+    pub path: Vec<String>,
+    pub args: MacroArgs,
+    pub span_start: Option<usize>,
+}
+
+/// 模板拼接元数据 `$x:src`
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpliceMeta {
+    Src,
+    Stringify,
+    Line,
+    File,
 }
 
 /// try/catch 语句
@@ -43,6 +187,20 @@ pub struct TryStmt {
     pub try_body: Vec<Statement>,
     pub catch_clauses: Vec<CatchClause>,
     pub finally: Option<Vec<Statement>>,
+}
+
+/// with 语句（上下文管理器）
+#[derive(Debug, Clone)]
+pub struct WithStmt {
+    pub items: Vec<WithItem>,
+    pub body: Vec<Statement>,
+}
+
+/// `expr` 或 `expr as name`
+#[derive(Debug, Clone)]
+pub struct WithItem {
+    pub expr: Expr,
+    pub binding: Option<String>,
 }
 
 /// catch 子句
@@ -67,6 +225,8 @@ pub struct VarDecl {
     pub mutable: bool,
     pub ty: Option<Type>,
     pub value: Option<Expr>,
+    /// 宏模板中 `let $name = ...`：name 来自 splice
+    pub name_is_splice: bool,
 }
 
 /// 函数定义
@@ -80,6 +240,8 @@ pub struct FuncDef {
     pub is_inline: bool,
     /// 泛型参数，如 `fn id<T>(x: T) -> T`
     pub type_params: Vec<String>,
+    /// 泛型约束：`T: Drawable + Debug` → `("T", ["Drawable", "Debug"])`
+    pub trait_bounds: Vec<(String, Vec<String>)>,
     pub params: Vec<Param>,
     /// Optional exception annotation: `throws IoError, ParseError`.
     /// This is intentionally advisory for now; compiler diagnostics may use it.
@@ -91,6 +253,8 @@ pub struct FuncDef {
     pub body: Vec<Statement>,
     /// 函数定义在源文件中的起始字节偏移（用于错误信息定位行号）
     pub def_span_start: Option<usize>,
+    /// `@test` / `@route(...)` 等属性
+    pub attrs: Vec<Attribute>,
 }
 
 /// 参数传递模式
@@ -121,8 +285,40 @@ pub struct Param {
 #[derive(Debug, Clone)]
 pub struct ClassDef {
     pub name: String,
-    pub parent: Option<String>, // 父类名（继承）
+    /// 主父类（字段布局 + `super` 链）；多继承时仅第一个可有字段
+    pub parent: Option<String>,
+    /// 额外父类 / mixin：必须无字段，方法在展开期并入本类（避免钻石布局）
+    pub mixins: Vec<String>,
     pub fields: Vec<ClassField>,
+    pub methods: Vec<FuncDef>,
+    pub attrs: Vec<Attribute>,
+    /// 本类已 `impl` 的 trait 名（由 trait 脱糖写入）
+    pub impl_traits: Vec<String>,
+}
+
+/// trait 定义
+#[derive(Debug, Clone)]
+pub struct TraitDef {
+    pub name: String,
+    /// 父 trait：`trait Child: Parent + Other`
+    pub supers: Vec<String>,
+    pub methods: Vec<TraitMethod>,
+    pub attrs: Vec<Attribute>,
+}
+
+/// trait 方法：可无默认实现，或仅签名（要求 impl 提供）
+#[derive(Debug, Clone)]
+pub struct TraitMethod {
+    pub func: FuncDef,
+    /// false = 必须由 `impl` 实现
+    pub has_default: bool,
+}
+
+/// `impl Trait for Type { ... }`
+#[derive(Debug, Clone)]
+pub struct TraitImpl {
+    pub trait_name: String,
+    pub type_name: String,
     pub methods: Vec<FuncDef>,
 }
 
@@ -131,6 +327,7 @@ pub struct ClassDef {
 pub struct ValueDef {
     pub name: String,
     pub fields: Vec<ValueField>,
+    pub attrs: Vec<Attribute>,
 }
 
 /// 值类型字段
@@ -148,6 +345,7 @@ pub struct EnumDef {
     pub variants: Vec<EnumVariant>,
     /// `union` 与 `enum` 共享同一 ADT 表示；该标志保留源码意图。
     pub is_union: bool,
+    pub attrs: Vec<Attribute>,
 }
 
 /// enum/union variant
@@ -275,6 +473,8 @@ pub enum Pattern {
     Bool(bool),
     String(String),
     None,
+    /// 元组模式: `(a, b, _)`（主要用于将来 match；解构声明另有脱糖路径）
+    Tuple(Vec<Pattern>),
     Variant {
         enum_name: Option<String>,
         variant: String,
@@ -352,6 +552,15 @@ pub enum Expr {
         iter: Box<Expr>,
         filter: Option<Box<Expr>>,
     },
+    /// 宏调用 `name!(...)` / `m.name!(...)`（展开前）
+    MacroInvoke(MacroInvoke),
+    /// 宏模板拼接 `$name` / `$name:src`
+    Splice {
+        name: String,
+        meta: Option<SpliceMeta>,
+    },
+    /// `comptime { ... }` 编译期求值块（展开期折叠为常量）
+    Comptime(Vec<Statement>),
     None,
 }
 
@@ -409,8 +618,20 @@ pub enum Type {
     /// 已应用的代数数据类型，如 `Option<int>` / `Result<int, str>`
     Adt(String, Vec<Type>),
     Custom(String),
+    /// trait 对象：`dyn Drawable`（运行时多态，底层为对象指针 + class tag 分派）
+    Dyn(String),
     Weak(Box<Type>),    // 弱引用: weak T
     Unowned(Box<Type>), // 无主引用: unowned T
+}
+
+/// 合成 dyn 包装类名：`dyn Drawable` → class `__Dyn_Drawable`
+pub fn dyn_trait_class_name(trait_name: &str) -> String {
+    format!("__Dyn_{}", trait_name)
+}
+
+/// 若类型/类名为 `__Dyn_Trait`，返回 trait 名
+pub fn dyn_trait_from_class_name(class_name: &str) -> Option<&str> {
+    class_name.strip_prefix("__Dyn_")
 }
 
 /// FFI extern 块

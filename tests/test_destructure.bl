@@ -1,0 +1,10 @@
+let t = (10, 20, 30);
+let (a, b, c) = t;
+print(a);
+print(b);
+print(c);
+let (x, _, z) = t;
+print(x);
+print(z);
+_ = a + b;
+print(999);

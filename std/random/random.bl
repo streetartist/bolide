@@ -1,11 +1,11 @@
-// Bolide random standard library.
-// Usage: import "std/random/random.bl" as random;
+// 随机数。
+// import "std/random" as random;
 
 extern "bolide" {
     fn bolide_random_seed(seed: i64);
     fn bolide_random_int(max: i64) -> i64;
     fn bolide_random_range(min: i64, max: i64) -> i64;
-    fn bolide_random_float() -> c_double;
+    fn bolide_random_float() -> f64;
     fn bolide_random_bool() -> i64;
 }
 
@@ -51,4 +51,35 @@ fn choice_str(items: list<str>) -> str {
         return "";
     }
     return items[rand_int(items.len())];
+}
+
+fn shuffle_ints(items: list<int>) -> list<int> {
+    var out: list<int> = [];
+    for v in items {
+        out.push(v);
+    }
+    var i: int = out.len() - 1;
+    while i > 0 {
+        let j: int = rand_int(i + 1);
+        let tmp: int = out[i];
+        out[i] = out[j];
+        out[j] = tmp;
+        i = i - 1;
+    }
+    return out;
+}
+
+fn sample_ints(items: list<int>, k: int) -> list<int> {
+    if k <= 0 {
+        return [];
+    }
+    let shuffled: list<int> = shuffle_ints(items);
+    if k >= shuffled.len() {
+        return shuffled;
+    }
+    var out: list<int> = [];
+    for i in range(k) {
+        out.push(shuffled[i]);
+    }
+    return out;
 }

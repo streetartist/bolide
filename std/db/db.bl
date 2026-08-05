@@ -1,18 +1,18 @@
 // Bolide embedded database standard library.
-// Usage: import "std/db/db.bl";
+// Usage: import "std/db";
 
 extern "bolide" {
-    fn bolide_db_open(path: *char) -> *void;
-    fn bolide_db_close(db: *void);
-    fn bolide_db_last_error(db: *void) -> str;
-    fn bolide_db_create_table(db: *void, table: *char, columns: *char) -> i64;
-    fn bolide_db_insert(db: *void, table: *char, row: *void) -> i64;
-    fn bolide_db_update(db: *void, table: *char, id: i64, row: *void) -> i64;
-    fn bolide_db_delete(db: *void, table: *char, id: i64) -> i64;
-    fn bolide_db_get(db: *void, table: *char, id: i64) -> dict;
-    fn bolide_db_all(db: *void, table: *char) -> list;
-    fn bolide_db_where_eq(db: *void, table: *char, column: *char, value: *dynamic) -> list;
-    fn bolide_db_count(db: *void, table: *char) -> i64;
+    fn bolide_db_open(path: *c_char) -> *c_void;
+    fn bolide_db_close(db: *c_void);
+    fn bolide_db_last_error(db: *c_void) -> str;
+    fn bolide_db_create_table(db: *c_void, table: *c_char, columns: *c_char) -> i64;
+    fn bolide_db_insert(db: *c_void, table: *c_char, row: *c_void) -> i64;
+    fn bolide_db_update(db: *c_void, table: *c_char, id: i64, row: *c_void) -> i64;
+    fn bolide_db_delete(db: *c_void, table: *c_char, id: i64) -> i64;
+    fn bolide_db_get(db: *c_void, table: *c_char, id: i64) -> dict;
+    fn bolide_db_all(db: *c_void, table: *c_char) -> list;
+    fn bolide_db_where_eq(db: *c_void, table: *c_char, column: *c_char, value: *dynamic) -> list;
+    fn bolide_db_count(db: *c_void, table: *c_char) -> i64;
 }
 
 class Database {

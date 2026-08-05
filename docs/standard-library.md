@@ -2,12 +2,26 @@
 
 本文档覆盖当前仓库 `std/` 目录下的标准库，面向想用 Bolide 写脚本、小工具、Web 服务、GUI 程序和数据处理程序的开发者。
 
-标准库都用普通 Bolide 模块形式发布，导入方式统一：
+## 导入方式
+
+推荐**短路径**（编译器解析到 `std/<name>/<name>.bl`）：
 
 ```bolide
-import "std/fs/fs.bl" as fs;
-import "std/json/json.bl" as json;
+import "std/fs" as fs;
+import "std/json" as json;
+import "std/time" as time;
 ```
+
+兼容旧写法：`import "std/fs/fs.bl" as fs;`
+
+常用集合：
+
+```bolide
+import "std/prelude" as std;
+// std.fs / std.json / std.time / ...
+```
+
+模块索引见 `std/README.md`。
 
 运行示例：
 
@@ -18,74 +32,88 @@ bolide compile examples/demo.bl -o demo
 
 ## 模块总览
 
-| 模块 | 路径 | 用途 |
+| 模块 | 短路径 | 用途 |
 | --- | --- | --- |
-| `assert` | `std/assert/assert.bl` | 测试断言和简单测试输出 |
-| `cache` | `std/cache/cache.bl` | 内存缓存，支持 TTL |
-| `cli` | `std/cli/cli.bl` | 命令行参数解析和帮助文本 |
-| `config` | `std/config/config.bl` | 简单 key-value 配置读取 |
-| `crawler` | `std/crawler/crawler.bl` | 网页抓取、链接提取、队列去重 |
-| `csv` | `std/csv/csv.bl` | CSV 生成和解析 |
-| `db` | `std/db/db.bl` | Bolide 内置文件数据库 |
-| `encoding` | `std/encoding/encoding.bl` | bytes 的 hex/base64 编解码 |
-| `env` | `std/env/env.bl` | 环境变量、命令行参数、系统信息 |
-| `fs` | `std/fs/fs.bl` | 文件和目录操作 |
-| `gui` | `std/gui/gui.bl` | 桌面 GUI |
-| `html` | `std/html/html.bl` | HTML 文本、链接、图片、meta 提取 |
-| `http` | `std/http/http.bl` | HTTP 客户端便捷封装 |
-| `json` | `std/json/json.bl` | 安全生成 JSON 字符串 |
-| `log` | `std/log/log.bl` | 日志输出和文件日志 |
-| `math` | `std/math/math.bl` | 数学函数 |
-| `path` | `std/path/path.bl` | 路径处理 |
-| `process` | `std/process/process.bl` | 执行外部进程 |
-| `random` | `std/random/random.bl` | 随机数和随机选择 |
-| `regex` | `std/regex/regex.bl` | 正则匹配、提取、替换、切分 |
-| `sqlite` | `std/sqlite/sqlite.bl` | SQLite 数据库 |
-| `table` | `std/table/table.bl` | 命令行表格格式化 |
-| `template` | `std/template/template.bl` | HTML 模板渲染 |
-| `text` | `std/text/text.bl` | 常用文本处理 |
-| `time` | `std/time/time.bl` | 时间戳、单调时间、睡眠 |
-| `url` | `std/url/url.bl` | URL 解析、编码、查询串、相对链接解析 |
-| `uuid` | `std/uuid/uuid.bl` | UUID v4 和短 ID |
-| `web` | `std/web/web.bl` | HTTP 服务、路由、会话、流式响应、WebSocket |
+| `assert` | `std/assert` | 测试断言 |
+| `option` / `result` | `std/option` · `std/result` | Option / Result 组合子 |
+| `traits` | `std/traits` | 标准协议 trait |
+| `macros` | `std/macros` | 标准宏 |
+| `prelude` | `std/prelude` | 常用模块一键导入 |
+| `collections` | `std/collections` | Set / Queue / Stack / Deque / Counter |
+| `iter` | `std/iter` | 列表工具 |
+| `sort` | `std/sort` | 排序 |
+| `cache` | `std/cache` | 内存缓存（TTL） |
+| `cli` | `std/cli` | 命令行参数 |
+| `config` | `std/config` | key-value 配置 |
+| `crawler` | `std/crawler` | 网页抓取辅助 |
+| `csv` | `std/csv` | CSV |
+| `db` | `std/db` | 内置文件数据库 |
+| `encoding` | `std/encoding` | hex / base64 |
+| `env` | `std/env` | 环境变量 / 参数 / OS |
+| `fs` | `std/fs` | 文件系统 |
+| `path` | `std/path` | 路径 |
+| `io` | `std/io` | 流式写文件 |
+| `process` | `std/process` | 子进程 |
+| `time` | `std/time` | 时间 / 计时 / 睡眠 |
+| `log` | `std/log` | 日志 |
+| `math` | `std/math` | 数学 |
+| `random` | `std/random` | 随机数 |
+| `hash` | `std/hash` | FNV / CRC32 |
+| `text` | `std/text` | 文本处理 |
+| `buffer` | `std/buffer` | 文本缓冲 |
+| `bytes` | `std/bytes` | 字节缓冲 |
+| `json` | `std/json` | JSON |
+| `regex` | `std/regex` | 正则 |
+| `template` | `std/template` | HTML 模板 |
+| `html` | `std/html` | HTML 抽取 |
+| `table` | `std/table` | 终端表格 |
+| `http` | `std/http` | HTTP 客户端 |
+| `web` | `std/web` | HTTP 服务 / WebSocket |
+| `url` | `std/url` | URL |
+| `sqlite` | `std/sqlite` | SQLite |
+| `gui` | `std/gui` | 桌面 GUI |
+| `uuid` | `std/uuid` | UUID |
+| `atomic` / `sync` | `std/atomic` · `std/sync` | 原子与同步 |
+| `arena` | `std/arena` | Arena |
+| `vec3` | `std/vec3` | 3D 向量 |
 
 ## 选择哪个库
 
 写命令行工具：
 
 ```bolide
-import "std/cli/cli.bl" as cli;
-import "std/fs/fs.bl" as fs;
-import "std/path/path.bl" as path;
-import "std/log/log.bl" as log;
+import "std/cli" as cli;
+import "std/fs" as fs;
+import "std/path" as path;
+import "std/log" as log;
 ```
 
 写爬虫或 API 调用：
 
 ```bolide
-import "std/http/http.bl" as http;
-import "std/crawler/crawler.bl" as crawler;
-import "std/html/html.bl" as html;
-import "std/url/url.bl" as url;
-import "std/cache/cache.bl" as cache;
+import "std/http" as http;
+import "std/crawler" as crawler;
+import "std/html" as html;
+import "std/url" as url;
+import "std/cache" as cache;
 ```
 
 写 Web 应用：
 
 ```bolide
-import "std/web/web.bl" as web;
-import "std/json/json.bl" as json;
-import "std/template/template.bl" as template;
-import "std/sqlite/sqlite.bl" as sqlite;
+import "std/web" as web;
+import "std/json" as json;
+import "std/template" as template;
+import "std/sqlite" as sqlite;
 ```
 
 写数据处理脚本：
 
 ```bolide
-import "std/csv/csv.bl" as csv;
-import "std/regex/regex.bl" as regex;
-import "std/text/text.bl" as text;
-import "std/table/table.bl" as table;
+import "std/csv" as csv;
+import "std/regex" as regex;
+import "std/text" as text;
+import "std/table" as table;
 ```
 
 ## assert: 测试断言
@@ -93,7 +121,7 @@ import "std/table/table.bl" as table;
 `std/assert` 适合给标准库、小脚本和示例写轻量测试。它会打印 `ok` 或 `FAIL`，并维护通过和失败计数。
 
 ```bolide
-import "std/assert/assert.bl" as assert;
+import "std/assert" as assert;
 
 assert.reset();
 assert.equal("sum", 1 + 2, 3);
@@ -161,54 +189,35 @@ print(str(c.contains("token")) + "\n");
 
 ## cli: 命令行参数
 
-`std/cli` 支持长选项、短选项、必填选项、默认值、位置参数和帮助文本。
+`std/cli` 支持长/短选项、粘连短选项（`-fin.bl`）、默认值、必填、位置参数和帮助。
 
 ```bolide
-import "std/cli/cli.bl" as cli;
-import "std/env/env.bl" as env;
+import "std/cli" as cli;
 
 let specs: list<cli.Spec> = [
+    cli.help_flag(),
     cli.option("file", "f", "PATH", "input.txt", "input file"),
     cli.flag("verbose", "v", "verbose output"),
     cli.required_option("name", "n", "NAME", "project name")
 ];
 
-let args: cli.Args = cli.parse(env.args(), specs);
-if args.has_errors() {
-    print(args.error_text() + "\n");
-    print(cli.help(args.program, "demo tool", specs));
-    env.exit(1);
-}
-
-print(args.value("file") + "\n");
-print(str(args.flag("verbose")) + "\n");
+// 失败或 --help 时自动打印帮助并 exit
+let args: cli.Args = cli.parse_or_exit(specs, "demo tool");
+print(args.value("file"));
+print(str(args.flag("verbose")));
 ```
 
 常用 API：
 
 | API | 说明 |
 | --- | --- |
-| `flag(name, short, help)` | 创建布尔选项 |
-| `option(name, short, value_name, default_value, help)` | 创建带值选项 |
-| `required_option(name, short, value_name, help)` | 创建必填选项 |
-| `parse(argv, specs)` | 解析实际命令行 |
-| `parse_values(values, specs)` | 解析给定列表 |
-| `parse_env(specs)` | 从 `env.args()` 解析 |
-| `parse_simple(argv)` | 不使用 spec 的简易解析 |
+| `flag` / `option` / `required_option` | 定义选项 |
+| `help_flag` / `version_flag` | 常用 --help / --version |
+| `parse` / `parse_env` / `parse_values` / `parse_simple` | 解析 |
+| `parse_or_exit(specs, desc)` | 解析并在错误/帮助时退出 |
 | `help(program, description, specs)` | 生成帮助文本 |
 
-`Args` 常用方法：
-
-| 方法 | 说明 |
-| --- | --- |
-| `has(name)` | 是否提供过选项 |
-| `flag(name)` | 读取布尔选项 |
-| `value(name)` | 读取字符串值，缺失为空字符串 |
-| `value_or(name, fallback)` | 读取字符串值 |
-| `int_or(name, fallback)` | 读取整数值 |
-| `positional(index)` | 读取位置参数 |
-| `positional_count()` | 位置参数数量 |
-| `has_errors()` | 是否有解析错误 |
+`Args` 常用方法：`flag` / `value` / `value_or` / `int_or` / `bool_or` / `positional` / `wants_help` / `wants_version` / `ok` / `has_errors` / `error_text`。
 | `error_text()` | 错误文本 |
 
 ## config: 简单配置
@@ -462,44 +471,29 @@ for name in fs.read_dir("tmp/demo") {
 
 ## gui: 桌面界面
 
-`std/gui` 基于即时模式 UI。程序提供一个 `view(ui)` 函数，每一帧由 `gui.run` 调用。
+`std/gui` 基于即时模式 UI（egui）。每一帧调用你的 `view(ui)`。
 
 ```bolide
-import "std/gui/gui.bl" as gui;
+import "std/gui" as gui;
 
-let count: int = 0;
+var count: int = 0;
 
 fn view(ui: gui.Ui) {
     ui.heading("Counter");
     ui.label("count = " + str(count));
+    ui.progress_pct(count);
     if ui.button("+1") {
         count = count + 1;
     }
 }
 
 gui.run("Bolide Counter", 360, 220, view);
+// 或 gui.run_default("App", view);  // 960x640
+// 或 gui.run_compact("App", view);  // 640x480
 ```
 
-常用控件：
-
-| 方法 | 说明 |
-| --- | --- |
-| `label`、`heading`、`small`、`strong` | 文本 |
-| `separator`、`space` | 分隔和留白 |
-| `button`、`selectable`、`link` | 交互控件 |
-| `text_input`、`password_input`、`multiline_input` | 输入 |
-| `checkbox`、`slider`、`progress` | 表单控件 |
-
-布局方法：
-
-| 方法 | 说明 |
-| --- | --- |
-| `row`、`column`、`group`、`grid` | 基础布局 |
-| `frame`、`scroll`、`indent`、`collapsing` | 容器 |
-| `centered`、`align`、`left`、`right` | 对齐 |
-| `pad`、`width`、`height`、`size` | 尺寸约束 |
-| `fill_width`、`fill_height`、`fill` | 填充 |
-| `place` | 固定区域布局 |
+控件：`label` / `heading` / `kv` / `button` / `checkbox` / `slider` / `progress` / `progress_pct` / 输入框等。  
+布局：`row` / `column` / `pack_*` / `grid` / `frame` / `scroll` / `centered` / `pad` / `fill*` / `place`。
 | `pack_top/left/right/bottom` | 边缘布局 |
 | `available_width`、`available_height` | 可用空间 |
 | `request_repaint` | 请求重绘 |
@@ -952,12 +946,12 @@ print(uuid.short_id(12) + "\n");
 
 ## web: HTTP 服务
 
-`std/web` 是完整 Web 标准库，支持路由、静态文件、中间件、会话、CORS、压缩、TLS、流式响应、SSE 和 WebSocket。
+`std/web` 支持路由、静态文件、中间件、会话、CORS、压缩、TLS、SSE、WebSocket 与内置 HTTP 客户端。
 
 最小服务：
 
 ```bolide
-import "std/web/web.bl" as web;
+import "std/web" as web;
 
 fn home(req: web.Request) -> web.Response {
     return web.text("hello bolide");
@@ -965,40 +959,16 @@ fn home(req: web.Request) -> web.Response {
 
 let app: web.App = web.app();
 app.get("/", home);
-app.run("127.0.0.1", 8080);
+app.listen(8080);           // 等价 run("127.0.0.1", 8080)
+// app.listen_all(8080);    // 0.0.0.0
+// app.cors_open();         // 宽松 CORS
 ```
 
-JSON API：
+响应工厂：`text` / `html` / `json` / `empty` / `redirect` / `not_found` / `unauthorized` / `bad_request` / `server_error` / `redirect_see_other` 等。
 
-```bolide
-import "std/web/web.bl" as web;
-import "std/json/json.bl" as json;
+请求便捷：`is_get` / `is_post` / `wants_json` / `is_json` / `bearer_token`，以及 path/query/header/cookie/multipart。
 
-fn api(req: web.Request) -> web.Response {
-    let body: str = json.object([
-        json.pair("ok", json.value(true)),
-        json.pair("path", json.value(req.path()))
-    ]);
-    return web.json(body);
-}
-
-let app: web.App = web.app();
-web.get(app, "/api", api);
-app.run("127.0.0.1", 8080);
-```
-
-请求常用方法：
-
-| 方法 | 说明 |
-| --- | --- |
-| `method()`、`target()`、`path()`、`query()`、`version()` | 请求信息 |
-| `path_param(name)` | 路由参数 |
-| `query_param(name)` | 查询参数 |
-| `header(name)` | 请求头 |
-| `body_text()`、`body_bytes()` | 请求体 |
-| `form_param(name)` | 表单字段 |
-| `cookie(name)` | Cookie |
-| `multipart_count()`、`part(index)`、`file(field)` | multipart |
+客户端：`web.fetch_get(url)` / `web.fetch_post_json(url, body)`；更高层封装见 `std/http`。
 
 响应常用函数：
 

@@ -1,25 +1,25 @@
 // Bolide synchronization primitives.
-// Usage: import "std/sync/sync.bl" as sync;
+// Usage: import "std/sync" as sync;
 
 extern "bolide" {
-    fn bolide_sync_mutex_new(value: *dynamic) -> *void;
-    fn bolide_sync_mutex_free(lock: *void);
-    fn bolide_sync_mutex_get(lock: *void) -> dynamic;
-    fn bolide_sync_mutex_set(lock: *void, value: *dynamic);
-    fn bolide_sync_mutex_swap(lock: *void, value: *dynamic) -> dynamic;
-    fn bolide_sync_mutex_add_int(lock: *void, delta: i64) -> i64;
+    fn bolide_sync_mutex_new(value: *dynamic) -> *c_void;
+    fn bolide_sync_mutex_free(lock: *c_void);
+    fn bolide_sync_mutex_get(lock: *c_void) -> dynamic;
+    fn bolide_sync_mutex_set(lock: *c_void, value: *dynamic);
+    fn bolide_sync_mutex_swap(lock: *c_void, value: *dynamic) -> dynamic;
+    fn bolide_sync_mutex_add_int(lock: *c_void, delta: i64) -> i64;
 
-    fn bolide_sync_rwlock_new(value: *dynamic) -> *void;
-    fn bolide_sync_rwlock_free(lock: *void);
-    fn bolide_sync_rwlock_get(lock: *void) -> dynamic;
-    fn bolide_sync_rwlock_set(lock: *void, value: *dynamic);
-    fn bolide_sync_rwlock_add_int(lock: *void, delta: i64) -> i64;
+    fn bolide_sync_rwlock_new(value: *dynamic) -> *c_void;
+    fn bolide_sync_rwlock_free(lock: *c_void);
+    fn bolide_sync_rwlock_get(lock: *c_void) -> dynamic;
+    fn bolide_sync_rwlock_set(lock: *c_void, value: *dynamic);
+    fn bolide_sync_rwlock_add_int(lock: *c_void, delta: i64) -> i64;
 
-    fn bolide_sync_once_new() -> *void;
-    fn bolide_sync_once_free(flag: *void);
-    fn bolide_sync_once_check(flag: *void) -> i64;
-    fn bolide_sync_once_try_begin(flag: *void) -> i64;
-    fn bolide_sync_once_reset(flag: *void);
+    fn bolide_sync_once_new() -> *c_void;
+    fn bolide_sync_once_free(flag: *c_void);
+    fn bolide_sync_once_check(flag: *c_void) -> i64;
+    fn bolide_sync_once_try_begin(flag: *c_void) -> i64;
+    fn bolide_sync_once_reset(flag: *c_void);
 }
 
 class Mutex {

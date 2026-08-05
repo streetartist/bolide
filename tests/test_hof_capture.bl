@@ -1,0 +1,8 @@
+fn wrap(f: func(int) -> int) -> func(int) -> int {
+    return fn(x: int) -> int {
+        return f(x);
+    };
+}
+fn raw(x: int) -> int { return x + 1; }
+let w: func(int) -> int = wrap(raw);
+print(w(1));

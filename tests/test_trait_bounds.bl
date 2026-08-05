@@ -1,0 +1,65 @@
+// trait 约束：fn f<T: Trait>(...) + 多 bound + 方法调用
+
+trait Drawable {
+    fn draw();
+    fn label() -> str {
+        return "item";
+    }
+}
+
+trait Countable {
+    fn count() -> int;
+}
+
+class Circle {
+    r: int;
+}
+
+class Box {
+    n: int;
+}
+
+impl Drawable for Circle {
+    fn draw() {
+        print(self.r);
+    }
+}
+
+impl Countable for Circle {
+    fn count() -> int {
+        return self.r;
+    }
+}
+
+impl Drawable for Box {
+    fn draw() {
+        print(self.n);
+    }
+    fn label() -> str {
+        return "box";
+    }
+}
+
+// 单约束
+fn paint<T: Drawable>(x: T) {
+    x.draw();
+    print(x.label());
+}
+
+// 多约束 T: A + B
+fn paint_count<T: Drawable + Countable>(x: T) {
+    x.draw();
+    print(x.count());
+}
+
+let c: Circle = Circle(9);
+paint(c);
+paint_count(Circle(3));
+
+let b: Box = Box(5);
+paint(b);
+
+// 无 Countable 的类型不能进 paint_count — 编译期检查见 test 注释
+// paint_count(b);  // would error: Box does not implement Countable
+
+print("trait_bounds_ok");

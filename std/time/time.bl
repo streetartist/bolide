@@ -1,5 +1,5 @@
-// Bolide time standard library.
-// Usage: import "std/time/time.bl" as time;
+// 时间与计时。
+// import "std/time" as time;
 
 extern "bolide" {
     fn bolide_time_now() -> i64;
@@ -9,6 +9,9 @@ extern "bolide" {
     fn bolide_time_sleep_ms(ms: i64);
 }
 
+// ---- 瞬时 / Unix ----
+
+/// Unix 时间戳（秒）
 fn now() -> int {
     return bolide_time_now();
 }
@@ -17,22 +20,111 @@ fn unix() -> int {
     return bolide_time_now();
 }
 
+/// Unix 毫秒
 fn now_ms() -> int {
     return bolide_time_now_ms();
 }
 
+/// Unix 微秒
 fn now_us() -> int {
     return bolide_time_now_us();
 }
 
+/// 单调时钟毫秒（适合测耗时，不受系统校时影响）
 fn monotonic_ms() -> int {
     return bolide_time_monotonic_ms();
 }
 
+// ---- 睡眠 ----
+
 fn sleep_ms(ms: int) {
-    bolide_time_sleep_ms(ms);
+    if ms > 0 {
+        bolide_time_sleep_ms(ms);
+    }
 }
 
 fn sleep(seconds: int) {
     sleep_ms(seconds * 1000);
+}
+
+fn sleep_secs(seconds: int) {
+    sleep(seconds);
+}
+
+// ---- Duration 换算（纯整数，单位标注在函数名）----
+
+fn secs_to_ms(secs: int) -> int {
+    return secs * 1000;
+}
+
+fn ms_to_secs(ms: int) -> int {
+    return ms / 1000;
+}
+
+fn mins_to_ms(mins: int) -> int {
+    return mins * 60 * 1000;
+}
+
+fn hours_to_ms(hours: int) -> int {
+    return hours * 60 * 60 * 1000;
+}
+
+/// 把毫秒格式成 "1h2m3s" / "45ms" 等人话（非本地化）
+fn format_duration_ms(ms: int) -> str {
+    var v: int = ms;
+    if v < 0 {
+        v = 0 - v;
+        return "-" + format_duration_ms(v);
+    }
+    if v < 1000 {
+        return str(v) + "ms";
+    }
+    let total_secs: int = v / 1000;
+    let hours: int = total_secs / 3600;
+    let mins: int = (total_secs % 3600) / 60;
+    let secs: int = total_secs % 60;
+    var out: str = "";
+    if hours > 0 {
+        out = out + str(hours) + "h";
+    }
+    if mins > 0 {
+        out = out + str(mins) + "m";
+    }
+    if secs > 0 or out == "" {
+        out = out + str(secs) + "s";
+    }
+    return out;
+}
+
+// ---- 简易计时器 ----
+
+class Timer {
+    start_ms: int;
+
+    fn elapsed_ms() -> int {
+        return monotonic_ms() - self.start_ms;
+    }
+
+    fn elapsed_secs() -> int {
+        return self.elapsed_ms() / 1000;
+    }
+
+    fn reset() {
+        self.start_ms = monotonic_ms();
+    }
+
+    fn lap_ms() -> int {
+        let e: int = self.elapsed_ms();
+        self.reset();
+        return e;
+    }
+}
+
+fn timer() -> Timer {
+    return Timer(monotonic_ms());
+}
+
+/// 测量闭包风格不方便时：手动 start/end
+fn since_ms(start_ms: int) -> int {
+    return monotonic_ms() - start_ms;
 }

@@ -1,5 +1,7 @@
-// Bolide byte encoding helper library.
-// Usage: import "std/encoding/encoding.bl" as encoding;
+// 字节编解码（hex / base64）。
+// import "std/encoding" as encoding;
+
+import "std/bytes" as by;
 
 let b64_table: str = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
@@ -25,29 +27,29 @@ fn hex_value(ch: str) -> int {
     if c == "d" { return 13; }
     if c == "e" { return 14; }
     if c == "f" { return 15; }
-    return -1;
+    return 0 - 1;
 }
 
 fn hex_encode(data: bytes) -> str {
-    let out: str = "";
+    var out: str = "";
     for i in range(data.len()) {
-        let value: int = data[i];
+        let value: int = by.get(data, i);
         out = out + hex_digit(value / 16) + hex_digit(value % 16);
     }
     return out;
 }
 
 fn hex_decode(text: str) -> bytes {
-    let out: bytes = bytes();
-    let pending: int = -1;
+    var out: bytes = by.new();
+    var pending: int = 0 - 1;
     for i in range(text.len()) {
         let value: int = hex_value(text.char_at(i));
         if value >= 0 {
             if pending < 0 {
                 pending = value;
             } else {
-                out.push(pending * 16 + value);
-                pending = -1;
+                by.push(out, pending * 16 + value);
+                pending = 0 - 1;
             }
         }
     }
@@ -63,22 +65,22 @@ fn b64_value(ch: str) -> int {
     if pos >= 0 {
         return pos;
     }
-    return -1;
+    return 0 - 1;
 }
 
 fn base64_encode(data: bytes) -> str {
-    let out: str = "";
-    let i: int = 0;
+    var out: str = "";
+    var i: int = 0;
     while i < data.len() {
-        let b0: int = data[i];
-        let b1: int = 0;
-        let b2: int = 0;
+        let b0: int = by.get(data, i);
+        var b1: int = 0;
+        var b2: int = 0;
         let remaining: int = data.len() - i;
         if remaining > 1 {
-            b1 = data[i + 1];
+            b1 = by.get(data, i + 1);
         }
         if remaining > 2 {
-            b2 = data[i + 2];
+            b2 = by.get(data, i + 2);
         }
 
         out = out + b64_char(b0 / 4);
@@ -106,19 +108,19 @@ fn decode_quad(out: bytes, quad: list<int>, pad: int) {
     if quad.len() < 4 {
         return;
     }
-    out.push(quad[0] * 4 + quad[1] / 16);
+    by.push(out, quad[0] * 4 + quad[1] / 16);
     if pad < 2 {
-        out.push((quad[1] % 16) * 16 + quad[2] / 4);
+        by.push(out, (quad[1] % 16) * 16 + quad[2] / 4);
     }
     if pad < 1 {
-        out.push((quad[2] % 4) * 64 + quad[3]);
+        by.push(out, (quad[2] % 4) * 64 + quad[3]);
     }
 }
 
 fn base64_decode(text: str) -> bytes {
-    let out: bytes = bytes();
-    let quad: list<int> = [];
-    let pad: int = 0;
+    var out: bytes = by.new();
+    var quad: list<int> = [];
+    var pad: int = 0;
 
     for i in range(text.len()) {
         let ch: str = text.char_at(i);

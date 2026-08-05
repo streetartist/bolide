@@ -1,0 +1,42 @@
+// Regression: list<func>, return func, generic-as-value monomorph
+
+fn id_i(x: int) -> int { return x; }
+fn double(x: int) -> int { return x * 2; }
+
+fn id<T>(x: T) -> T { return x; }
+
+// --- list of functions ---
+let fs: list<func(int) -> int> = [id_i, double];
+print(fs[0](10));
+print(fs[1](10));
+
+let gs: list<func(int) -> int> = [id, double];
+print(gs[0](11));
+print(gs[1](11));
+
+// --- return function value ---
+fn pick() -> func(int) -> int {
+    return id_i;
+}
+let f = pick();
+print(f(3));
+print(pick()(4));
+
+fn pick_gen() -> func(int) -> int {
+    return id;
+}
+let g = pick_gen();
+print(g(5));
+
+// --- typed assign ---
+let h: func(int) -> int = id;
+print(h(6));
+
+// --- HOF ---
+fn apply(cb: func(int) -> int, x: int) -> int {
+    return cb(x);
+}
+print(apply(id, 7));
+print(apply(double, 7));
+
+print(999);

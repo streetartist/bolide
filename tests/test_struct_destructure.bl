@@ -1,0 +1,11 @@
+class Point {
+    x: int;
+    y: int;
+}
+let p: Point = Point(3, 4);
+let Point { x, y } = p;
+print(x);
+print(y);
+let Point { x: a, y: _ } = p;
+print(a);
+print(999);

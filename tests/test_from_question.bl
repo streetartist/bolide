@@ -1,0 +1,51 @@
+// From + ?: convert error type when propagating Result
+
+class IoError: Error {}
+class AppError: Error {}
+
+impl From<IoError> for AppError {
+    fn from(e: IoError) -> AppError {
+        return AppError("wrapped: " + e.message);
+    }
+}
+
+fn io_fail() -> Result<int, IoError> {
+    return Result.Err(IoError("disk full"));
+}
+
+fn io_ok() -> Result<int, IoError> {
+    return Result.Ok(7);
+}
+
+fn load_fail() -> Result<int, AppError> {
+    let v: int = io_fail()?;
+    return Result.Ok(v);
+}
+
+fn load_ok() -> Result<int, AppError> {
+    let v: int = io_ok()?;
+    return Result.Ok(v + 1);
+}
+
+// Same error type still works without From
+fn same_err() -> Result<int, IoError> {
+    let v: int = io_fail()?;
+    return Result.Ok(v);
+}
+
+match load_ok() {
+    Result.Ok(v) => { print(v); },
+    Result.Err(e) => { print(e.message); },
+}
+
+match load_fail() {
+    Result.Ok(v) => { print(v); },
+    Result.Err(e) => { print(e.message); },
+}
+
+match same_err() {
+    Result.Ok(v) => { print(v); },
+    Result.Err(e) => { print(e.message); },
+}
+
+print(999);

@@ -12,7 +12,7 @@
     <img src="https://img.shields.io/badge/License-MIT-brightgreen.svg" alt="License: MIT">
   </a>
   <a href="#">
-    <img src="https://img.shields.io/badge/version-0.13.7-blue.svg" alt="Version">
+    <img src="https://img.shields.io/badge/version-0.14.1-blue.svg" alt="Version">
   </a>
   <a href="#">
     <img src="https://img.shields.io/badge/platform-windows%20%7C%20linux-lightgrey.svg" alt="Platform">
@@ -163,6 +163,50 @@ let million: int = 1_000_000;
 // 字符串支持转义序列: \" \\ \n \t \r \0
 let quoted: str = "he said \"hi\"\nsecond line";
 
+// f-string 插值（`{expr}` 求值后转成字符串拼接；`{{` / `}}` 表示字面量花括号）
+// 插值内可含普通字符串与嵌套 f-string
+let id: int = 42;
+print(f"user={name} id={id}");   // user=Bolide id=42
+print(f"sum={1 + 2}");           // sum=3
+print(f"brace={{ok}}");          // brace={ok}
+print(f"quoted={"hi"}");         // quoted=hi
+print(f"nested={f"inner"}");     // nested=inner
+
+// 元组 / 字段解构；`_` 丢弃
+let t = (10, 20, 30);
+let (a, b, c) = t;
+let (x, _, z) = t;
+_ = a + b;                       // 求值但丢弃结果
+
+class Point {
+    x: int;
+    y: int;
+}
+let p: Point = Point(3, 4);
+let Point { x, y } = p;          // 字段同名绑定
+let Point { x: px, y: _ } = p;   // 重命名 / 丢弃字段
+
+// if let / while let（enum/union 模式，脱糖为 match）
+fn find(flag: int) -> Option<int> {
+    if flag > 0 { return Option.Some(flag); }
+    return Option.None();
+}
+if let Option.Some(v) = find(7) {
+    print(v);
+} else {
+    print(0);
+}
+
+var i: int = 1;
+fn take(n: int) -> Option<int> {
+    if n <= 3 { return Option.Some(n); }
+    return Option.None();
+}
+while let Option.Some(v) = take(i) {
+    print(v);
+    i += 1;
+}
+
 var counter: int = 0;
 counter += 1;
 
@@ -302,6 +346,246 @@ print(dot(a, b));
 print(a.x);
 ```
 
+### 宏（Macros）
+
+宏在**类型检查之前**展开为普通 Bolide 代码。**调用必须带 `!`**（`assert!(x)` 会展宏，`assert(x)` 永远当函数）。
+
+```bolide
+// 内置
+assert!(x > 0);
+assert_eq!(a, b);
+let v = dbg!(1 + 2);       // 打印调试信息并返回值
+let s = stringify!(1 + 2); // "(1 + 2)"
+todo!("later");            // 抛出带位置的 Error
+
+// 自定义：pattern 后直接 quote { ... } 或 { ... }
+macro twice($x:expr) quote {
+    ($x) + ($x);
+}
+print(twice!(21));  // 42
+
+macro log_pair($a:expr, $b:expr) {
+    print($a);
+    print($b);
+}
+log_pair!(1, 2);
+
+// 多 arm + ident = expr
+macro bind {
+    ($name:ident = $val:expr) => {
+        let $name = $val;
+    },
+}
+bind!(n = 10);
+
+// 属性
+@derive(Debug, Eq)
+class Point {
+    x: int;
+    y: int;
+}
+let p: Point = Point(1, 2);
+print(p.debug());
+print(p.eq(Point(1, 2)));
+
+@test
+fn test_add() {
+    assert!(1 + 1 == 2);
+}
+```
+
+**导出与导入**（`export macro` 合并进调用方后可用短名；也可用 `mod.name!`）：
+
+```bolide
+// lib.bl
+export macro add1($x:expr) quote { ($x) + 1; }
+
+// main.bl
+import "lib.bl" as lib;
+print(add1!(41));       // export 短名
+print(lib.add1!(9));    // 限定路径
+```
+
+**属性宏**（函数体前插入模板）：
+
+```bolide
+attr macro traced($item:item) {
+    print("enter");
+}
+@traced
+fn work() { print("body"); }
+```
+
+**模板体重复 `$(...)*`**：
+
+```bolide
+macro sum_all($x:expr $(, $rest:expr)*) quote {
+    (fn() -> int {
+        var __s = $x;
+        $(
+            __s = __s + $rest;
+        )*
+        return __s;
+    })();
+}
+print(sum_all!(1, 2, 3, 4));  // 10
+
+// $n:lit 控制重复次数
+macro print_n($n:lit, $msg:expr) {
+    $( print($msg); )*
+}
+print_n!(3, "hi");
+```
+
+**comptime / comptime fn**：
+
+```bolide
+comptime fn fact(n: int) -> int {
+    if n <= 1 { return 1; }
+    return n * fact(n - 1);
+}
+let F: int = comptime { fact(5); };  // 120
+```
+
+**类属性**：`@derive(Debug, Eq, Clone, Default)`、`@getters`、自定义 `attr macro` 可按字段 `$(...)*` 生成方法（`self.$field` / `fn $field`）。
+
+### 生成器（yield，懒求值）
+
+含 `yield` 的函数是**生成器**：返回迭代器对象，按需 `next()`，也可用 `for` 遍历（支持无限序列）。
+
+```bolide
+fn count_to(n: int) {
+    var i: int = 0;
+    while i < n {
+        yield i;
+        i = i + 1;
+    }
+}
+
+for x in count_to(4) {
+    print(x);   // 0 1 2 3
+}
+
+// 手动拉取
+let g = count_to(2);
+match g.next() {
+    Option.Some(v) => { print(v); },
+    Option.None() => {},
+}
+
+// 无限生成器
+fn naturals() {
+    var n: int = 0;
+    while true {
+        yield n;
+        n = n + 1;
+    }
+}
+let nats = naturals();
+// 只取前几个：反复 nats.next()
+
+// bare return 结束生成
+fn early(n: int) {
+    var i: int = 0;
+    while i < n {
+        if i == 2 { return; }
+        yield i;
+        i = i + 1;
+    }
+}
+```
+
+协议：`next() -> Option<T>`（`Some` 产出值，`None` 结束）。  
+实现为状态机迭代器类；生成器体内支持 `while` / `if`/`elif`/`else` / `for`（`range` 与列表）/ `break` / `continue`，以及 **类方法生成器**（`self` 捕获为迭代器上的 `__owner`）。
+
+```bolide
+// elif / for / break / continue
+fn filtered(n: int) {
+    for i in range(n) {
+        if i % 2 == 1 { continue; }
+        if i > 4 { break; }
+        yield i;
+    }
+}
+
+// 类方法
+class Counter {
+    start: int;
+    fn count(n: int) {
+        var i: int = 0;
+        while i < n {
+            yield self.start + i;
+            i = i + 1;
+        }
+    }
+}
+for x in Counter(10).count(3) { print(x); }  // 10 11 12
+```
+
+### 装饰器与上下文管理器（Python 风格）
+
+**运行时装饰器**（`@name` 且不是内置/`attr macro` 时）——与 Python 相同：`deco(f) -> f`：
+
+```bolide
+fn logged(f: func() -> int) -> func() -> int {
+    return fn() -> int {
+        print("before");
+        let r: int = f();
+        print("after");
+        return r;
+    };
+}
+
+@logged
+fn answer() -> int {
+    return 42;
+}
+print(answer());  // before / after / 42
+
+// 工厂装饰器
+fn repeat(n: int) -> func(func() -> int) -> func() -> int {
+    return fn(f: func() -> int) -> func() -> int {
+        return fn() -> int {
+            var i: int = 0;
+            var last: int = 0;
+            while i < n {
+                last = f();
+                i = i + 1;
+            }
+            return last;
+        };
+    };
+}
+@repeat(3)
+fn step() -> int { print("step"); return 1; }
+```
+
+多层 `@a @b fn f` 等价于 `f = a(b(f))`（外层后应用）。  
+编译期仍用 `@derive` / `@test` / `attr macro`（同名时编译期优先）。
+
+**上下文管理器 `with`**：
+
+```bolide
+class Resource {
+    name: str;
+    fn enter() -> str { print("enter"); return self.name; }
+    fn exit() { print("exit"); }
+}
+
+with Resource("db") as r {
+    print(r);
+}
+// 多个：with A() as x, B() as y { ... }
+```
+
+协议：`enter()`（返回值可 `as` 绑定）、`exit()`（在 `finally` 中调用）。
+
+```bash
+bolide expand your_file.bl
+```
+
+详见 [docs/decorator-with-design.md](docs/decorator-with-design.md)、[docs/macro-design.md](docs/macro-design.md)。
+
 ### 内联函数
 
 使用 `inline fn` 可以把短小函数在调用点展开，适合数值运算和热路径辅助函数。
@@ -353,13 +637,45 @@ print(n);
 print(s);
 ```
 
-当前泛型函数支持顶层函数的直接调用和嵌套调用；泛型方法、把未实例化的泛型函数作为一等值传递暂未支持。
+当前支持顶层泛型函数与 **class 泛型方法** 的直接调用，以及 **泛型函数作为一等值**（赋值、传参）；编译器按期望的 `func(...)` 类型单态化。
+
+```bolide
+fn id<T>(x: T) -> T { return x; }
+
+// 直接调用
+print(id(42));
+print(id("hi"));
+
+// 作为值：需要可推断的 concrete 函数类型
+let f: func(int) -> int = id;
+print(f(1));
+
+fn apply(cb: func(int) -> int, x: int) -> int {
+    return cb(x);
+}
+print(apply(id, 7));
+
+// 泛型方法
+class Box {
+    value: int;
+    fn map<U>(f: func(int) -> U) -> U {
+        return f(self.value);
+    }
+}
+fn double(x: int) -> int { return x * 2; }
+let b: Box = Box(21);
+print(b.map(double));  // 42
+```
+
+无类型注解时不能把裸泛型名当值用（无法确定实例），例如 `let f = id;` 会报错并提示补上 `func(...)` 标注。
+
+一等函数值（含 `list<func(...)>`、从函数返回、再调用）统一为**闭包对象 ABI**：裸函数指针在存入/返回时会自动 wrap，调用走 `(env, ...args)` 适配器。
 
 ### 一等函数 (First-Class Functions)
 
 函数是一等值：可以赋给变量、作为参数传递、从函数返回、存入列表。无需类型标注，编译器会自动推断函数签名。
 
-约定上，`fn` 只用于函数声明和函数字面量；`func(T...) -> R` 是唯一的用户级函数值类型。不要把 C 函数指针、trampoline 或 `*void` 暴露成普通业务类型，它们属于 FFI/编译器内部实现细节。
+约定上，`fn` 只用于函数声明和函数字面量；`func(T...) -> R` 是唯一的函数值类型（含 C 函数指针签名）。不要把 C 函数指针、trampoline 或 `*c_void` 暴露成普通业务类型，它们属于 FFI/编译器内部实现细节。
 
 ```bolide
 fn add1(x: int) -> int { return x + 1; }
@@ -937,6 +1253,127 @@ print(dog.get_age());  // 3 (继承的方法)
 print(dog.bark());     // 100
 ```
 
+### Trait
+
+`trait` 约定一组方法；`impl Trait for Class` 把实现注入到类上。无方法体的为**必须实现**；带默认体的可省略。
+
+```bolide
+trait Drawable {
+    fn draw();
+    fn label() -> str { return "shape"; }
+}
+
+class Circle {
+    r: int;
+}
+
+impl Drawable for Circle {
+    fn draw() { print(self.r); }
+}
+
+let c = Circle(3);
+c.draw();
+print(c.label());  // 默认实现
+```
+
+#### 泛型约束
+
+```bolide
+fn paint<T: Drawable>(x: T) {
+    x.draw();
+}
+
+// 多 bound
+fn paint_count<T: Drawable + Countable>(x: T) {
+    x.draw();
+    print(x.count());
+}
+```
+
+单态化时检查实参类型是否 `impl` 了对应 trait；未实现则编译报错并提示 `impl Trait for Type`。  
+目标类型目前为 **class**（方法注入 + 静态分发）。`impl From<A> for B` 仍为 `?` 错误转换专用语法。
+
+#### dyn Trait（运行时多态）
+
+```bolide
+fn paint(d: dyn Drawable) {
+    d.draw();
+}
+
+paint(Circle(3));
+paint(Box(5));
+
+let d: dyn Drawable = Circle(1);
+d.draw();
+```
+
+`dyn Trait` 在编译期改写为合成类 `__Dyn_Trait`（承载方法签名），运行时仍是普通对象指针；方法调用按 **class tag** 分派到真实实现类。传入的 class 须已 `impl` 该 trait（或满足协议方法）。
+
+#### Supertrait
+
+```bolide
+trait Countable: Drawable {
+    fn count() -> int;
+}
+// impl Countable for C 时，C 须已实现 Drawable（或已具备其方法）
+```
+
+#### 协议 trait（自动满足）
+
+类上若存在对应方法，自动视为实现了下列协议，可用于 `T: Trait` 约束，无需手写 `impl`：
+
+| 协议 | 方法 |
+|------|------|
+| `Add` / `Sub` / `Mul` / `Div` / `Mod` | `__add__` … |
+| `Eq` / `Ord` | `__eq__` / `__lt__` |
+| `BitAnd` / `BitOr` / `BitXor` / `Shl` / `Shr` | `__and__` … |
+| `Neg` / `Not` | `__neg__` / `__not__` |
+| `Iterator` | `next`（通常返回 `Option<T>`） |
+
+任意带 `next()` 的 class 都可用于 `for x in it { ... }`（与生成器相同的 `Option` 循环脱糖）。
+
+### 多继承（安全子集）
+
+```bolide
+class Child: Primary, Mixin1, Mixin2 { }
+```
+
+- **第一个父类（Primary）**：唯一参与**字段布局**与 `super` 链（可有字段）
+- **其余父类（Mixin）**：必须**无字段**；方法复制进子类，以子类 `self` 编译
+- 两个 mixin 提供同名方法且子类未覆盖 → **编译错误**（强制显式覆盖消歧）
+
+这样得到「多继承行为」，避免钻石继承的字段/布局问题。能力组合更推荐 **trait**；mixin 适合无状态的工具类。
+
+### 运算符重载
+
+在 class 上定义 Python 风格 dunder 方法即可重载运算符。左操作数优先 `left.__op__(right)`；若左操作数没有对应方法，则尝试右操作数反射（如 `int + Vec` → `Vec.__radd__(int)`）。`+=` 等复合赋值脱糖为 `a = a + b`，会间接触发重载。
+
+| 运算符 | 方法 | 反射（右操作数） |
+|--------|------|------------------|
+| `+` `-` `*` `/` `%` | `__add__` … `__mod__` | `__radd__` … `__rmod__` |
+| `==` `!=` | `__eq__` `__ne__` | 同名（参数对调） |
+| `<` `<=` `>` `>=` | `__lt__` … `__ge__` | 对偶 `__gt__` … `__le__` |
+| `&` `\|` `^` `<<` `>>` | `__and__` `__or__` `__xor__` `__lshift__` `__rshift__` | `__rand__` … `__rrshift__` |
+| 一元 `-` `!` | `__neg__` `__not__` | — |
+
+```bolide
+class Vec {
+    x: int;
+    y: int;
+    fn __add__(o: Vec) -> Vec { return Vec(self.x + o.x, self.y + o.y); }
+    fn __radd__(n: int) -> int { return n + self.x + self.y; }
+    fn __neg__() -> Vec { return Vec(0 - self.x, 0 - self.y); }
+    fn __eq__(o: Vec) -> bool {
+        return self.x == o.x && self.y == o.y;
+    }
+}
+print(Vec(1, 2) + Vec(3, 4));  // Vec
+print(10 + Vec(1, 2));         // 13 via __radd__
+print(-Vec(1, 2));
+```
+
+逻辑短路 `&&` / `||` **不**支持重载（保持短路语义）。一元逻辑非写作 `not x` 或 `!x`（均触发 `__not__`）。
+
 ### FFI (C 语言互操作)
 
 Bolide 支持**双向** C 互操作：既能调用 C 库，也能被 C 程序调用。
@@ -950,11 +1387,21 @@ extern "dyn:c" {
 }
 
 extern "dyn:m" {
-    fn sqrt(x: c_double) -> c_double;
+    fn sqrt(x: f64) -> f64;
 }
 
 let a: int = abs(-42);      // 42
 let b: float = sqrt(16.0);  // 4.0
+
+// C 函数指针类型：func(...)（fn 只用于声明/字面量）
+extern "dyn:c" {
+    fn qsort(
+        base: *c_void,
+        n: c_size_t,
+        size: c_size_t,
+        cmp: func(*c_void, *c_void) -> c_int
+    );
+}
 
 // 支持回调函数
 fn my_callback(a: int, b: int) -> int {
@@ -962,6 +1409,25 @@ fn my_callback(a: int, b: int) -> int {
 }
 let r: int = test_callback(my_callback, 10, 20);
 ```
+
+#### C ABI 类型写法
+
+`extern` 签名使用独立的 C ABI 类型空间（**不是** Bolide 的 `int`/`float`）：
+
+| 类别 | 写法 | 说明 |
+|------|------|------|
+| 平台相关整数 | `c_int`, `c_uint`, `c_long`, `c_size_t`, … | 宽度随平台/C ABI 变化 |
+| 平台相关浮点 | `c_float`, `c_double` | 与 C `float`/`double` 一致 |
+| 固定宽度 | `i8`…`i64`, `u8`…`u64`, `f32`, `f64` | 可移植绑定优先 |
+| 字符/字节 | `c_char`, `c_uchar` | C 字符串：`*c_char` |
+| 指针 | `*T`, `*c_void` | Bolide 侧不透明句柄用 `ptr` 存 |
+| 函数指针 | `func(T...) -> R` | 与用户级函数值类型关键字一致 |
+
+注意：
+- Bolide `int` 是 64 位，**不等于** C `int`；raw 绑定请写 `c_int` 或 `i32`。
+- 调用时编译器会做常见转换：`int`→`c_int` 截断、`str`→`*c_char`、窄整数返回拓宽为 `int`。
+- 标准库对外 API 应继续用 `int`/`float`/`str` 等语言类型；只有 raw `extern` 才写 C ABI 类型。
+- 不接受历史别名：`void`/`char`/`long`/`size_t`、以及类型位上的 `fn(...)`。
 
 #### 外部库标识
 
@@ -985,8 +1451,7 @@ let r: int = test_callback(my_callback, 10, 20);
 - AOT 中 `dyn:name` 不会传给系统 linker，而是在生成代码里通过 runtime 动态加载。最终程序仍要求目标机器能找到对应动态库。
 - `auto:name` 适合“开发期 JIT 用动态库，发布期 AOT 用静态库/导入库”的单源码写法；AOT 是否真正单文件取决于 `name.lib` / `libname.a` 是否是真静态库，若只是导入库仍需要对应动态库。
 - 必要时 AOT 可以使用平台 linker 能识别的显式库参数（如 `foo.lib`、`libfoo.a`、`-lfoo`）作为逃生口；可移植代码优先使用 `lib:name`。
-- 标准库 wrapper 应隐藏原始 C ABI。普通 Bolide API 应使用 `int`、`float`、`str`、`bytes` 等语言类型；只有写 raw `extern` 绑定时才需要 `c_int`、`c_double`、`*char`、`*void` 等 C ABI 类型。
-- `int` 是 Bolide 64 位整数，不等同于 C `int`。raw `extern` 中需要精确匹配 C 签名时继续使用 `c_*` 类型。
+- 标准库 wrapper 应隐藏原始 C ABI。普通 Bolide API 应使用 `int`、`float`、`str`、`bytes` 等语言类型；只有写 raw `extern` 绑定时才需要 `c_int`、`f64`、`*c_char`、`*c_void`、`func(...)` 等 C ABI 类型（见上表）。
 
 #### C 调 Bolide
 
@@ -1112,7 +1577,33 @@ fn load_value() -> Result<int, Error> {
 - `Option.Some(v)?` 得到 `v`
 - `Option.None()?` 从当前函数早返回 `Option.None()`
 
-当前实现要求 `?` 所在函数的返回类型与被传播表达式同为 `Result` 或同为 `Option`。不同错误类型之间的自动转换还没有实现。
+`?` 要求当前函数也返回 `Result` 或 `Option`。当两边都是 `Result` 但 **错误类型不同** 时，需要 `impl From<Src> for Dst`，`?` 会在传播 `Err` 时自动调用转换函数。
+
+#### 错误类型转换与 `From`
+
+```bolide
+class IoError: Error {}
+class AppError: Error {}
+
+impl From<IoError> for AppError {
+    fn from(e: IoError) -> AppError {
+        return AppError("wrapped: " + e.message);
+    }
+}
+
+fn read() -> Result<str, IoError> {
+    return Result.Err(IoError("disk full"));
+}
+
+fn load() -> Result<str, AppError> {
+    let text: str = read()?;   // IoError → AppError
+    return Result.Ok(text);
+}
+```
+
+- 错误类型相同时，`?` 直接早返回原 `Result`（无需 From）。
+- 类型不同且缺少 `impl From` 时，编译器给出实现提示。
+- `impl From` 脱糖为内部函数 `__from_Src_for_Dst`；用户一般只写 `impl` 语法。
 
 #### `!`：Result 转异常
 
@@ -1143,21 +1634,6 @@ let result: Result<int, Error> = try {
 ```
 
 最后一个表达式语句作为 `Result.Ok(value)` 的值；如果块内没有最后表达式，则返回 `Result.Ok(0)`。当前不会自动扁平化 `Result<Result<T, E>, Error>`。
-
-#### 错误类型转换与 `From<E>`（计划中）
-
-`From<E>` 的目标是让 `?` 可以跨错误类型传播。例如当前函数返回 `Result<T, AppError>`，但内部调用返回 `Result<U, IoError>` 时，未来可以通过声明 `From<IoError> for AppError`，让 `?` 自动把 `IoError` 转成 `AppError`。
-
-```bolide
-// 计划中的形式，当前尚未实现
-impl From<IoError> for AppError {
-    fn from(e: IoError) -> AppError {
-        return AppError.Io(e);
-    }
-}
-```
-
-当前版本需要手动把错误包装成目标错误类型。
 
 #### 内置 Error 类
 
@@ -1367,14 +1843,17 @@ bolide/
 
 ### 常用标准库模块
 
-- `std/collections/collections.bl`：`IntSet`、`StringSet`、`Queue`、`Stack`、`Counter`、`IntPriorityQueue`。
-- `std/iter/iter.bl`：整数序列、`take`、`drop`、`chunk`、`sum`、`min`、`max`、`join`、`zip`。
-- `std/arena/arena.bl`：`Arena` 用于批量保活/释放 dynamic 值，`BufferArena` 用于临时文本构建。
-- `std/atomic/atomic.bl`：`AtomicInt`、`AtomicBool`。
-- `std/sync/sync.bl`：`Mutex`、`RwLock`、`Once`。
-- `std/json/json.bl`、`std/csv/csv.bl`、`std/html/html.bl`、`std/template/template.bl`：常用文本与 Web 输出工具。
-- `std/fs/fs.bl`、`std/path/path.bl`、`std/io/io.bl`、`std/process/process.bl`、`std/env/env.bl`：系统与文件处理。
-- `std/http/http.bl`、`std/web/web.bl`、`std/gui/gui.bl`：HTTP 客户端、Web 服务和 GUI。
+导入推荐短路径（`import "std/fs" as fs;`，兼容旧的 `std/fs/fs.bl`）。索引见 `std/README.md`，教程见 `docs/standard-library.md`。
+
+- `std/collections`：`IntSet`、`StringSet`、`Queue`、`Stack`、`Deque`、`Counter`、优先队列。
+- `std/iter`：序列、`take`/`drop`/`chunk`/`sum`/`zip`/`unique` 等。
+- `std/option` / `std/result` / `std/traits`：Option/Result 工具与标准协议。
+- `std/prelude`：常用模块一键导入。
+- `std/arena`：`Arena` / `BufferArena`。
+- `std/atomic` · `std/sync`：原子类型与 Mutex/RwLock/Once。
+- `std/json` · `std/csv` · `std/html` · `std/template` · `std/text`：文本与 Web 输出。
+- `std/fs` · `std/path` · `std/io` · `std/process` · `std/env` · `std/time`：系统与 IO。
+- `std/http` · `std/web` · `std/gui`：HTTP 客户端、Web 服务、GUI。
 
 Bolide 标准库通常由 `.bl` 包装层加底层实现组成。用户侧通过 `import "std/..."` 使用稳定的 Bolide API，底层实现由工具链处理。
 

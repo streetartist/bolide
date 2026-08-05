@@ -1,0 +1,54 @@
+// 标准协议 trait。
+// import "std/traits";
+//
+// 说明：
+// - 语言已按方法名自动识别 Add/Iterator 等（无需本文件也能 T: Add）
+// - 本模块提供可文档化、可显式 impl 的正式定义
+// - 默认方法会在 impl 时注入到 class
+
+/// 迭代器协议：实现 `next() -> Option<...>` 即可用于 `for x in it`
+trait Iterator {
+    fn next();
+}
+
+/// 人类可读字符串
+trait Display {
+    fn to_str() -> str;
+}
+
+/// 调试字符串（默认同 to_str，可覆盖）
+trait Debug {
+    fn debug_str() -> str;
+}
+
+/// 相等（运算符 == 走 __eq__；协议名 Eq 自动识别）
+trait Eq {
+    fn __eq__(other: dynamic) -> bool;
+}
+
+/// 小于（用于排序约定）
+trait Ord {
+    fn __lt__(other: dynamic) -> bool;
+}
+
+trait Add {
+    fn __add__(other: dynamic);
+}
+
+trait Sub {
+    fn __sub__(other: dynamic);
+}
+
+trait Mul {
+    fn __mul__(other: dynamic);
+}
+
+trait Div {
+    fn __div__(other: dynamic);
+}
+
+/// with 语句上下文管理器
+trait Context {
+    fn enter();
+    fn exit();
+}

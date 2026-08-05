@@ -1,0 +1,118 @@
+// trait 完整：dyn 多态、supertrait、Iterator for-in、运算符协议 bound
+
+// ---- 基础 trait + 默认方法 ----
+trait Drawable {
+    fn draw();
+    fn label() -> str {
+        return "shape";
+    }
+}
+
+// ---- supertrait ----
+trait Countable: Drawable {
+    fn count() -> int;
+}
+
+class Circle {
+    r: int;
+}
+
+class Box {
+    n: int;
+}
+
+impl Drawable for Circle {
+    fn draw() {
+        print(self.r);
+    }
+}
+
+impl Countable for Circle {
+    fn count() -> int {
+        return self.r;
+    }
+}
+
+impl Drawable for Box {
+    fn draw() {
+        print(self.n);
+    }
+    fn label() -> str {
+        return "box";
+    }
+}
+
+// dyn Trait 运行时多态
+fn paint(d: dyn Drawable) {
+    d.draw();
+    print(d.label());
+}
+
+let c: Circle = Circle(7);
+let b: Box = Box(5);
+paint(c);
+paint(b);
+
+// 注解为 dyn
+let d: dyn Drawable = Circle(3);
+d.draw();
+
+// 泛型约束（静态）
+fn paint_count<T: Countable>(x: T) {
+    x.draw();
+    print(x.count());
+}
+paint_count(Circle(2));
+
+// ---- Iterator 协议：任意 next() -> Option ----
+class Counter {
+    cur: int;
+    end: int;
+
+    fn next() -> Option<int> {
+        if self.cur >= self.end {
+            return Option.None();
+        }
+        let v: int = self.cur;
+        self.cur = self.cur + 1;
+        return Option.Some(v);
+    }
+}
+
+let it: Counter = Counter(0, 3);
+var sum: int = 0;
+for x in it {
+    sum = sum + x;
+}
+print(sum);
+
+// T: Iterator 约束（有 next 即满足）
+fn drain_one<T: Iterator>(x: T) -> int {
+    match x.next() {
+        Option.Some(v) => {
+            return v;
+        }
+        _ => {
+            return -1;
+        }
+    }
+}
+print(drain_one(Counter(10, 12)));
+
+// ---- 运算符协议：有 __add__ 即满足 Add ----
+class Vec2 {
+    x: int;
+    y: int;
+
+    fn __add__(o: Vec2) -> int {
+        return self.x + o.x + self.y + o.y;
+    }
+}
+
+fn add_pair<T: Add>(a: T, b: T) -> int {
+    return a + b;
+}
+
+print(add_pair(Vec2(1, 2), Vec2(3, 4)));
+
+print("trait_full_ok");

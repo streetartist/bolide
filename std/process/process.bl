@@ -1,17 +1,19 @@
-// Bolide process standard library.
-// Usage: import "std/process/process.bl" as process;
+// 子进程。
+// import "std/process" as process;
+//
+// 注意：ProcessResult 勿与内置 ADT Result 混淆。
 
 extern "bolide" {
-    fn bolide_process_run(program: *char, args: *void) -> *void;
-    fn bolide_process_run_shell(command: *char) -> *void;
-    fn bolide_process_status(res: *void) -> i64;
-    fn bolide_process_stdout(res: *void) -> str;
-    fn bolide_process_stderr(res: *void) -> str;
-    fn bolide_process_success(res: *void) -> i64;
-    fn bolide_process_free(res: *void);
+    fn bolide_process_run(program: *c_char, args: *c_void) -> *c_void;
+    fn bolide_process_run_shell(command: *c_char) -> *c_void;
+    fn bolide_process_status(res: *c_void) -> i64;
+    fn bolide_process_stdout(res: *c_void) -> str;
+    fn bolide_process_stderr(res: *c_void) -> str;
+    fn bolide_process_success(res: *c_void) -> i64;
+    fn bolide_process_free(res: *c_void);
 }
 
-class Result {
+class ProcessResult {
     handle: ptr;
 
     fn status() -> int {
@@ -38,14 +40,33 @@ class Result {
     }
 }
 
-fn run(program: str, args: list<str>) -> Result {
-    return Result(bolide_process_run(program, args));
+// 兼容旧名
+class Result: ProcessResult {
 }
 
-fn run0(program: str) -> Result {
+fn run(program: str, args: list<str>) -> ProcessResult {
+    return ProcessResult(bolide_process_run(program, args));
+}
+
+fn run0(program: str) -> ProcessResult {
     return run(program, []);
 }
 
-fn shell(command: str) -> Result {
-    return Result(bolide_process_run_shell(command));
+fn shell(command: str) -> ProcessResult {
+    return ProcessResult(bolide_process_run_shell(command));
+}
+
+/// 运行并要求成功，否则返回 false；stdout 通过 out 参数不便，返回 exit code
+fn run_status(program: str, args: list<str>) -> int {
+    let r: ProcessResult = run(program, args);
+    let code: int = r.status();
+    r.close();
+    return code;
+}
+
+fn shell_ok(command: str) -> bool {
+    let r: ProcessResult = shell(command);
+    let ok: bool = r.success();
+    r.close();
+    return ok;
 }

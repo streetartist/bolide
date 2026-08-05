@@ -1,0 +1,18 @@
+class Box {
+    value: int;
+    fn map<U>(f: func(int) -> U) -> U {
+        return f(self.value);
+    }
+    fn id<T>(x: T) -> T {
+        return x;
+    }
+}
+fn double(x: int) -> int { return x * 2; }
+fn label(x: int) -> str { return "n=" + str(x); }
+
+let b: Box = Box(21);
+print(b.map(double));
+print(b.map(label));
+print(b.id(7));
+print(b.id("hi"));
+print(999);

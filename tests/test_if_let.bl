@@ -1,0 +1,27 @@
+fn find(flag: int) -> Option<int> {
+    if flag > 0 {
+        return Option.Some(flag * 2);
+    }
+    return Option.None();
+}
+
+if let Option.Some(v) = find(21) {
+    print(v);
+} else {
+    print(0);
+}
+
+if let Option.Some(v) = find(0) {
+    print(v);
+} else {
+    print(7);
+}
+
+var n: int = 0;
+// while let with a simple counter via Option - manual
+fn next_n() -> Option<int> {
+    // can't use outer n easily mutably without class - use channel
+    return Option.None();
+}
+
+print(999);

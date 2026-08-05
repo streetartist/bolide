@@ -1,0 +1,10 @@
+let name: str = "Bolide";
+let id: int = 42;
+print(f"user={name} id={id}");
+print(f"sum={1 + 2}");
+print(f"brace={{ok}}");
+print(f"quoted={"hi"}");
+print(f"nested={f"inner"}");
+print(f"call={str(99)}");
+print(f"eq={1 == 1}");
+print(999);

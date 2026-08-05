@@ -1,0 +1,5 @@
+import "../std/macros/macros.bl" as m;
+print(m.add1!(41));
+print(m.max2!(3, 9));
+print(max2!(1, 5));
+print(add1!(100));

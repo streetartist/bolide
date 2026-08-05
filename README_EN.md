@@ -12,7 +12,7 @@
     <img src="https://img.shields.io/badge/License-MIT-brightgreen.svg" alt="License: MIT">
   </a>
   <a href="#">
-    <img src="https://img.shields.io/badge/version-0.13.7-blue.svg" alt="Version">
+    <img src="https://img.shields.io/badge/version-0.14.1-blue.svg" alt="Version">
   </a>
   <a href="#">
     <img src="https://img.shields.io/badge/platform-windows%20%7C%20linux-lightgrey.svg" alt="Platform">
@@ -125,6 +125,18 @@ let name: str = "Bolide";
 let flag: bool = true;
 let big: bigint = 123456789012345678901234567890b;
 let precise: decimal = 3.14159265358979d;
+
+// f-strings: {expr} interpolates; {{ / }} for literal braces
+print(f"user={name} id={x}");
+
+// Destructuring and discard
+let (a, b, _) = (1, 2, 3);
+_ = a + b;
+
+// if let / while let (enum/union patterns)
+if let Option.Some(v) = find(1) {
+    print(v);
+}
 ```
 
 ### User Input
@@ -439,16 +451,45 @@ extern "dyn:c" {
 }
 
 extern "dyn:m" {
-    fn sqrt(x: c_double) -> c_double;
+    fn sqrt(x: f64) -> f64;
 }
 
 let a: int = abs(-42);      // 42
 let b: float = sqrt(16.0);  // 4.0
 
+// C function-pointer types use func(...) (fn is only for declarations/literals).
+extern "dyn:c" {
+    fn qsort(
+        base: *c_void,
+        n: c_size_t,
+        size: c_size_t,
+        cmp: func(*c_void, *c_void) -> c_int
+    );
+}
+
 // Callbacks are supported too
 fn my_callback(a: int, b: int) -> int { return a + b; }
 let r: int = test_callback(my_callback, 10, 20);
 ```
+
+#### C ABI type spelling
+
+`extern` signatures use a separate C ABI type space (not Bolide `int`/`float`):
+
+| Kind | Spelling | Notes |
+|------|----------|-------|
+| Platform integers | `c_int`, `c_uint`, `c_long`, `c_size_t`, … | Width follows the C ABI |
+| Platform floats | `c_float`, `c_double` | Match C `float`/`double` |
+| Fixed width | `i8`…`i64`, `u8`…`u64`, `f32`, `f64` | Prefer for portable bindings |
+| Char/byte | `c_char`, `c_uchar` | C strings: `*c_char` |
+| Pointers | `*T`, `*c_void` | Store opaque handles as Bolide `ptr` |
+| Function pointers | `func(T...) -> R` | Same keyword as user-level function values |
+
+Notes:
+- Bolide `int` is 64-bit and is **not** C `int`; write `c_int` or `i32` in raw bindings.
+- Common coercions at call sites: `int`→`c_int`, `str`→`*c_char`, narrow returns widen to `int`.
+- Standard-library wrappers should keep exposing Bolide types; only raw `extern` uses C ABI types.
+- Historical aliases are rejected: bare `void`/`char`/`long`/`size_t`, and type-position `fn(...)`.
 
 #### External library specs
 

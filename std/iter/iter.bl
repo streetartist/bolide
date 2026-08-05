@@ -1,5 +1,8 @@
-// Bolide list/iteration helpers.
-// Usage: import "std/iter/iter.bl" as iter;
+// 列表工具（eager）。
+// import "std/iter" as iter;
+//
+// 语言层 `for x in it` 走 Iterator.next()；本模块是 list 上的实用函数。
+// 因尚无完整泛型方法，对 int/str/float 做重载。
 
 class IntPair {
     first: int;
@@ -10,6 +13,18 @@ class StringPair {
     first: str;
     second: str;
 }
+
+class IndexedInt {
+    index: int;
+    value: int;
+}
+
+class IndexedStr {
+    index: int;
+    value: str;
+}
+
+// ---- 范围 / 重复 ----
 
 fn ints(start: int, end: int) -> list<int> {
     return ints_step(start, end, 1);
@@ -44,6 +59,16 @@ fn repeat(value: int, count: int) -> list<int> {
     return out;
 }
 
+fn repeat(value: str, count: int) -> list<str> {
+    var out: list<str> = [];
+    for i in range(count) {
+        out.push(value);
+    }
+    return out;
+}
+
+// ---- 切片 ----
+
 fn take(values: list<int>, count: int) -> list<int> {
     var out: list<int> = [];
     var limit: int = count;
@@ -59,8 +84,35 @@ fn take(values: list<int>, count: int) -> list<int> {
     return out;
 }
 
+fn take(values: list<str>, count: int) -> list<str> {
+    var out: list<str> = [];
+    var limit: int = count;
+    if limit > values.len() {
+        limit = values.len();
+    }
+    if limit < 0 {
+        limit = 0;
+    }
+    for i in range(limit) {
+        out.push(values[i]);
+    }
+    return out;
+}
+
 fn drop(values: list<int>, count: int) -> list<int> {
     var out: list<int> = [];
+    var start: int = count;
+    if start < 0 {
+        start = 0;
+    }
+    for i in range(start, values.len()) {
+        out.push(values[i]);
+    }
+    return out;
+}
+
+fn drop(values: list<str>, count: int) -> list<str> {
+    var out: list<str> = [];
     var start: int = count;
     if start < 0 {
         start = 0;
@@ -90,10 +142,51 @@ fn chunk(values: list<int>, size: int) -> list<list<int>> {
     return out;
 }
 
+fn reverse(values: list<int>) -> list<int> {
+    var out: list<int> = [];
+    var i: int = values.len() - 1;
+    while i >= 0 {
+        out.push(values[i]);
+        i = i - 1;
+    }
+    return out;
+}
+
+fn reverse(values: list<str>) -> list<str> {
+    var out: list<str> = [];
+    var i: int = values.len() - 1;
+    while i >= 0 {
+        out.push(values[i]);
+        i = i - 1;
+    }
+    return out;
+}
+
+// ---- 归约 ----
+
 fn sum(values: list<int>) -> int {
     var total: int = 0;
     for value in values {
         total = total + value;
+    }
+    return total;
+}
+
+fn sum(values: list<float>) -> float {
+    var total: float = 0.0;
+    for value in values {
+        total = total + value;
+    }
+    return total;
+}
+
+fn product(values: list<int>) -> int {
+    if values.len() == 0 {
+        return 1;
+    }
+    var total: int = 1;
+    for value in values {
+        total = total * value;
     }
     return total;
 }
@@ -124,6 +217,169 @@ fn max(values: list<int>) -> int {
     return best;
 }
 
+fn average(values: list<int>) -> float {
+    if values.len() == 0 {
+        return 0.0;
+    }
+    return float(sum(values)) / float(values.len());
+}
+
+// ---- 查找 / 判定 ----
+
+fn contains(values: list<int>, target: int) -> bool {
+    for value in values {
+        if value == target {
+            return true;
+        }
+    }
+    return false;
+}
+
+fn contains(values: list<str>, target: str) -> bool {
+    for value in values {
+        if value == target {
+            return true;
+        }
+    }
+    return false;
+}
+
+fn count(values: list<int>, target: int) -> int {
+    var n: int = 0;
+    for value in values {
+        if value == target {
+            n = n + 1;
+        }
+    }
+    return n;
+}
+
+fn count(values: list<str>, target: str) -> int {
+    var n: int = 0;
+    for value in values {
+        if value == target {
+            n = n + 1;
+        }
+    }
+    return n;
+}
+
+fn index_of(values: list<int>, target: int) -> int {
+    for i in range(values.len()) {
+        if values[i] == target {
+            return i;
+        }
+    }
+    return 0 - 1;
+}
+
+fn index_of(values: list<str>, target: str) -> int {
+    for i in range(values.len()) {
+        if values[i] == target {
+            return i;
+        }
+    }
+    return 0 - 1;
+}
+
+fn all_positive(values: list<int>) -> bool {
+    for value in values {
+        if value <= 0 {
+            return false;
+        }
+    }
+    return true;
+}
+
+fn any_negative(values: list<int>) -> bool {
+    for value in values {
+        if value < 0 {
+            return true;
+        }
+    }
+    return false;
+}
+
+// ---- 变换 ----
+
+fn enumerate(values: list<int>) -> list<IndexedInt> {
+    var out: list<IndexedInt> = [];
+    for i in range(values.len()) {
+        out.push(IndexedInt(i, values[i]));
+    }
+    return out;
+}
+
+fn enumerate(values: list<str>) -> list<IndexedStr> {
+    var out: list<IndexedStr> = [];
+    for i in range(values.len()) {
+        out.push(IndexedStr(i, values[i]));
+    }
+    return out;
+}
+
+fn unique(values: list<int>) -> list<int> {
+    var seen: dict<int, bool> = {};
+    var out: list<int> = [];
+    for value in values {
+        if not seen.contains(value) {
+            seen[value] = true;
+            out.push(value);
+        }
+    }
+    return out;
+}
+
+fn unique(values: list<str>) -> list<str> {
+    var seen: dict<str, bool> = {};
+    var out: list<str> = [];
+    for value in values {
+        if not seen.contains(value) {
+            seen[value] = true;
+            out.push(value);
+        }
+    }
+    return out;
+}
+
+fn filter_positive(values: list<int>) -> list<int> {
+    var out: list<int> = [];
+    for value in values {
+        if value > 0 {
+            out.push(value);
+        }
+    }
+    return out;
+}
+
+fn filter_nonempty(values: list<str>) -> list<str> {
+    var out: list<str> = [];
+    for value in values {
+        if value != "" {
+            out.push(value);
+        }
+    }
+    return out;
+}
+
+fn map_double(values: list<int>) -> list<int> {
+    var out: list<int> = [];
+    for value in values {
+        out.push(value * 2);
+    }
+    return out;
+}
+
+fn map_str(values: list<int>) -> list<str> {
+    var out: list<str> = [];
+    for value in values {
+        out.push(str(value));
+    }
+    return out;
+}
+
+// ---- 合并 ----
+
 fn join(values: list<str>, sep: str) -> str {
     var out: str = "";
     for i in range(values.len()) {
@@ -131,6 +387,28 @@ fn join(values: list<str>, sep: str) -> str {
             out = out + sep;
         }
         out = out + values[i];
+    }
+    return out;
+}
+
+fn concat(a: list<int>, b: list<int>) -> list<int> {
+    var out: list<int> = [];
+    for v in a {
+        out.push(v);
+    }
+    for v in b {
+        out.push(v);
+    }
+    return out;
+}
+
+fn concat(a: list<str>, b: list<str>) -> list<str> {
+    var out: list<str> = [];
+    for v in a {
+        out.push(v);
+    }
+    for v in b {
+        out.push(v);
     }
     return out;
 }
@@ -155,6 +433,26 @@ fn zip(values_a: list<str>, values_b: list<str>) -> list<StringPair> {
     }
     for i in range(limit) {
         out.push(StringPair(values_a[i], values_b[i]));
+    }
+    return out;
+}
+
+fn flatten(values: list<list<int>>) -> list<int> {
+    var out: list<int> = [];
+    for group in values {
+        for value in group {
+            out.push(value);
+        }
+    }
+    return out;
+}
+
+fn flatten(values: list<list<str>>) -> list<str> {
+    var out: list<str> = [];
+    for group in values {
+        for value in group {
+            out.push(value);
+        }
     }
     return out;
 }

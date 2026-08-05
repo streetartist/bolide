@@ -1,0 +1,135 @@
+// Result helpers.
+// import "std/result" as result;
+//
+// 内置 ADT：Result.Ok(v) / Result.Err(e)
+// `?` 运算符与 `impl From` 仍由语言层处理；这里提供显式组合。
+
+fn is_ok(v: Result<int, str>) -> bool {
+    match v {
+        Result.Ok(_) => { return true; }
+        _ => { return false; }
+    }
+}
+
+fn is_err(v: Result<int, str>) -> bool {
+    return not is_ok(v);
+}
+
+fn is_ok(v: Result<str, str>) -> bool {
+    match v {
+        Result.Ok(_) => { return true; }
+        _ => { return false; }
+    }
+}
+
+fn is_err(v: Result<str, str>) -> bool {
+    return not is_ok(v);
+}
+
+fn is_ok(v: Result<bool, str>) -> bool {
+    match v {
+        Result.Ok(_) => { return true; }
+        _ => { return false; }
+    }
+}
+
+fn is_err(v: Result<bool, str>) -> bool {
+    return not is_ok(v);
+}
+
+fn unwrap_or(v: Result<int, str>, fallback: int) -> int {
+    match v {
+        Result.Ok(x) => { return x; }
+        _ => { return fallback; }
+    }
+}
+
+fn unwrap_or(v: Result<str, str>, fallback: str) -> str {
+    match v {
+        Result.Ok(x) => { return x; }
+        _ => { return fallback; }
+    }
+}
+
+fn unwrap_or(v: Result<bool, str>, fallback: bool) -> bool {
+    match v {
+        Result.Ok(x) => { return x; }
+        _ => { return fallback; }
+    }
+}
+
+fn unwrap_or(v: Result<float, str>, fallback: float) -> float {
+    match v {
+        Result.Ok(x) => { return x; }
+        _ => { return fallback; }
+    }
+}
+
+fn ok(v: int) -> Result<int, str> {
+    return Result.Ok(v);
+}
+
+fn ok(v: str) -> Result<str, str> {
+    return Result.Ok(v);
+}
+
+fn ok(v: bool) -> Result<bool, str> {
+    return Result.Ok(v);
+}
+
+fn err(msg: str) -> Result<int, str> {
+    return Result.Err(msg);
+}
+
+fn err_str(msg: str) -> Result<str, str> {
+    return Result.Err(msg);
+}
+
+fn err_bool(msg: str) -> Result<bool, str> {
+    return Result.Err(msg);
+}
+
+/// 取出 Err 信息；Ok 时返回 ""
+fn error_msg(v: Result<int, str>) -> str {
+    match v {
+        Result.Err(e) => { return e; }
+        _ => { return ""; }
+    }
+}
+
+fn error_msg(v: Result<str, str>) -> str {
+    match v {
+        Result.Err(e) => { return e; }
+        _ => { return ""; }
+    }
+}
+
+fn error_msg(v: Result<bool, str>) -> str {
+    match v {
+        Result.Err(e) => { return e; }
+        _ => { return ""; }
+    }
+}
+
+/// bool 成功/失败 → Result
+fn from_bool(ok_flag: bool, value: int, err_msg: str) -> Result<int, str> {
+    if ok_flag {
+        return Result.Ok(value);
+    }
+    return Result.Err(err_msg);
+}
+
+fn from_bool(ok_flag: bool, value: str, err_msg: str) -> Result<str, str> {
+    if ok_flag {
+        return Result.Ok(value);
+    }
+    return Result.Err(err_msg);
+}
+
+/// 条件成立返回 Ok，否则 Err
+fn ensure(cond: bool, err_msg: str) -> Result<bool, str> {
+    if cond {
+        return Result.Ok(true);
+    }
+    return Result.Err(err_msg);
+}

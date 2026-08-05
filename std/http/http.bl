@@ -1,7 +1,12 @@
-// Bolide HTTP client convenience library.
-// Usage: import "std/http/http.bl" as http;
+// HTTP 客户端便捷封装（基于 std/web 的 fetch）。
+// import "std/http" as http;
+//
+//   let res = http.get("https://example.com");
+//   if res.ok() { print(res.text()); }
+//   // 或
+//   let res2 = http.post_json(url, "{\"a\":1}");
 
-import "std/web/web.bl" as web;
+import "std/web" as web;
 
 class Header {
     name: str;
@@ -25,6 +30,14 @@ class Response {
     fn has_error() -> bool {
         return self.error != "";
     }
+
+    fn is_json() -> bool {
+        return self.content_type.lower().contains("json");
+    }
+
+    fn is_redirect() -> bool {
+        return self.status >= 300 and self.status < 400;
+    }
 }
 
 fn header(name: str, value: str) -> Header {
@@ -32,7 +45,7 @@ fn header(name: str, value: str) -> Header {
 }
 
 fn header_lines(headers: list<Header>) -> str {
-    let out: str = "";
+    var out: str = "";
     for item in headers {
         out = out + item.name + ": " + item.value + "\r\n";
     }
@@ -47,11 +60,15 @@ fn text_headers() -> str {
     return "Content-Type: text/plain; charset=utf-8\r\nAccept: text/plain\r\n";
 }
 
+fn form_headers() -> str {
+    return "Content-Type: application/x-www-form-urlencoded\r\n";
+}
+
 fn request_with_options(method: str, url: str, body: str, headers: str, timeout_ms: int, max_redirects: int) -> Response {
     let res: web.ClientResponse = web.fetch_with_options(method, url, body, headers, timeout_ms, max_redirects);
     let status: int = res.status();
     let text: str = res.body_text();
-    let content_type: str = res.header("content-type");
+    var content_type: str = res.header("content-type");
     let error: str = res.error();
     if content_type == "" {
         content_type = res.header("Content-Type");
@@ -64,12 +81,24 @@ fn request(method: str, url: str, body: str, headers: str) -> Response {
     return request_with_options(method, url, body, headers, 15000, 5);
 }
 
+fn request_timeout(method: str, url: str, body: str, headers: str, timeout_ms: int) -> Response {
+    return request_with_options(method, url, body, headers, timeout_ms, 5);
+}
+
 fn get(url: str) -> Response {
     return request("GET", url, "", "");
 }
 
+fn get_timeout(url: str, timeout_ms: int) -> Response {
+    return request_timeout("GET", url, "", "", timeout_ms);
+}
+
 fn get_with_headers(url: str, headers: str) -> Response {
     return request("GET", url, "", headers);
+}
+
+fn head(url: str) -> Response {
+    return request("HEAD", url, "", "");
 }
 
 fn post(url: str, body: str, content_type: str) -> Response {
@@ -78,6 +107,10 @@ fn post(url: str, body: str, content_type: str) -> Response {
 
 fn post_json(url: str, body: str) -> Response {
     return request("POST", url, body, json_headers());
+}
+
+fn post_form(url: str, body: str) -> Response {
+    return request("POST", url, body, form_headers());
 }
 
 fn put_json(url: str, body: str) -> Response {
@@ -90,4 +123,8 @@ fn patch_json(url: str, body: str) -> Response {
 
 fn delete(url: str) -> Response {
     return request("DELETE", url, "", "");
+}
+
+fn delete_with_headers(url: str, headers: str) -> Response {
+    return request("DELETE", url, "", headers);
 }

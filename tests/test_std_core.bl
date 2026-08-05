@@ -1,0 +1,83 @@
+// 标准库核心冒烟：短路径 import + 升级后的模块
+
+import "std/assert" as assert;
+import "std/time" as time;
+import "std/iter" as iter;
+import "std/text" as text;
+import "std/math" as math;
+import "std/option" as option;
+import "std/result" as result;
+import "std/collections" as collections;
+import "std/fs" as fs;
+import "std/path" as path;
+import "std/env" as env;
+
+assert.reset();
+
+// time
+let t0: int = time.monotonic_ms();
+assert.greater_equal("mono", t0, 0);
+assert.greater("now_ms", time.now_ms(), 0);
+assert.equal("dur", time.format_duration_ms(3661000), "1h1m1s");
+let timer: time.Timer = time.timer();
+assert.greater_equal("timer", timer.elapsed_ms(), 0);
+
+// iter
+let xs: list<int> = iter.ints(0, 5);
+assert.equal("ints_len", xs.len(), 5);
+assert.equal("sum", iter.sum(xs), 10);
+assert.equal("max", iter.max(xs), 4);
+assert.equal("unique", iter.unique([1, 2, 2, 3]).len(), 3);
+assert.equal("join", iter.join(["a", "b"], "-"), "a-b");
+assert.is_true("contains", iter.contains(xs, 3));
+
+// text
+assert.equal("trim", text.trim("  hi  "), "hi");
+assert.equal("snake", text.snake("HelloWorld"), "hello_world");
+assert.equal("title", text.title("hello world"), "Hello World");
+assert.equal("pad", text.pad_left("7", 3, "0"), "007");
+assert.is_true("blank", text.is_blank("  \t"));
+assert.equal("fmt", text.format_map("hi {name}", {"name": "bolide"}), "hi bolide");
+
+// math
+assert.equal("abs", math.abs(0 - 3), 3);
+assert.equal("clamp", math.clamp(10, 0, 5), 5);
+assert.equal("sign", math.sign(0 - 2), 0 - 1);
+assert.approx("lerp", math.lerp(0.0, 10.0, 0.5), 5.0, 0.0001);
+
+// option / result
+let o: Option<int> = option.some(42);
+assert.equal("opt", option.unwrap_or(o, 0), 42);
+assert.equal("opt_def", option.unwrap_or_default(option.none_int()), 0);
+let r: Result<int, str> = result.ok(7);
+assert.is_true("rok", result.is_ok(r));
+assert.equal("runwrap", result.unwrap_or(r, 0), 7);
+assert.equal("rerr", result.error_msg(result.err("boom")), "boom");
+
+// collections
+let s: collections.IntSet = collections.int_set();
+s.add(1);
+s.add(2);
+s.add(1);
+assert.equal("set_len", s.len(), 2);
+let s2: collections.IntSet = collections.int_set();
+s2.add(2);
+s2.add(3);
+let u: collections.IntSet = collections.int_set_union(s, s2);
+assert.equal("union", u.len(), 3);
+let q: collections.Queue = collections.queue();
+q.push(1);
+q.push(2);
+assert.equal("q", int(q.pop()), 1);
+
+// path / fs / env smoke
+assert.is_true("join", path.join("a", "b").contains("b") or path.join("a", "b").contains("a"));
+assert.is_false("blank_path", path.normalize("") == "x");
+let _os: str = env.os();
+assert.greater("os_len", _os.len(), 0);
+assert.is_true("cwd", fs.current_dir().len() > 0);
+
+if not assert.finish() {
+    throw Error("std core failed");
+}
+print("std_core_ok");

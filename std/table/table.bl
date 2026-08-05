@@ -1,5 +1,5 @@
 // Bolide text table formatting library.
-// Usage: import "std/table/table.bl" as table;
+// Usage: import "std/table" as table;
 
 fn pad_right(value: str, width: int) -> str {
     if value.len() >= width {

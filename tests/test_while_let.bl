@@ -1,0 +1,19 @@
+let ch: channel<int> = channel();
+ch.send(1);
+ch.send(2);
+ch.send(3);
+// no try_recv maybe - use fixed recv in while true desugar instead
+// while let Option.Some - build Options
+fn take(i: int) -> Option<int> {
+    if i <= 3 {
+        return Option.Some(i);
+    }
+    return Option.None();
+}
+// can't mutate loop var from while let expr easily without var in outer and reassign
+var i: int = 1;
+while let Option.Some(v) = take(i) {
+    print(v);
+    i += 1;
+}
+print(999);

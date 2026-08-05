@@ -1,0 +1,165 @@
+// Option helpers.
+// import "std/option" as option;
+//
+// Bolide 内置 ADT：Option.Some(v) / Option.None()
+// 本模块提供常用组合子，避免到处手写 match。
+
+fn is_some(v: Option<int>) -> bool {
+    match v {
+        Option.Some(_) => { return true; }
+        _ => { return false; }
+    }
+}
+
+fn is_none(v: Option<int>) -> bool {
+    return not is_some(v);
+}
+
+fn is_some(v: Option<str>) -> bool {
+    match v {
+        Option.Some(_) => { return true; }
+        _ => { return false; }
+    }
+}
+
+fn is_none(v: Option<str>) -> bool {
+    return not is_some(v);
+}
+
+fn is_some(v: Option<bool>) -> bool {
+    match v {
+        Option.Some(_) => { return true; }
+        _ => { return false; }
+    }
+}
+
+fn is_none(v: Option<bool>) -> bool {
+    return not is_some(v);
+}
+
+fn unwrap_or(v: Option<int>, fallback: int) -> int {
+    match v {
+        Option.Some(x) => { return x; }
+        _ => { return fallback; }
+    }
+}
+
+fn unwrap_or(v: Option<str>, fallback: str) -> str {
+    match v {
+        Option.Some(x) => { return x; }
+        _ => { return fallback; }
+    }
+}
+
+fn unwrap_or(v: Option<bool>, fallback: bool) -> bool {
+    match v {
+        Option.Some(x) => { return x; }
+        _ => { return fallback; }
+    }
+}
+
+fn unwrap_or(v: Option<float>, fallback: float) -> float {
+    match v {
+        Option.Some(x) => { return x; }
+        _ => { return fallback; }
+    }
+}
+
+/// 有值返回值，否则 0 / "" / false（按类型）
+fn unwrap_or_default(v: Option<int>) -> int {
+    match v {
+        Option.Some(x) => { return x; }
+        _ => { return 0; }
+    }
+}
+
+fn unwrap_or_default(v: Option<str>) -> str {
+    match v {
+        Option.Some(x) => { return x; }
+        _ => { return ""; }
+    }
+}
+
+fn unwrap_or_default(v: Option<bool>) -> bool {
+    match v {
+        Option.Some(x) => { return x; }
+        _ => { return false; }
+    }
+}
+
+fn unwrap_or_default(v: Option<float>) -> float {
+    match v {
+        Option.Some(x) => { return x; }
+        _ => { return 0.0; }
+    }
+}
+
+fn some(v: int) -> Option<int> {
+    return Option.Some(v);
+}
+
+fn some(v: str) -> Option<str> {
+    return Option.Some(v);
+}
+
+fn some(v: bool) -> Option<bool> {
+    return Option.Some(v);
+}
+
+fn some(v: float) -> Option<float> {
+    return Option.Some(v);
+}
+
+fn none_int() -> Option<int> {
+    return Option.None();
+}
+
+fn none_str() -> Option<str> {
+    return Option.None();
+}
+
+fn none_bool() -> Option<bool> {
+    return Option.None();
+}
+
+fn none_float() -> Option<float> {
+    return Option.None();
+}
+
+/// 从 list 取下标，越界返回 None
+fn get(items: list<int>, index: int) -> Option<int> {
+    if index < 0 or index >= items.len() {
+        return Option.None();
+    }
+    return Option.Some(items[index]);
+}
+
+fn get(items: list<str>, index: int) -> Option<str> {
+    if index < 0 or index >= items.len() {
+        return Option.None();
+    }
+    return Option.Some(items[index]);
+}
+
+/// 过滤 Some，展平为 list
+fn flatten(items: list<Option<int>>) -> list<int> {
+    var out: list<int> = [];
+    for v in items {
+        match v {
+            Option.Some(x) => { out.push(x); }
+            _ => {}
+        }
+    }
+    return out;
+}
+
+fn flatten(items: list<Option<str>>) -> list<str> {
+    var out: list<str> = [];
+    for v in items {
+        match v {
+            Option.Some(x) => { out.push(x); }
+            _ => {}
+        }
+    }
+    return out;
+}

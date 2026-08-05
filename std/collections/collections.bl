@@ -1,5 +1,5 @@
-// Bolide collection helpers.
-// Usage: import "std/collections/collections.bl" as collections;
+// 常用集合。
+// import "std/collections" as collections;
 
 class IntSet {
     items: dict<int, bool>;
@@ -288,4 +288,141 @@ fn counter() -> Counter {
 
 fn int_priority_queue() -> IntPriorityQueue {
     return IntPriorityQueue([]);
+}
+
+// ---- Set 运算 ----
+
+fn int_set_union(a: IntSet, b: IntSet) -> IntSet {
+    let out: IntSet = int_set();
+    for v in a.values() {
+        out.add(v);
+    }
+    for v in b.values() {
+        out.add(v);
+    }
+    return out;
+}
+
+fn int_set_intersect(a: IntSet, b: IntSet) -> IntSet {
+    let out: IntSet = int_set();
+    for v in a.values() {
+        if b.contains(v) {
+            out.add(v);
+        }
+    }
+    return out;
+}
+
+fn int_set_diff(a: IntSet, b: IntSet) -> IntSet {
+    let out: IntSet = int_set();
+    for v in a.values() {
+        if not b.contains(v) {
+            out.add(v);
+        }
+    }
+    return out;
+}
+
+fn string_set_union(a: StringSet, b: StringSet) -> StringSet {
+    let out: StringSet = string_set();
+    for v in a.values() {
+        out.add(v);
+    }
+    for v in b.values() {
+        out.add(v);
+    }
+    return out;
+}
+
+fn string_set_intersect(a: StringSet, b: StringSet) -> StringSet {
+    let out: StringSet = string_set();
+    for v in a.values() {
+        if b.contains(v) {
+            out.add(v);
+        }
+    }
+    return out;
+}
+
+fn string_set_diff(a: StringSet, b: StringSet) -> StringSet {
+    let out: StringSet = string_set();
+    for v in a.values() {
+        if not b.contains(v) {
+            out.add(v);
+        }
+    }
+    return out;
+}
+
+/// 双向可用的双端队列（list 封装；push/pop 两端）
+class Deque {
+    items: list<dynamic>;
+
+    fn push_back(value: dynamic) {
+        self.items.push(value);
+    }
+
+    fn push_front(value: dynamic) {
+        var next: list<dynamic> = [];
+        next.push(value);
+        for v in self.items {
+            next.push(v);
+        }
+        self.items = next;
+    }
+
+    fn pop_back() -> dynamic {
+        if self.items.len() == 0 {
+            return none;
+        }
+        return self.items.pop();
+    }
+
+    fn pop_front() -> dynamic {
+        if self.items.len() == 0 {
+            return none;
+        }
+        let value: dynamic = self.items[0];
+        var next: list<dynamic> = [];
+        for i in range(1, self.items.len()) {
+            next.push(self.items[i]);
+        }
+        self.items = next;
+        return value;
+    }
+
+    fn front() -> dynamic {
+        if self.items.len() == 0 {
+            return none;
+        }
+        return self.items[0];
+    }
+
+    fn back() -> dynamic {
+        if self.items.len() == 0 {
+            return none;
+        }
+        return self.items[self.items.len() - 1];
+    }
+
+    fn len() -> int {
+        return self.items.len();
+    }
+
+    fn is_empty() -> bool {
+        return self.items.len() == 0;
+    }
+
+    fn clear() {
+        self.items.clear();
+    }
+}
+
+fn deque() -> Deque {
+    return Deque([]);
+}
+
+/// 简单 bag / multiset（str → 计数）
+fn bag() -> Counter {
+    return counter();
 }

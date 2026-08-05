@@ -34,12 +34,15 @@ fn error_class() -> ClassDef {
     ClassDef {
         name: "Error".to_string(),
         parent: None,
+        mixins: vec![],
         fields: vec![ClassField {
             name: "message".to_string(),
             ty: Type::Str,
             default_value: None,
         }],
         methods: vec![],
+        attrs: vec![],
+        impl_traits: vec![],
     }
 }
 
@@ -61,6 +64,7 @@ fn option_enum() -> EnumDef {
             },
         ],
         is_union: false,
+        attrs: vec![],
     }
 }
 
@@ -85,6 +89,7 @@ fn result_enum() -> EnumDef {
             },
         ],
         is_union: false,
+        attrs: vec![],
     }
 }
 

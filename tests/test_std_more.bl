@@ -1,0 +1,111 @@
+// 标准库扩展冒烟：短路径 + 更多模块
+
+import "std/assert" as assert;
+import "std/env" as env;
+import "std/hash" as hash;
+import "std/buffer" as buffer;
+import "std/sort" as sort;
+import "std/uuid" as uuid;
+import "std/encoding" as encoding;
+import "std/bytes" as bytes;
+import "std/json" as json;
+import "std/text" as text;
+import "std/math" as math;
+import "std/random" as random;
+import "std/log" as log;
+import "std/io" as io;
+import "std/fs" as fs;
+import "std/path" as path;
+import "std/time" as time;
+import "std/option" as option;
+import "std/result" as result;
+import "std/collections" as collections;
+
+assert.reset();
+
+// ---- env ----
+assert.greater("os", env.os().len(), 0);
+assert.greater("arch", env.arch().len(), 0);
+assert.is_true("temp", env.temp_dir().len() > 0);
+let tp: str = env.temp_path("bolide_std_test.txt");
+assert.is_true("temp_path", tp.contains("bolide_std_test"));
+
+// ---- hash ----
+let h1: int = hash.fnv1a("bolide");
+let h2: int = hash.fnv1a("bolide");
+assert.equal("fnv_stable", h1, h2);
+assert.not_equal("fnv_diff", hash.fnv1a("a"), hash.fnv1a("b"));
+assert.greater("crc", hash.crc32("x"), 0 - 1);
+
+// ---- buffer ----
+var buf: buffer.Buffer = buffer.new();
+buf.push("hello");
+buf.push(" ");
+buf.push(42);
+assert.contains("buf", buf.to_string(), "hello");
+assert.contains("buf42", buf.to_string(), "42");
+buf.close();
+
+// ---- sort ----
+var nums: list<int> = [3, 1, 4, 1, 5];
+sort.ints(nums);
+assert.equal("sort0", nums[0], 1);
+assert.equal("sort_last", nums[nums.len() - 1], 5);
+
+// ---- uuid ----
+let id: str = uuid.v4();
+assert.equal("uuid_len", id.len(), 36);
+assert.contains("uuid_dash", id, "-");
+
+// ---- encoding ----
+let hexed: str = encoding.hex_encode(bytes.from_string("AB"));
+// hex of "AB" = 4142
+assert.is_true("hex", hexed == "4142" or hexed.lower() == "4142");
+
+// ---- json ----
+let doc: dynamic = json.parse("{\"n\":1,\"s\":\"hi\"}");
+assert.equal("json_type", json.type_of(doc), "object");
+assert.equal("json_n", json.as_int(json.get(doc, "n")), 1);
+assert.equal("json_s", json.as_str(json.get(doc, "s")), "hi");
+let back: str = json.stringify(doc);
+assert.contains("json_round", back, "hi");
+
+// ---- text / math / random / time ----
+assert.equal("snake", text.snake("FooBar"), "foo_bar");
+assert.equal("clamp", math.clamp(100, 0, 10), 10);
+random.seed(1);
+let r: int = random.range(0, 10);
+assert.in_range("rand", r, 0, 9);
+assert.greater("now", time.now_ms(), 0);
+assert.contains("dur", time.format_duration_ms(1500), "s");
+
+// ---- option / result ----
+assert.equal("opt", option.unwrap_or(option.some(9), 0), 9);
+assert.is_true("rok", result.is_ok(result.ok(1)));
+
+// ---- collections queue with dynamic ----
+var q: collections.Queue = collections.queue();
+q.push(1);
+q.push("x");
+assert.equal("qlen", q.len(), 2);
+assert.equal("qpop", int(q.pop()), 1);
+
+// ---- io write + fs read roundtrip ----
+let tmp: str = env.temp_path("bolide_io_roundtrip.txt");
+assert.is_true("write_all", io.write_all(tmp, "std_ok\n"));
+assert.is_true("exists", fs.exists(tmp));
+let body: str = fs.read_text(tmp);
+assert.contains("read_back", body, "std_ok");
+fs.remove_file(tmp);
+
+// ---- path ----
+assert.equal("norm", path.normalize("a/./b/../c"), "a/c");
+
+// ---- log (no crash) ----
+log.set_info();
+log.info("std_more log smoke");
+
+if not assert.finish() {
+    throw Error("std_more failed");
+}
+print("std_more_ok");

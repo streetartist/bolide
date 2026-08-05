@@ -1,5 +1,5 @@
 // Bolide bytes helper library.
-// Usage: import "std/bytes/bytes.bl" as bytes;
+// Usage: import "std/bytes" as bytes;
 
 extern "bolide" {
     fn bolide_bytes_new() -> bytes;

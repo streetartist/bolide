@@ -1,14 +1,18 @@
-// Bolide streaming file I/O.
-// Usage: import "std/io/io.bl" as io;
+// 流式文件写入。
+// import "std/io" as io;
+//
+// 读文件用 std/fs（read_text / read_lines / read_bytes）。
+// 本模块面向大文件追加、日志流水线等写路径。
+// Writer 支持 with：with io.open_write(path) as w { w.line("..."); }
 
 extern "bolide" {
-    fn bolide_io_open_write(path: *char) -> *void;
-    fn bolide_io_open_append(path: *char) -> *void;
-    fn bolide_io_write(writer: *void, text: *char) -> i64;
-    fn bolide_io_write_line(writer: *void, text: *char) -> i64;
-    fn bolide_io_write_bytes(writer: *void, data: bytes) -> i64;
-    fn bolide_io_flush(writer: *void) -> i64;
-    fn bolide_io_close(writer: *void);
+    fn bolide_io_open_write(path: *c_char) -> *c_void;
+    fn bolide_io_open_append(path: *c_char) -> *c_void;
+    fn bolide_io_write(writer: *c_void, text: *c_char) -> i64;
+    fn bolide_io_write_line(writer: *c_void, text: *c_char) -> i64;
+    fn bolide_io_write_bytes(writer: *c_void, data: bytes) -> i64;
+    fn bolide_io_flush(writer: *c_void) -> i64;
+    fn bolide_io_close(writer: *c_void);
 }
 
 class Writer {
@@ -40,6 +44,15 @@ class Writer {
             self.handle = 0;
         }
     }
+
+    /// with 协议
+    fn enter() -> Writer {
+        return self;
+    }
+
+    fn exit() {
+        self.close();
+    }
 }
 
 fn open_write(path: str) -> Writer {
@@ -48,4 +61,24 @@ fn open_write(path: str) -> Writer {
 
 fn open_append(path: str) -> Writer {
     return Writer(bolide_io_open_append(path));
+}
+
+fn write_all(path: str, text: str) -> bool {
+    let w: Writer = open_write(path);
+    if not w.ok() {
+        return false;
+    }
+    let ok: bool = w.write(text);
+    w.close();
+    return ok;
+}
+
+fn append_line(path: str, text: str) -> bool {
+    let w: Writer = open_append(path);
+    if not w.ok() {
+        return false;
+    }
+    let ok: bool = w.line(text);
+    w.close();
+    return ok;
 }

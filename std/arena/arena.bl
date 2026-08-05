@@ -1,11 +1,11 @@
 // Bolide arena helpers.
-// Usage: import "std/arena/arena.bl" as arena;
+// Usage: import "std/arena" as arena;
 //
 // Arena is a lifetime bucket for values that can be represented as dynamic.
 // It does not expose raw allocation pointers; clear/close drops the arena's
 // retained references as a group.
 
-import "std/buffer/buffer.bl" as buffer;
+import "std/buffer" as buffer;
 
 class Arena {
     values: list<dynamic>;

@@ -1,8 +1,8 @@
-// Bolide assertion helper library.
-// Usage: import "std/assert/assert.bl" as assert;
+// 轻量测试断言。
+// import "std/assert" as assert;
 
-let passed: int = 0;
-let failed: int = 0;
+var passed: int = 0;
+var failed: int = 0;
 
 fn reset() {
     passed = 0;
@@ -11,17 +11,17 @@ fn reset() {
 
 fn pass(name: str) {
     passed = passed + 1;
-    print("ok " + name + "\n");
+    print("ok " + name);
 }
 
 fn fail(name: str) {
     failed = failed + 1;
-    print("FAIL " + name + "\n");
+    print("FAIL " + name);
 }
 
 fn fail_with(name: str, detail: str) {
     failed = failed + 1;
-    print("FAIL " + name + " " + detail + "\n");
+    print("FAIL " + name + " " + detail);
 }
 
 fn is_true(name: str, got: bool) {
@@ -72,6 +72,67 @@ fn equal(name: str, got: bool, want: bool) {
     }
 }
 
+/// 浮点近似相等
+fn approx(name: str, got: float, want: float, eps: float) {
+    var d: float = got - want;
+    if d < 0.0 {
+        d = 0.0 - d;
+    }
+    if d <= eps {
+        pass(name);
+    } else {
+        fail_with(name, "got=" + str(got) + " want=" + str(want) + " eps=" + str(eps));
+    }
+}
+
+fn not_equal(name: str, got: int, want: int) {
+    if got != want {
+        pass(name);
+    } else {
+        fail_with(name, "both=" + str(got));
+    }
+}
+
+fn not_equal(name: str, got: str, want: str) {
+    if got != want {
+        pass(name);
+    } else {
+        fail_with(name, "both=\"" + got + "\"");
+    }
+}
+
+fn greater(name: str, got: int, bound: int) {
+    if got > bound {
+        pass(name);
+    } else {
+        fail_with(name, "got=" + str(got) + " not > " + str(bound));
+    }
+}
+
+fn greater_equal(name: str, got: int, bound: int) {
+    if got >= bound {
+        pass(name);
+    } else {
+        fail_with(name, "got=" + str(got) + " not >= " + str(bound));
+    }
+}
+
+fn less(name: str, got: int, bound: int) {
+    if got < bound {
+        pass(name);
+    } else {
+        fail_with(name, "got=" + str(got) + " not < " + str(bound));
+    }
+}
+
+fn in_range(name: str, got: int, low: int, high: int) {
+    if got >= low and got <= high {
+        pass(name);
+    } else {
+        fail_with(name, "got=" + str(got) + " not in [" + str(low) + "," + str(high) + "]");
+    }
+}
+
 fn contains(name: str, text: str, needle: str) {
     if text.contains(needle) {
         pass(name);
@@ -88,6 +149,38 @@ fn not_contains(name: str, text: str, needle: str) {
     }
 }
 
+fn is_empty(name: str, text: str) {
+    if text == "" {
+        pass(name);
+    } else {
+        fail_with(name, "len=" + str(text.len()));
+    }
+}
+
+fn is_empty(name: str, items: list<int>) {
+    if items.len() == 0 {
+        pass(name);
+    } else {
+        fail_with(name, "len=" + str(items.len()));
+    }
+}
+
+fn is_empty(name: str, items: list<str>) {
+    if items.len() == 0 {
+        pass(name);
+    } else {
+        fail_with(name, "len=" + str(items.len()));
+    }
+}
+
+fn len_equal(name: str, items: list<int>, want: int) {
+    equal(name, items.len(), want);
+}
+
+fn len_equal(name: str, items: list<str>, want: int) {
+    equal(name, items.len(), want);
+}
+
 fn passed_count() -> int {
     return passed;
 }
@@ -102,4 +195,10 @@ fn ok() -> bool {
 
 fn summary() -> str {
     return "passed=" + str(passed) + " failed=" + str(failed);
+}
+
+/// 打印摘要；有失败时返回 false
+fn finish() -> bool {
+    print(summary());
+    return ok();
 }

@@ -48,6 +48,40 @@
         "strings": {
             "patterns": [
                 {
+                    "name": "string.interpolated.bolide",
+                    "begin": "\\b[fF]\"",
+                    "end": "\"",
+                    "patterns": [
+                        {
+                            "name": "constant.character.escape.bolide",
+                            "match": "\\\\(?:[\"\\\\nrt0]|x[0-9A-Fa-f]{2}|u\\{[0-9A-Fa-f_]+\\}|.)"
+                        },
+                        {
+                            "name": "constant.character.escape.brace.bolide",
+                            "match": "\\{\\{|\\}\\}"
+                        },
+                        {
+                            "name": "meta.interpolation.bolide",
+                            "begin": "\\{",
+                            "end": "\\}",
+                            "patterns": [
+                                {
+                                    "include": "#types"
+                                },
+                                {
+                                    "include": "#literals"
+                                },
+                                {
+                                    "include": "#keywords"
+                                },
+                                {
+                                    "include": "#operators"
+                                }
+                            ]
+                        }
+                    ]
+                },
+                {
                     "name": "string.quoted.double.bolide",
                     "begin": "\"",
                     "end": "\"",
@@ -206,7 +240,7 @@
                 },
                 {
                     "name": "storage.type.c.bolide",
-                    "match": "\\b(c_int|c_uint|c_float|c_double|c_bool|char|uchar|short|ushort|long|ulong|longlong|ulonglong|i8|u8|i16|u16|i32|u32|i64|u64|size_t|ptrdiff_t|string)\\b"
+                    "match": "\\b(c_void|c_char|c_uchar|c_short|c_ushort|c_int|c_uint|c_long|c_ulong|c_longlong|c_ulonglong|c_float|c_double|c_bool|c_size_t|c_ptrdiff_t|i8|u8|i16|u16|i32|u32|i64|u64|f32|f64|string)\\b"
                 }
             ]
         },

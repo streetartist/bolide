@@ -1,0 +1,54 @@
+// 回归：`dynamic` 不得被解析为 `dyn amic`
+// （kw_dyn 必须有词边界，否则 list<dynamic>/参数 dynamic 全坏）
+
+class Box {
+    items: list<dynamic>;
+
+    fn push(value: dynamic) {
+        self.items.push(value);
+    }
+
+    fn len() -> int {
+        return self.items.len();
+    }
+
+    fn get0() -> dynamic {
+        return self.items[0];
+    }
+}
+
+// 局部 list<dynamic>
+var xs: list<dynamic> = [];
+xs.push(1);
+xs.push("hi");
+xs.push(true);
+if xs.len() != 3 {
+    throw Error("local list dynamic len");
+}
+
+// 类字段 + 方法参数 dynamic
+var b: Box = Box([]);
+b.push(42);
+b.push("ok");
+if b.len() != 2 {
+    throw Error("box len");
+}
+
+// dyn Trait 仍可用（与 dynamic 区分）
+trait Drawable {
+    fn draw();
+}
+class Circle {
+    r: int;
+}
+impl Drawable for Circle {
+    fn draw() {
+        print(self.r);
+    }
+}
+fn paint(d: dyn Drawable) {
+    d.draw();
+}
+paint(Circle(7));
+
+print("dynamic_vs_dyn_ok");

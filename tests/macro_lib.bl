@@ -1,0 +1,9 @@
+// export macros from a library module
+export macro shout($msg:expr) {
+    print($msg);
+    print($msg);
+}
+
+export macro add1($x:expr) quote {
+    ($x) + 1;
+}

@@ -1,0 +1,74 @@
+// 标准宏。
+// import "std/macros" as m;
+//
+// export macro 可在导入后按短名使用（取决于模块导出规则）。
+
+/// 二元 max
+export macro max2($a:expr, $b:expr) quote {
+    (fn() -> int {
+        let __a = $a;
+        let __b = $b;
+        if __a > __b {
+            return __a;
+        }
+        return __b;
+    })();
+}
+
+/// 二元 min
+export macro min2($a:expr, $b:expr) quote {
+    (fn() -> int {
+        let __a = $a;
+        let __b = $b;
+        if __a < __b {
+            return __a;
+        }
+        return __b;
+    })();
+}
+
+export macro add1($x:expr) quote {
+    ($x) + 1;
+}
+
+/// unless：条件为假时执行
+export macro unless($cond:expr, $body:expr) {
+    if not ($cond) {
+        $body;
+    }
+}
+
+/// 调试打印：标签 + 值
+export macro dbg($label:expr, $value:expr) {
+    print(str($label) + " = " + str($value));
+}
+
+/// todo：运行期抛错占位
+export macro todo($msg:expr) {
+    throw Error(str($msg));
+}
+
+/// unreachable
+export macro unreachable() {
+    throw Error("unreachable");
+}
+
+/// 取 Option，None 时用默认值（int）
+export macro unwrap_or_i($opt:expr, $default:expr) quote {
+    (fn() -> int {
+        match $opt {
+            Option.Some(__v) => { return __v; }
+            _ => { return $default; }
+        }
+    })();
+}
+
+/// 取 Result，Err 时用默认值（int）
+export macro unwrap_or_r($res:expr, $default:expr) quote {
+    (fn() -> int {
+        match $res {
+            Result.Ok(__v) => { return __v; }
+            _ => { return $default; }
+        }
+    })();
+}

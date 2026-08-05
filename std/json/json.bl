@@ -1,5 +1,5 @@
 // Bolide JSON helper library.
-// Usage: import "std/json/json.bl" as json;
+// Usage: import "std/json" as json;
 //
 // Two layers:
 //   1. Safe JSON *generation* helpers (escape/quote/object/array/dict_*),

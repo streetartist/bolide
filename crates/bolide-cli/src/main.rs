@@ -4,7 +4,9 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use bolide_compiler::{AotCompiler, JitCompiler};
+use bolide_compiler::{
+    expand_macros_with_ctx, pretty_print, AotCompiler, ExpandContext, JitCompiler,
+};
 use bolide_parser::{parse_source_with_diagnostics, ParseDiagnostic, Program};
 use miette::{LabeledSpan, MietteDiagnostic, NamedSource, Report};
 
@@ -204,6 +206,11 @@ enum Commands {
     Install,
     /// Validate the current package for publishing (registry upload not yet implemented)
     Publish,
+    /// Expand macros and print the resulting Bolide-like AST as text
+    Expand {
+        /// Source file path
+        file: PathBuf,
+    },
 }
 
 fn main() -> miette::Result<()> {
@@ -256,6 +263,9 @@ fn main() -> miette::Result<()> {
         }
         Some(Commands::Publish) => {
             pkg_cmd::publish()?;
+        }
+        Some(Commands::Expand { file }) => {
+            expand_file(&file)?;
         }
         None => {
             run_repl()?;
@@ -671,6 +681,20 @@ fn is_identifier_boundary(source: &str, start: usize, end: usize) -> bool {
         .map(|c| c.is_ascii_alphanumeric() || c == '_')
         .unwrap_or(false);
     !before && !after
+}
+
+fn expand_file(file: &PathBuf) -> miette::Result<()> {
+    let source =
+        fs::read_to_string(file).map_err(|e| miette::miette!("Failed to read file: {}", e))?;
+    let ast = parse_file_source(file, &source)?;
+    let ctx = ExpandContext {
+        file: file.display().to_string(),
+        line: 1,
+    };
+    let expanded = expand_macros_with_ctx(ast, &ctx)
+        .map_err(|e| miette::miette!("Macro expand error: {}", e))?;
+    print!("{}", pretty_print(&expanded));
+    Ok(())
 }
 
 fn run_file(file: &PathBuf) -> miette::Result<()> {

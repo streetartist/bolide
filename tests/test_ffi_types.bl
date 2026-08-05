@@ -1,0 +1,21 @@
+// FFI 类型：仅 c_* / 固定宽度 / func 函数指针
+
+extern "dyn:c" {
+    fn abs(x: c_int) -> c_int;
+    type CStr = *c_char;
+    type Size = c_size_t;
+    type Cmp = func(*c_void, *c_void) -> c_int;
+}
+
+extern "dyn:m" {
+    fn sqrt(x: f64) -> f64;
+    fn cos(x: f64) -> f64;
+}
+
+let a: int = abs(-7);
+print(a);
+let s: float = sqrt(9.0);
+print(s);
+let c: float = cos(0.0);
+print(c);
+print(999);

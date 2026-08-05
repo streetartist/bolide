@@ -1,17 +1,17 @@
-import "std/math/math.bl" as math;
+import "std/math" as math;
 
 // ============================================================
 // std/vec3/vec3.bl — 3D 向量标准库
 // SIMD 加速: dot/length/distance/normalize/cross/reflect/refract
-// 用法: import "std/vec3/vec3.bl" as vec3;
+// 用法: import "std/vec3" as vec3;
 //       let v: (float,float,float) = (1,2,3);
 //       let d: float = vec3.dot(v, (4,5,6));
 // ============================================================
 
 extern "bolide" {
-    fn bolide_vec3_dot(ax: c_double, ay: c_double, az: c_double, bx: c_double, by: c_double, bz: c_double) -> c_double;
-    fn bolide_vec3_len(ax: c_double, ay: c_double, az: c_double) -> c_double;
-    fn bolide_vec3_dist(ax: c_double, ay: c_double, az: c_double, bx: c_double, by: c_double, bz: c_double) -> c_double;
+    fn bolide_vec3_dot(ax: f64, ay: f64, az: f64, bx: f64, by: f64, bz: f64) -> f64;
+    fn bolide_vec3_len(ax: f64, ay: f64, az: f64) -> f64;
+    fn bolide_vec3_dist(ax: f64, ay: f64, az: f64, bx: f64, by: f64, bz: f64) -> f64;
 }
 
 // ============================================================

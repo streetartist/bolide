@@ -1,5 +1,5 @@
 // Bolide lightweight HTML helper library.
-// Usage: import "std/html/html.bl" as html;
+// Usage: import "std/html" as html;
 
 class Element {
     tag: str;

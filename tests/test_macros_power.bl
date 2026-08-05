@@ -1,0 +1,81 @@
+// === 完整宏能力：体重复 / comptime fn / 类 attr / derive 扩展 ===
+
+// 1) 模板体 $(...)* + 模式重复
+macro sum_all($x:expr $(, $rest:expr)*) quote {
+    (fn() -> int {
+        var __s = $x;
+        $(
+            __s = __s + $rest;
+        )*
+        return __s;
+    })();
+}
+print(sum_all!(1, 2, 3, 4));
+
+// 2) $n:lit 次数重复
+macro print_n($n:lit, $msg:expr) {
+    $(
+        print($msg);
+    )*
+}
+print_n!(3, "tick");
+
+// 3) comptime fn
+comptime fn fact(n: int) -> int {
+    if n <= 1 {
+        return 1;
+    }
+    return n * fact(n - 1);
+}
+
+comptime fn double(x: int) -> int {
+    return x * 2;
+}
+
+let F: int = comptime { fact(5); };
+let D: int = comptime { double(21); };
+print(F);
+print(D);
+
+// 4) @getters + @derive(Clone, Default)
+@derive(Debug, Eq, Clone, Default)
+@getters
+class Vec2 {
+    x: int;
+    y: int;
+}
+
+let a: Vec2 = Vec2(1, 2);
+print(a.debug());
+print(a.get_x());
+print(a.get_y());
+let b: Vec2 = a.clone();
+print(b.eq(a));
+let z: Vec2 = Vec2_default();
+print(z.debug());
+
+// 5) 用户类 attr macro + 字段循环生成方法
+// 方法名可用 $field；带前缀用 get_$field 形式（templated_ident）
+attr macro dump_fields($item:item) {
+    $(
+        fn $field() {
+            print(self.$field);
+        }
+    )*
+}
+
+@dump_fields
+class Pair {
+    left: int;
+    right: int;
+}
+
+let p: Pair = Pair(10, 20);
+p.left();
+p.right();
+
+// 6) export 回归
+import "macro_lib.bl" as lib;
+print(lib.add1!(99));
+
+print("macros_power_ok");

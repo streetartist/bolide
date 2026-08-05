@@ -10,8 +10,10 @@ VS Code extension for the Bolide programming language.
   - concurrency: `async`, `await`, `await scope`, `spawn`, `spawn all`, `spawn select`, `pool`, channel `send`/`recv`, `select`
   - ownership and lifetimes: `owned`, `ref`, `from`, `weak`, `unowned`
   - types: `int`, `float`, `bool`, `str`, `bytes`, `bigint`, `decimal`, `dynamic`, `ptr`, `Future<T>`, `Task<T>`, `list<T>`, `dict<K,V>`, `channel<T>`, `func(...) -> T`
-  - FFI C ABI types: `c_int`, `c_double`, `*char`, `*void`, `size_t`, fixed-width integer types, and `fn(...) -> ...` C function pointers
-  - literals: strings, booleans, `none`, decimal/bigint suffixes, hex integers, and numeric separators
+  - FFI C ABI types: `c_int`, `c_char`, `c_void`, `c_size_t`, `f32`/`f64`, `*c_char`, `*c_void`, fixed-width integers, and `func(...) -> ...` C function pointers
+  - literals: strings, f-strings (`f"...{expr}..."`), booleans, `none`, decimal/bigint suffixes, hex integers, and numeric separators
+  - bindings: tuple/struct destructuring (`let (a, b) = t`, `let Point { x, y } = p`), discard `_`
+  - control: `if let` / `while let` enum patterns
   - operators: `->`, `=>`, compound assignment, bitwise operators, spread `*`/`**`
 - Context-aware highlighting for `spawn all`: `all` is not treated as a global keyword, so calls like `database.all("posts")` remain normal method calls.
 - Editor language configuration for comments, bracket matching, indentation, word selection, and block-comment continuation.

@@ -1,20 +1,20 @@
 // Bolide growable text buffer.
-// Usage: import "std/buffer/buffer.bl" as buffer;
+// Usage: import "std/buffer" as buffer;
 
 extern "bolide" {
-    fn bolide_buffer_new() -> *void;
-    fn bolide_buffer_with_capacity(capacity: i64) -> *void;
-    fn bolide_buffer_free(buffer: *void);
-    fn bolide_buffer_len(buffer: *void) -> i64;
-    fn bolide_buffer_capacity(buffer: *void) -> i64;
-    fn bolide_buffer_reserve(buffer: *void, additional: i64);
-    fn bolide_buffer_clear(buffer: *void);
-    fn bolide_buffer_push(buffer: *void, value: *char);
-    fn bolide_buffer_push_line(buffer: *void, value: *char);
-    fn bolide_buffer_push_int(buffer: *void, value: i64);
-    fn bolide_buffer_push_float(buffer: *void, value: c_double);
-    fn bolide_buffer_push_bool(buffer: *void, value: i64);
-    fn bolide_buffer_to_string(buffer: *void) -> str;
+    fn bolide_buffer_new() -> *c_void;
+    fn bolide_buffer_with_capacity(capacity: i64) -> *c_void;
+    fn bolide_buffer_free(buffer: *c_void);
+    fn bolide_buffer_len(buffer: *c_void) -> i64;
+    fn bolide_buffer_capacity(buffer: *c_void) -> i64;
+    fn bolide_buffer_reserve(buffer: *c_void, additional: i64);
+    fn bolide_buffer_clear(buffer: *c_void);
+    fn bolide_buffer_push(buffer: *c_void, value: *c_char);
+    fn bolide_buffer_push_line(buffer: *c_void, value: *c_char);
+    fn bolide_buffer_push_int(buffer: *c_void, value: i64);
+    fn bolide_buffer_push_float(buffer: *c_void, value: f64);
+    fn bolide_buffer_push_bool(buffer: *c_void, value: i64);
+    fn bolide_buffer_to_string(buffer: *c_void) -> str;
 }
 
 class Buffer {

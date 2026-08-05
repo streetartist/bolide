@@ -1,0 +1,104 @@
+// trait + 安全多继承（主父类 + 无字段 mixin）
+
+trait Drawable {
+    fn draw();
+    fn label() -> str {
+        return "shape";
+    }
+}
+
+trait Countable {
+    fn count() -> int;
+}
+
+class Circle {
+    r: int;
+}
+
+impl Drawable for Circle {
+    fn draw() {
+        print(self.r);
+    }
+}
+
+impl Countable for Circle {
+    fn count() -> int {
+        return self.r;
+    }
+}
+
+let c: Circle = Circle(7);
+c.draw();
+print(c.label());  // default from trait
+print(c.count());
+
+// ---- mixin 多继承：Primary 有字段，Mixin 无字段 ----
+// mixin 方法体不要依赖「将来才组合进来」的其它类型方法；
+// 需要组合能力时在最终类里写，或只调本 mixin / 主父类链上已有方法。
+
+class Entity {
+    id: int;
+
+    fn get_id() -> int {
+        return self.id;
+    }
+}
+
+class Named {
+    fn greet() {
+        print("hello");
+    }
+
+    fn tag() -> int {
+        return 100;
+    }
+}
+
+class Serializable {
+    fn magic() -> int {
+        return 42;
+    }
+}
+
+// Player: Entity 布局 + Named/Serializable 行为
+class Player: Entity, Named, Serializable {
+    score: int;
+
+    fn total() -> int {
+        return self.get_id() + self.score;
+    }
+
+    fn dump() -> int {
+        return self.get_id() + self.tag() + self.magic();
+    }
+}
+
+let p: Player = Player(1, 40);
+print(p.get_id());
+p.greet();
+print(p.tag());
+print(p.magic());
+print(p.dump());
+print(p.total());
+
+// trait 默认 + 覆盖
+trait Greet {
+    fn hi() -> str {
+        return "hi";
+    }
+}
+
+class Bot {
+    n: int;
+}
+
+impl Greet for Bot {
+    fn hi() -> str {
+        return "bot";
+    }
+}
+
+let b: Bot = Bot(0);
+print(b.hi());
+
+print("trait_mixin_ok");

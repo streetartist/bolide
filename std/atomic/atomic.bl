@@ -1,22 +1,22 @@
 // Bolide atomic primitives.
-// Usage: import "std/atomic/atomic.bl" as atomic;
+// Usage: import "std/atomic" as atomic;
 
 extern "bolide" {
-    fn bolide_atomic_int_new(value: i64) -> *void;
-    fn bolide_atomic_int_free(value: *void);
-    fn bolide_atomic_int_get(value: *void) -> i64;
-    fn bolide_atomic_int_set(value: *void, next: i64);
-    fn bolide_atomic_int_swap(value: *void, next: i64) -> i64;
-    fn bolide_atomic_int_add(value: *void, delta: i64) -> i64;
-    fn bolide_atomic_int_sub(value: *void, delta: i64) -> i64;
-    fn bolide_atomic_int_compare_exchange(value: *void, current: i64, next: i64) -> i64;
+    fn bolide_atomic_int_new(value: i64) -> *c_void;
+    fn bolide_atomic_int_free(value: *c_void);
+    fn bolide_atomic_int_get(value: *c_void) -> i64;
+    fn bolide_atomic_int_set(value: *c_void, next: i64);
+    fn bolide_atomic_int_swap(value: *c_void, next: i64) -> i64;
+    fn bolide_atomic_int_add(value: *c_void, delta: i64) -> i64;
+    fn bolide_atomic_int_sub(value: *c_void, delta: i64) -> i64;
+    fn bolide_atomic_int_compare_exchange(value: *c_void, current: i64, next: i64) -> i64;
 
-    fn bolide_atomic_bool_new(value: i64) -> *void;
-    fn bolide_atomic_bool_free(value: *void);
-    fn bolide_atomic_bool_get(value: *void) -> i64;
-    fn bolide_atomic_bool_set(value: *void, next: i64);
-    fn bolide_atomic_bool_swap(value: *void, next: i64) -> i64;
-    fn bolide_atomic_bool_compare_exchange(value: *void, current: i64, next: i64) -> i64;
+    fn bolide_atomic_bool_new(value: i64) -> *c_void;
+    fn bolide_atomic_bool_free(value: *c_void);
+    fn bolide_atomic_bool_get(value: *c_void) -> i64;
+    fn bolide_atomic_bool_set(value: *c_void, next: i64);
+    fn bolide_atomic_bool_swap(value: *c_void, next: i64) -> i64;
+    fn bolide_atomic_bool_compare_exchange(value: *c_void, current: i64, next: i64) -> i64;
 }
 
 class AtomicInt {

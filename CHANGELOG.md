@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.14.1
+
+### 语言与编译器
+
+- **宏系统**：声明式宏、属性宏、`@derive` 扩展；展开在 monomorph 之前。
+- **装饰器与 `with`**：Python 风格装饰器链与上下文管理器（enter/exit）。
+- **生成器**：`yield` 懒状态机（`next() -> Option`），支持 `elif` / `for` / `break` / `continue` / 类方法生成器。
+- **运算符重载**：二元算术/比较/位运算、一元 `-`/`not`/`!`、右操作数反射（`__radd__` 等）。
+- **Trait 与多继承安全子集**：`trait` / `impl Trait for Class`、默认方法、泛型约束 `T: Trait`、`dyn Trait` 运行时多态（class-tag 分派）；主父类 + 无字段 mixin 多继承。
+- **协议自动满足**：类上有 `__add__`/`next` 等即视为 `Add`/`Iterator` 等 bound。
+- **解析修复**：`dyn` 词边界，避免 `dynamic` 被拆成 `dyn amic`；`!` 一元与 `not` 并存。
+- **方法分派修复**：类方法 tag 分派仅限静态类型及其子类，避免跨类重载 ABI 错位；重载按实参类型匹配，禁止类型失败后仅按参数个数回退。
+- **import**：`std/fs` 等短路径自动解析到 `std/fs/fs.bl`（兼容旧长路径）。
+
+### 标准库
+
+- 新模块：`option`、`result`、`traits`、`macros`、`prelude`；`std/README.md` 索引。
+- 加厚：`time`/`iter`/`text`/`assert`/`collections`/`env`/`encoding`/`sort`/`uuid`/`math`/`random`/`log`/`io`/`path`/`process`。
+- 优化：`cli`（`parse_or_exit`、粘连短选项、`help_flag`）、`gui`（`run_default`/`progress_pct` 等）、`web`/`http`（便捷响应工厂、`listen`/`cors_open`、客户端 timeout 等）。
+- 文档：`docs/standard-library.md` 与 README 标准库章节更新为短路径。
+
+### 测试
+
+- 新增宏/装饰器/生成器/trait/运算符/`dynamic` vs `dyn`/标准库核心与 cli-web 等回归用例。
+
 ## 0.13.7
 
 - 修复 `list + list` 在 JIT/AOT 两个后端中的 lowering 漏洞：此前会错误落到整数 `iadd`，导致 `rows = rows + [row]` 这类嵌套列表构造在运行期静默退出。

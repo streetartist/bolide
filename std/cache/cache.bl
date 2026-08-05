@@ -1,7 +1,7 @@
 // Bolide in-memory cache helper library.
-// Usage: import "std/cache/cache.bl" as cache;
+// Usage: import "std/cache" as cache;
 
-import "std/time/time.bl" as time;
+import "std/time" as time;
 
 class Cache {
     values: dict<str, dynamic>;

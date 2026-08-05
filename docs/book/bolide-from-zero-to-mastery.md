@@ -1059,7 +1059,7 @@ Bolide 可以调用 C，也可以编译成 C 可链接的静态库。
 
 ```bolide
 extern "lib:c" {
-    fn puts(s: *char) -> c_int;
+    fn puts(s: *c_char) -> c_int;
 }
 ```
 
@@ -1067,11 +1067,17 @@ JIT 开发期通常使用动态库：
 
 ```bolide
 extern "dyn:c" {
-    fn puts(s: *char) -> c_int;
+    fn puts(s: *c_char) -> c_int;
+    // C 函数指针类型：func(...)（fn 只用于声明/字面量）
+    // fn qsort(..., cmp: func(*c_void, *c_void) -> c_int);
+}
+
+extern "dyn:m" {
+    fn sqrt(x: f64) -> f64;
 }
 ```
 
-AOT 链接期可使用 `lib:name`。
+AOT 链接期可使用 `lib:name`。固定宽度优先 `i32`/`f64`；平台相关写 `c_int`/`c_size_t`。不透明指针写 `*c_void`。
 
 ### export fn
 

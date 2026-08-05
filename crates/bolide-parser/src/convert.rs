@@ -7,6 +7,14 @@ use pest::iterators::Pair;
 use pest::iterators::Pairs;
 use pest::Parser;
 use std::fmt;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+fn fresh_temp(prefix: &str) -> String {
+    let id = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("__{}_{}", prefix, id)
+}
 
 /// Structured parse diagnostic with byte-based source location.
 #[derive(Debug, Clone)]
@@ -107,9 +115,7 @@ fn parse_pairs(pairs: Pairs<Rule>) -> Result<Program, String> {
             for inner in pair.into_inner() {
                 match inner.as_rule() {
                     Rule::statement => {
-                        if let Some(stmt) = parse_statement(inner)? {
-                            statements.push(stmt);
-                        }
+                        statements.extend(parse_statement(inner)?);
                     }
                     Rule::EOI => {}
                     _ => {}
@@ -158,52 +164,74 @@ fn friendly_rule_name(rule: &Rule) -> Option<&'static str> {
     }
 }
 
-fn parse_statement(pair: Pair<Rule>) -> Result<Option<Statement>, String> {
+fn parse_statement(pair: Pair<Rule>) -> Result<Vec<Statement>, String> {
     match pair.as_rule() {
         Rule::statement => {
-            // statement 规则包含具体的语句类型
             let inner = pair.into_inner().next().unwrap();
             parse_statement(inner)
         }
-        Rule::func_def => Ok(Some(Statement::FuncDef(parse_func_def(pair)?))),
-        Rule::enum_def => Ok(Some(Statement::EnumDef(parse_enum_def(pair)?))),
-        Rule::var_decl => Ok(Some(Statement::VarDecl(parse_var_decl(pair)?))),
-        Rule::assign_stmt => Ok(Some(Statement::Assign(parse_assign(pair)?))),
-        Rule::if_stmt => Ok(Some(Statement::If(parse_if_stmt(pair)?))),
-        Rule::while_stmt => Ok(Some(Statement::While(parse_while_stmt(pair)?))),
-        Rule::for_stmt => Ok(Some(Statement::For(parse_for_stmt(pair)?))),
-        Rule::pool_stmt => Ok(Some(Statement::Pool(parse_pool_stmt(pair)?))),
-        Rule::select_stmt => Ok(Some(Statement::Select(parse_select_stmt(pair)?))),
-        Rule::await_scope_stmt => Ok(Some(Statement::AwaitScope(parse_await_scope_stmt(pair)?))),
-        Rule::spawn_select_stmt => Ok(Some(Statement::SpawnSelect(parse_spawn_select_stmt(pair)?))),
-        Rule::break_stmt => Ok(Some(Statement::Break)),
-        Rule::continue_stmt => Ok(Some(Statement::Continue)),
-        Rule::throw_stmt => Ok(Some(Statement::Throw(parse_expr(
+        Rule::func_def => Ok(vec![Statement::FuncDef(parse_func_def(pair)?)]),
+        // Desugar immediately so the rest of the compiler only sees a normal function.
+        Rule::impl_from_block => Ok(vec![Statement::FuncDef(parse_impl_from_as_func(pair)?)]),
+        Rule::trait_def => Ok(vec![Statement::TraitDef(parse_trait_def(pair)?)]),
+        Rule::impl_trait_block => Ok(vec![Statement::TraitImpl(parse_trait_impl(pair)?)]),
+        Rule::macro_def => Ok(vec![Statement::MacroDef(parse_macro_def(pair)?)]),
+        Rule::attr_macro_def => Ok(vec![Statement::AttrMacroDef(parse_attr_macro_def(pair)?)]),
+        Rule::comptime_fn => Ok(vec![Statement::ComptimeFn(parse_comptime_fn(pair)?)]),
+        Rule::macro_rep_stmt => Ok(vec![parse_macro_rep_stmt(pair)?]),
+        Rule::enum_def => Ok(vec![Statement::EnumDef(parse_enum_def(pair)?)]),
+        Rule::var_decl => parse_var_decl(pair),
+        Rule::assign_stmt => Ok(vec![parse_assign(pair)?]),
+        Rule::if_stmt => Ok(vec![parse_if_stmt(pair)?]),
+        Rule::while_stmt => Ok(vec![parse_while_stmt(pair)?]),
+        Rule::for_stmt => Ok(vec![Statement::For(parse_for_stmt(pair)?)]),
+        Rule::pool_stmt => Ok(vec![Statement::Pool(parse_pool_stmt(pair)?)]),
+        Rule::select_stmt => Ok(vec![Statement::Select(parse_select_stmt(pair)?)]),
+        Rule::await_scope_stmt => Ok(vec![Statement::AwaitScope(parse_await_scope_stmt(pair)?)]),
+        Rule::spawn_select_stmt => Ok(vec![Statement::SpawnSelect(parse_spawn_select_stmt(pair)?)]),
+        Rule::break_stmt => Ok(vec![Statement::Break]),
+        Rule::continue_stmt => Ok(vec![Statement::Continue]),
+        Rule::throw_stmt => Ok(vec![Statement::Throw(parse_expr(
             pair.into_inner().next().unwrap(),
-        )?))),
-        Rule::try_stmt => Ok(Some(Statement::Try(parse_try_stmt(pair)?))),
-        Rule::match_stmt => Ok(Some(Statement::Match(parse_match_stmt(pair)?))),
-        Rule::return_stmt => Ok(Some(parse_return_stmt(pair)?)),
-        Rule::expr_stmt => Ok(Some(Statement::Expr(parse_expr_stmt(pair)?))),
-        Rule::import_stmt => Ok(Some(Statement::Import(parse_import(pair)?))),
-        Rule::class_def => Ok(Some(Statement::ClassDef(parse_class_def(pair)?))),
-        Rule::value_def => Ok(Some(Statement::ValueDef(parse_value_def(pair)?))),
-        Rule::extern_block => Ok(Some(Statement::ExternBlock(parse_extern_block(pair)?))),
-        Rule::EOI => Ok(None),
-        _ => Ok(None),
+        )?)]),
+        Rule::yield_stmt => Ok(vec![Statement::Yield(parse_expr(
+            pair.into_inner()
+                .next()
+                .ok_or("yield requires an expression")?,
+        )?)]),
+        Rule::try_stmt => Ok(vec![Statement::Try(parse_try_stmt(pair)?)]),
+        Rule::with_stmt => Ok(vec![Statement::With(parse_with_stmt(pair)?)]),
+        Rule::match_stmt => Ok(vec![Statement::Match(parse_match_stmt(pair)?)]),
+        Rule::return_stmt => Ok(vec![parse_return_stmt(pair)?]),
+        Rule::expr_stmt => Ok(vec![Statement::Expr(parse_expr_stmt(pair)?)]),
+        Rule::import_stmt => Ok(vec![Statement::Import(parse_import(pair)?)]),
+        Rule::class_def => Ok(vec![Statement::ClassDef(parse_class_def(pair)?)]),
+        Rule::value_def => Ok(vec![Statement::ValueDef(parse_value_def(pair)?)]),
+        Rule::extern_block => Ok(vec![Statement::ExternBlock(parse_extern_block(pair)?)]),
+        Rule::EOI => Ok(vec![]),
+        _ => Ok(vec![]),
     }
 }
 
-fn parse_assign(pair: Pair<Rule>) -> Result<Assign, String> {
+fn parse_assign(pair: Pair<Rule>) -> Result<Statement, String> {
     let mut inner = pair.into_inner();
     let target_pair = inner.next().unwrap();
-    let target = parse_assign_target(target_pair)?;
     let op_pair = inner.next().unwrap();
-    let op_str = op_pair.as_str().to_string();
+    let op_str = op_pair.as_str();
     let rhs = parse_expr(inner.next().unwrap())?;
 
+    // `_ = expr;` → 仅求值并丢弃（副作用保留）
+    if target_pair.as_rule() == Rule::discard_bind || target_pair.as_str() == "_" {
+        if op_str != "=" {
+            return Err("discard assignment `_` only supports `=`".to_string());
+        }
+        return Ok(Statement::Expr(rhs));
+    }
+
+    let target = parse_assign_target(target_pair)?;
+
     // 复合赋值脱糖: a += b → a = a + b
-    let value = match op_str.as_str() {
+    let value = match op_str {
         "=" => rhs,
         "+=" => Expr::BinOp(Box::new(target.clone()), BinOp::Add, Box::new(rhs)),
         "-=" => Expr::BinOp(Box::new(target.clone()), BinOp::Sub, Box::new(rhs)),
@@ -212,7 +240,7 @@ fn parse_assign(pair: Pair<Rule>) -> Result<Assign, String> {
         "%=" => Expr::BinOp(Box::new(target.clone()), BinOp::Mod, Box::new(rhs)),
         other => return Err(format!("Unknown assignment operator: {}", other)),
     };
-    Ok(Assign { target, value })
+    Ok(Statement::Assign(Assign { target, value }))
 }
 
 fn parse_assign_target(pair: Pair<Rule>) -> Result<Expr, String> {
@@ -236,7 +264,7 @@ fn parse_assign_target(pair: Pair<Rule>) -> Result<Expr, String> {
     for item in inner {
         match item.as_rule() {
             Rule::member => {
-                let member_name = item.into_inner().next().unwrap().as_str().to_string();
+                let member_name = parse_member_name(item)?;
                 expr = Expr::Member(Box::new(expr), member_name);
             }
             Rule::index => {
@@ -250,15 +278,245 @@ fn parse_assign_target(pair: Pair<Rule>) -> Result<Expr, String> {
     Ok(expr)
 }
 
+/// `.ident` 或宏模板 `. $field` → 成员名字符串（splice 存 capture 键）
+fn parse_member_name(pair: Pair<Rule>) -> Result<String, String> {
+    let inner = pair.into_inner().next().ok_or("member missing name")?;
+    match inner.as_rule() {
+        Rule::ident => Ok(inner.as_str().to_string()),
+        Rule::splice => match parse_splice(inner)? {
+            Expr::Splice { name, .. } => Ok(name),
+            _ => Err("invalid member splice".into()),
+        },
+        _ => Ok(inner.as_str().to_string()),
+    }
+}
+
+fn parse_trait_def(pair: Pair<Rule>) -> Result<TraitDef, String> {
+    let mut attrs = Vec::new();
+    let mut name = None;
+    let mut supers = Vec::new();
+    let mut methods = Vec::new();
+
+    for item in pair.into_inner() {
+        match item.as_rule() {
+            Rule::attr => attrs.push(parse_attr(item)?),
+            Rule::ident if name.is_none() => name = Some(item.as_str().to_string()),
+            Rule::trait_supers => {
+                for p in item.into_inner() {
+                    if p.as_rule() == Rule::ident {
+                        supers.push(p.as_str().to_string());
+                    }
+                }
+            }
+            Rule::trait_member => {
+                let inner = item.into_inner().next().unwrap();
+                match inner.as_rule() {
+                    Rule::trait_method_default => {
+                        let func = parse_func_def(inner.into_inner().next().unwrap())?;
+                        methods.push(TraitMethod {
+                            func,
+                            has_default: true,
+                        });
+                    }
+                    Rule::trait_method_req => {
+                        let mut it = inner.into_inner();
+                        let mname = it.next().unwrap().as_str().to_string();
+                        let mut params = Vec::new();
+                        let mut return_type = None;
+                        for p in it {
+                            match p.as_rule() {
+                                Rule::param_list => {
+                                    for param_pair in p.into_inner() {
+                                        params.push(parse_param(param_pair)?);
+                                    }
+                                    validate_params(&params)?;
+                                }
+                                Rule::type_expr => return_type = Some(parse_type(p)?),
+                                _ => {}
+                            }
+                        }
+                        methods.push(TraitMethod {
+                            func: FuncDef {
+                                name: mname,
+                                is_async: false,
+                                is_export: false,
+                                is_inline: false,
+                                type_params: vec![],
+                                trait_bounds: vec![],
+                                params,
+                                throws: vec![],
+                                return_type,
+                                lifetime_deps: None,
+                                body: vec![],
+                                def_span_start: None,
+                                attrs: vec![],
+                            },
+                            has_default: false,
+                        });
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+    }
+
+    Ok(TraitDef {
+        name: name.ok_or("trait is missing name")?,
+        supers,
+        methods,
+        attrs,
+    })
+}
+
+fn parse_trait_impl(pair: Pair<Rule>) -> Result<TraitImpl, String> {
+    let mut idents = Vec::new();
+    let mut methods = Vec::new();
+    for item in pair.into_inner() {
+        match item.as_rule() {
+            Rule::ident => idents.push(item.as_str().to_string()),
+            Rule::method_def => {
+                methods.push(parse_func_def(item.into_inner().next().unwrap())?);
+            }
+            _ => {}
+        }
+    }
+    if idents.len() < 2 {
+        return Err("impl Trait for Type requires trait name and type name".into());
+    }
+    Ok(TraitImpl {
+        trait_name: idents[0].clone(),
+        type_name: idents[1].clone(),
+        methods,
+    })
+}
+
+/// `impl From<Src> for Dst { fn from(e: Src) -> Dst { ... } }`
+/// → `fn __from_Src_for_Dst(e: Src) -> Dst { ... }`
+fn parse_impl_from_as_func(pair: Pair<Rule>) -> Result<FuncDef, String> {
+    let span_start = pair.as_span().start();
+    let mut types: Vec<Type> = Vec::new();
+    let mut param_name = None;
+    let mut body = None;
+    for item in pair.into_inner() {
+        match item.as_rule() {
+            Rule::type_expr => types.push(parse_type(item)?),
+            Rule::ident => {
+                if param_name.is_none() {
+                    param_name = Some(item.as_str().to_string());
+                }
+            }
+            Rule::block => body = Some(parse_block(item)?),
+            _ => {}
+        }
+    }
+    if types.len() < 3 {
+        return Err("impl From requires source, target, and parameter types".to_string());
+    }
+    let from_ty = types[0].clone();
+    let for_ty = types[1].clone();
+    let param_ty = types[2].clone();
+    let return_ty = if types.len() >= 4 {
+        types[3].clone()
+    } else {
+        for_ty.clone()
+    };
+
+    let src = type_name_key(&from_ty)?;
+    let dst = type_name_key(&for_ty)?;
+    if !types_name_eq(&param_ty, &from_ty) {
+        return Err(format!(
+            "impl From<{}> for {}: parameter type must be {}",
+            src, dst, src
+        ));
+    }
+    if !types_name_eq(&return_ty, &for_ty) {
+        return Err(format!(
+            "impl From<{}> for {}: return type must be {}",
+            src, dst, dst
+        ));
+    }
+
+    Ok(FuncDef {
+        name: from_converter_name(&src, &dst),
+        is_async: false,
+        is_export: false,
+        is_inline: false,
+        type_params: Vec::new(),
+        trait_bounds: Vec::new(),
+        params: vec![Param {
+            name: param_name.ok_or("impl From missing parameter name")?,
+            ty: param_ty,
+            mode: ParamMode::Borrow,
+            default_value: None,
+            is_variadic: false,
+            is_kw_variadic: false,
+        }],
+        throws: Vec::new(),
+        return_type: Some(return_ty),
+        lifetime_deps: None,
+        body: body.ok_or("impl From missing body")?,
+        def_span_start: Some(span_start),
+        attrs: Vec::new(),
+    })
+}
+
+fn type_name_key(ty: &Type) -> Result<String, String> {
+    match ty {
+        Type::Custom(name) => Ok(name.clone()),
+        Type::Adt(name, args) if args.is_empty() => Ok(name.clone()),
+        other => Err(format!(
+            "impl From only supports named class/error types, got {:?}",
+            other
+        )),
+    }
+}
+
+fn types_name_eq(a: &Type, b: &Type) -> bool {
+    match (a, b) {
+        (Type::Custom(x), Type::Custom(y)) => x == y,
+        (Type::Adt(x, xa), Type::Adt(y, ya)) => x == y && xa == ya,
+        _ => a == b,
+    }
+}
+
+/// Shared naming with the compiler for `?` error conversion lookup.
+pub fn from_converter_name(src: &str, dst: &str) -> String {
+    format!(
+        "__from_{}_for_{}",
+        sanitize_type_name(src),
+        sanitize_type_name(dst)
+    )
+}
+
+fn sanitize_type_name(name: &str) -> String {
+    name.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
 fn parse_func_def(pair: Pair<Rule>) -> Result<FuncDef, String> {
     let span_start = pair.as_span().start();
     let mut inner = pair.into_inner();
     let mut is_async = false;
     let mut is_export = false;
     let mut is_inline = false;
+    let mut attrs = Vec::new();
 
-    // 前缀修饰符可按任意顺序出现：export? async? inline? fn
+    // 前缀：attr* export? async? inline? 然后函数名 ident
     let mut first = inner.next().unwrap();
+    while first.as_rule() == Rule::attr {
+        attrs.push(parse_attr(first)?);
+        first = inner
+            .next()
+            .ok_or("function definition is missing name after attributes")?;
+    }
     if first.as_rule() == Rule::export_keyword {
         is_export = true;
         first = inner.next().unwrap();
@@ -271,9 +529,34 @@ fn parse_func_def(pair: Pair<Rule>) -> Result<FuncDef, String> {
         is_inline = true;
         first = inner.next().unwrap();
     }
-    let name = first.as_str().to_string();
+    // fn_name: splice | templated_ident | ident
+    let name = match first.as_rule() {
+        Rule::fn_name => {
+            let raw = first.as_str().to_string();
+            let mut parts = first.into_inner();
+            if let Some(leaf) = parts.next() {
+                match leaf.as_rule() {
+                    Rule::splice => match parse_splice(leaf)? {
+                        Expr::Splice { name, .. } => name,
+                        _ => raw,
+                    },
+                    Rule::templated_ident | Rule::ident => leaf.as_str().to_string(),
+                    _ => raw,
+                }
+            } else {
+                raw
+            }
+        }
+        Rule::ident | Rule::templated_ident => first.as_str().to_string(),
+        Rule::splice => match parse_splice(first)? {
+            Expr::Splice { name, .. } => name,
+            _ => unreachable!(),
+        },
+        _ => first.as_str().to_string(),
+    };
 
     let mut type_params = Vec::new();
+    let mut trait_bounds = Vec::new();
     let mut params = Vec::new();
     let mut throws = Vec::new();
     let mut return_type = None;
@@ -283,7 +566,9 @@ fn parse_func_def(pair: Pair<Rule>) -> Result<FuncDef, String> {
     for item in inner {
         match item.as_rule() {
             Rule::generic_param_list => {
-                type_params = parse_generic_param_list(item);
+                let (tps, bounds) = parse_generic_param_list(item);
+                type_params = tps;
+                trait_bounds = bounds;
             }
             Rule::param_list => {
                 for param_pair in item.into_inner() {
@@ -332,13 +617,453 @@ fn parse_func_def(pair: Pair<Rule>) -> Result<FuncDef, String> {
         is_export,
         is_inline,
         type_params,
+        trait_bounds,
         params,
         throws,
         return_type,
         lifetime_deps,
         body,
         def_span_start: Some(span_start),
+        attrs,
     })
+}
+
+fn parse_attr(pair: Pair<Rule>) -> Result<Attribute, String> {
+    let mut inner = pair.into_inner();
+    let name = inner
+        .next()
+        .ok_or("attribute is missing name")?
+        .as_str()
+        .to_string();
+    let mut args = Vec::new();
+    if let Some(list) = inner.next() {
+        if list.as_rule() == Rule::attr_arg_list {
+            for arg in list.into_inner() {
+                if arg.as_rule() != Rule::attr_arg {
+                    continue;
+                }
+                let leaf = arg.into_inner().next().ok_or("empty attribute argument")?;
+                match leaf.as_rule() {
+                    Rule::ident => args.push(AttrArg::Ident(leaf.as_str().to_string())),
+                    Rule::string_lit => {
+                        let s = leaf.as_str();
+                        args.push(AttrArg::Str(unescape_string(&s[1..s.len() - 1])));
+                    }
+                    Rule::int_lit => {
+                        let s = leaf.as_str().replace('_', "");
+                        let n: i64 = if s.starts_with("0x") || s.starts_with("0X") {
+                            i64::from_str_radix(&s[2..], 16)
+                                .map_err(|e| format!("Invalid hex in attr: {}", e))?
+                        } else {
+                            s.parse()
+                                .map_err(|e| format!("Invalid int in attr: {}", e))?
+                        };
+                        args.push(AttrArg::Int(n));
+                    }
+                    other => {
+                        return Err(format!("unsupported attribute argument: {:?}", other));
+                    }
+                }
+            }
+        }
+    }
+    Ok(Attribute { name, args })
+}
+
+fn parse_macro_def(pair: Pair<Rule>) -> Result<MacroDef, String> {
+    let span_start = pair.as_span().start();
+    let mut inner = pair.into_inner();
+    let mut is_export = false;
+    let mut first = inner.next().ok_or("macro definition is empty")?;
+    if first.as_rule() == Rule::export_keyword {
+        is_export = true;
+        first = inner.next().ok_or("macro definition is missing name")?;
+    }
+    let name = first.as_str().to_string();
+    let mut arms = Vec::new();
+    for item in inner {
+        match item.as_rule() {
+            Rule::macro_single => {
+                let mut parts = item.into_inner();
+                let pattern = parse_macro_pattern(parts.next().ok_or("macro missing pattern")?)?;
+                let body = parse_macro_body_block(parts.next().ok_or("macro missing body")?)?;
+                arms.push(MacroArm { pattern, body });
+            }
+            Rule::macro_arm => {
+                let mut parts = item.into_inner();
+                let pattern = parse_macro_pattern(parts.next().ok_or("macro arm missing pattern")?)?;
+                let body = parse_macro_body_block(parts.next().ok_or("macro arm missing body")?)?;
+                arms.push(MacroArm { pattern, body });
+            }
+            _ => {}
+        }
+    }
+    if arms.is_empty() {
+        return Err(format!("macro '{}' has no arms", name));
+    }
+    Ok(MacroDef {
+        name,
+        is_export,
+        arms,
+        def_span_start: Some(span_start),
+    })
+}
+
+fn parse_attr_macro_def(pair: Pair<Rule>) -> Result<AttrMacroDef, String> {
+    let span_start = pair.as_span().start();
+    let mut inner = pair.into_inner();
+    let mut is_export = false;
+    let mut first = inner.next().ok_or("attr macro definition is empty")?;
+    if first.as_rule() == Rule::export_keyword {
+        is_export = true;
+        first = inner.next().ok_or("attr macro is missing name")?;
+    }
+    let name = first.as_str().to_string();
+    let pattern = parse_macro_pattern(inner.next().ok_or("attr macro missing pattern")?)?;
+    let body = parse_macro_body_block(inner.next().ok_or("attr macro missing body")?)?;
+    Ok(AttrMacroDef {
+        name,
+        is_export,
+        pattern,
+        body,
+        def_span_start: Some(span_start),
+    })
+}
+
+fn parse_macro_rep_stmt(pair: Pair<Rule>) -> Result<Statement, String> {
+    let mut body = Vec::new();
+    let mut min = 0usize;
+    for item in pair.into_inner() {
+        match item.as_rule() {
+            Rule::macro_rep_op => {
+                min = if item.as_str() == "+" { 1 } else { 0 };
+            }
+            Rule::statement => body.extend(parse_statement(item)?),
+            other => {
+                // pest may surface the inner rule directly
+                body.extend(parse_statement(item).map_err(|e| {
+                    format!("invalid statement in macro rep ($()): {:?} / {}", other, e)
+                })?);
+            }
+        }
+    }
+    if body.is_empty() {
+        return Err("macro repetition `$(...)*` body is empty".to_string());
+    }
+    Ok(Statement::MacroRep { body, min })
+}
+
+fn parse_comptime_fn(pair: Pair<Rule>) -> Result<ComptimeFn, String> {
+    let span_start = pair.as_span().start();
+    let mut inner = pair.into_inner();
+    let name = inner
+        .next()
+        .ok_or("comptime fn missing name")?
+        .as_str()
+        .to_string();
+    let mut params = Vec::new();
+    let mut return_type = None;
+    let mut body = Vec::new();
+    for item in inner {
+        match item.as_rule() {
+            Rule::comptime_param_list => {
+                for p in item.into_inner() {
+                    if p.as_rule() != Rule::comptime_param {
+                        continue;
+                    }
+                    let mut parts = p.into_inner();
+                    let pname = parts.next().unwrap().as_str().to_string();
+                    let pty = parse_type(parts.next().unwrap())?;
+                    params.push((pname, pty));
+                }
+            }
+            Rule::type_expr => return_type = Some(parse_type(item)?),
+            Rule::block => body = parse_block(item)?,
+            _ => {}
+        }
+    }
+    Ok(ComptimeFn {
+        name,
+        params,
+        return_type,
+        body,
+        def_span_start: Some(span_start),
+    })
+}
+
+fn parse_macro_body_block(pair: Pair<Rule>) -> Result<Vec<Statement>, String> {
+    match pair.as_rule() {
+        Rule::macro_body_block => {
+            let inner = pair.into_inner().next().ok_or("empty macro body")?;
+            parse_macro_body_block(inner)
+        }
+        Rule::quote_block => {
+            let block = pair
+                .into_inner()
+                .next()
+                .ok_or("quote block missing body")?;
+            parse_block(block)
+        }
+        Rule::block => parse_block(pair),
+        other => Err(format!("unexpected macro body: {:?}", other)),
+    }
+}
+
+fn parse_macro_pattern(pair: Pair<Rule>) -> Result<MacroPattern, String> {
+    let mut pieces = Vec::new();
+    for item in pair.into_inner() {
+        match item.as_rule() {
+            Rule::macro_pat_list => {
+                pieces.extend(parse_macro_pat_list(item)?);
+            }
+            _ => {}
+        }
+    }
+    Ok(MacroPattern { pieces })
+}
+
+fn parse_macro_pat_list(pair: Pair<Rule>) -> Result<Vec<PatPiece>, String> {
+    let mut pieces = Vec::new();
+    for item in pair.into_inner() {
+        match item.as_rule() {
+            Rule::macro_pat_piece => {
+                pieces.push(parse_macro_pat_piece(item)?);
+            }
+            // flattened pieces may appear directly
+            Rule::macro_rep | Rule::macro_sep_bind | Rule::macro_eq_bind | Rule::macro_bind => {
+                pieces.push(parse_macro_pat_piece_inner(item)?);
+            }
+            _ => {}
+        }
+    }
+    Ok(pieces)
+}
+
+fn parse_macro_pat_piece(pair: Pair<Rule>) -> Result<PatPiece, String> {
+    let inner = pair.into_inner().next().ok_or("empty macro pattern piece")?;
+    parse_macro_pat_piece_inner(inner)
+}
+
+fn parse_macro_pat_piece_inner(pair: Pair<Rule>) -> Result<PatPiece, String> {
+    match pair.as_rule() {
+        Rule::macro_rep => parse_macro_rep(pair),
+        Rule::macro_sep_bind => {
+            // "," ~ (macro_rep | macro_eq_bind | macro_bind)
+            let mut inner = pair.into_inner();
+            // skip implicit comma token if present as silent; pest may not expose it
+            let bind = inner
+                .find(|p| {
+                    matches!(
+                        p.as_rule(),
+                        Rule::macro_rep | Rule::macro_eq_bind | Rule::macro_bind | Rule::dollar_bind
+                    )
+                })
+                .ok_or("macro pattern: expected bind after comma")?;
+            parse_macro_pat_piece_inner(bind)
+        }
+        Rule::macro_eq_bind => {
+            let mut inner = pair.into_inner();
+            let left = parse_dollar_bind(inner.next().ok_or("eq bind missing left")?)?;
+            let right = parse_dollar_bind(inner.next().ok_or("eq bind missing right")?)?;
+            let (ident_name, _) = left;
+            let (expr_name, expr_kind) = right;
+            Ok(PatPiece::EqBind {
+                ident_name,
+                expr_name,
+                expr_kind: expr_kind.unwrap_or(FragKind::Expr),
+            })
+        }
+        Rule::macro_bind | Rule::dollar_bind => {
+            let (name, kind) = if pair.as_rule() == Rule::macro_bind {
+                parse_dollar_bind(pair.into_inner().next().ok_or("empty bind")?)?
+            } else {
+                parse_dollar_bind(pair)?
+            };
+            Ok(PatPiece::Bind {
+                name,
+                kind: kind.unwrap_or(FragKind::Expr),
+            })
+        }
+        other => Err(format!("unexpected macro pattern piece: {:?}", other)),
+    }
+}
+
+fn parse_macro_rep(pair: Pair<Rule>) -> Result<PatPiece, String> {
+    let mut leading_sep = None;
+    let mut inter_sep = None;
+    let mut pieces = Vec::new();
+    let mut min = 0usize;
+    for item in pair.into_inner() {
+        match item.as_rule() {
+            Rule::macro_rep_inner => {
+                let s = item.as_str();
+                if s.starts_with(',') {
+                    leading_sep = Some(',');
+                } else if s.starts_with(';') {
+                    leading_sep = Some(';');
+                }
+                for sub in item.into_inner() {
+                    match sub.as_rule() {
+                        Rule::macro_bind | Rule::dollar_bind => {
+                            let (name, kind) = if sub.as_rule() == Rule::macro_bind {
+                                parse_dollar_bind(sub.into_inner().next().unwrap())?
+                            } else {
+                                parse_dollar_bind(sub)?
+                            };
+                            pieces.push(PatPiece::Bind {
+                                name,
+                                kind: kind.unwrap_or(FragKind::Expr),
+                            });
+                        }
+                        _ => {}
+                    }
+                }
+                // inter_sep when multiple binds without leading-only form
+                if leading_sep.is_none() && pieces.len() > 1 {
+                    if s.contains(',') {
+                        inter_sep = Some(',');
+                    } else if s.contains(';') {
+                        inter_sep = Some(';');
+                    }
+                }
+            }
+            Rule::macro_rep_op => {
+                min = if item.as_str() == "+" { 1 } else { 0 };
+            }
+            _ => {}
+        }
+    }
+    if pieces.is_empty() {
+        return Err("empty macro repetition pattern".to_string());
+    }
+    Ok(PatPiece::Rep {
+        pieces,
+        leading_sep,
+        inter_sep,
+        min,
+    })
+}
+
+fn parse_dollar_bind(pair: Pair<Rule>) -> Result<(String, Option<FragKind>), String> {
+    let mut inner = pair.into_inner();
+    let name = inner
+        .next()
+        .ok_or("dollar bind missing name")?
+        .as_str()
+        .to_string();
+    let kind = inner
+        .next()
+        .filter(|p| p.as_rule() == Rule::frag_spec)
+        .map(|p| parse_frag_spec(p.as_str()))
+        .transpose()?;
+    Ok((name, kind))
+}
+
+fn parse_frag_spec(s: &str) -> Result<FragKind, String> {
+    match s {
+        "expr" => Ok(FragKind::Expr),
+        "ident" => Ok(FragKind::Ident),
+        "lit" => Ok(FragKind::Lit),
+        "block" => Ok(FragKind::Block),
+        "type" => Ok(FragKind::Type),
+        "path" => Ok(FragKind::Path),
+        "stmt" => Ok(FragKind::Stmt),
+        "tt" => Ok(FragKind::Tt),
+        "item" => Ok(FragKind::Item),
+        other => Err(format!("unknown fragment specifier: {}", other)),
+    }
+}
+
+fn parse_macro_invoke(pair: Pair<Rule>) -> Result<MacroInvoke, String> {
+    let span_start = pair.as_span().start();
+    let mut inner = pair.into_inner();
+    let path_pair = inner.next().ok_or("macro invoke missing path")?;
+    let path: Vec<String> = path_pair
+        .into_inner()
+        .filter(|p| p.as_rule() == Rule::ident)
+        .map(|p| p.as_str().to_string())
+        .collect();
+    if path.is_empty() {
+        return Err("macro invoke path is empty".to_string());
+    }
+    let args_pair = inner.next().ok_or("macro invoke missing arguments")?;
+    let args = match args_pair.as_rule() {
+        Rule::macro_paren_args => {
+            let mut list = Vec::new();
+            for item in args_pair.into_inner() {
+                if item.as_rule() == Rule::macro_arg_list {
+                    for arg in item.into_inner() {
+                        list.push(parse_macro_arg(arg)?);
+                    }
+                } else if item.as_rule() == Rule::macro_arg {
+                    list.push(parse_macro_arg(item)?);
+                }
+            }
+            MacroArgs::Paren(list)
+        }
+        Rule::macro_brace_args => {
+            let mut stmts = Vec::new();
+            for item in args_pair.into_inner() {
+                if item.as_rule() == Rule::statement {
+                    stmts.extend(parse_statement(item)?);
+                }
+            }
+            MacroArgs::Brace(stmts)
+        }
+        other => {
+            return Err(format!("unexpected macro args form: {:?}", other));
+        }
+    };
+    Ok(MacroInvoke {
+        path,
+        args,
+        span_start: Some(span_start),
+    })
+}
+
+fn parse_macro_arg(pair: Pair<Rule>) -> Result<MacroArg, String> {
+    let inner = if pair.as_rule() == Rule::macro_arg {
+        pair.into_inner().next().ok_or("empty macro argument")?
+    } else {
+        pair
+    };
+    match inner.as_rule() {
+        Rule::macro_named_arg => {
+            let mut parts = inner.into_inner();
+            let name = parts
+                .next()
+                .ok_or("named macro arg missing name")?
+                .as_str()
+                .to_string();
+            let value = parse_expr(parts.next().ok_or("named macro arg missing value")?)?;
+            Ok(MacroArg::Named { name, value })
+        }
+        _ => Ok(MacroArg::Expr(parse_expr(inner)?)),
+    }
+}
+
+fn parse_splice(pair: Pair<Rule>) -> Result<Expr, String> {
+    let mut meta = None;
+    let mut name = String::new();
+    for item in pair.into_inner() {
+        match item.as_rule() {
+            Rule::ident => name = item.as_str().to_string(),
+            Rule::splice_meta => {
+                meta = Some(match item.as_str() {
+                    "stringify" => SpliceMeta::Stringify,
+                    "src" => SpliceMeta::Src,
+                    "line" => SpliceMeta::Line,
+                    "file" => SpliceMeta::File,
+                    _ => SpliceMeta::Src,
+                });
+            }
+            _ => {}
+        }
+    }
+    if name.is_empty() {
+        return Err("splice missing name".to_string());
+    }
+    Ok(Expr::Splice { name, meta })
 }
 
 fn parse_param(pair: Pair<Rule>) -> Result<Param, String> {
@@ -425,11 +1150,40 @@ fn parse_param(pair: Pair<Rule>) -> Result<Param, String> {
     })
 }
 
-fn parse_generic_param_list(pair: Pair<Rule>) -> Vec<String> {
-    pair.into_inner()
-        .filter(|p| p.as_rule() == Rule::ident)
-        .map(|p| p.as_str().to_string())
-        .collect()
+/// 返回 (type_params, trait_bounds)
+fn parse_generic_param_list(pair: Pair<Rule>) -> (Vec<String>, Vec<(String, Vec<String>)>) {
+    let mut type_params = Vec::new();
+    let mut trait_bounds = Vec::new();
+    for gp in pair.into_inner() {
+        if gp.as_rule() != Rule::generic_param {
+            continue;
+        }
+        let mut name = None;
+        let mut bounds = Vec::new();
+        for part in gp.into_inner() {
+            match part.as_rule() {
+                Rule::ident if name.is_none() => name = Some(part.as_str().to_string()),
+                Rule::trait_bound_list => {
+                    for b in part.into_inner() {
+                        if b.as_rule() == Rule::ident {
+                            bounds.push(b.as_str().to_string());
+                        }
+                    }
+                }
+                Rule::ident => {
+                    // 不应到这里；bound 在 trait_bound_list 内
+                }
+                _ => {}
+            }
+        }
+        if let Some(n) = name {
+            if !bounds.is_empty() {
+                trait_bounds.push((n.clone(), bounds));
+            }
+            type_params.push(n);
+        }
+    }
+    (type_params, trait_bounds)
 }
 
 fn rewrite_type_generics(ty: &mut Type, type_params: &[String]) {
@@ -505,20 +1259,20 @@ fn validate_params(params: &[Param]) -> Result<(), String> {
 }
 
 fn parse_enum_def(pair: Pair<Rule>) -> Result<EnumDef, String> {
-    let is_union = pair.as_str().trim_start().starts_with("union");
+    let is_union = pair.as_str().contains("union");
     let mut inner = pair.into_inner();
-    let name = inner
-        .next()
-        .ok_or("enum/union is missing name")?
-        .as_str()
-        .to_string();
+    let mut attrs = Vec::new();
+    let mut name = None;
     let mut type_params = Vec::new();
     let mut variants = Vec::new();
 
     for item in inner {
         match item.as_rule() {
+            Rule::attr => attrs.push(parse_attr(item)?),
+            Rule::ident if name.is_none() => name = Some(item.as_str().to_string()),
             Rule::generic_param_list => {
-                type_params = parse_generic_param_list(item);
+                let (tps, _) = parse_generic_param_list(item);
+                type_params = tps;
             }
             Rule::enum_variant => {
                 variants.push(parse_enum_variant(item, &type_params)?);
@@ -527,6 +1281,7 @@ fn parse_enum_def(pair: Pair<Rule>) -> Result<EnumDef, String> {
         }
     }
 
+    let name = name.ok_or("enum/union is missing name")?;
     if variants.is_empty() {
         return Err(format!(
             "enum/union '{}' must declare at least one variant",
@@ -539,6 +1294,7 @@ fn parse_enum_def(pair: Pair<Rule>) -> Result<EnumDef, String> {
         type_params,
         variants,
         is_union,
+        attrs,
     })
 }
 
@@ -610,6 +1366,17 @@ fn parse_type(pair: Pair<Rule>) -> Result<Type, String> {
 
     // 解析基础类型
     let base_type = match type_pair.as_rule() {
+        Rule::dyn_type => {
+            // dyn Trait → Type::Dyn("Trait")
+            // 子节点可能含 kw_dyn + ident；取最后一个非关键字节点为 trait 名
+            let name = type_pair
+                .into_inner()
+                .filter(|p| p.as_rule() != Rule::kw_dyn)
+                .map(|p| p.as_str().trim().to_string())
+                .find(|s| !s.is_empty())
+                .ok_or_else(|| "dyn type requires a trait name".to_string())?;
+            Type::Dyn(name)
+        }
         Rule::tuple_type => {
             let types: Result<Vec<_>, _> = type_pair.into_inner().map(parse_type).collect();
             Type::Tuple(types?)
@@ -738,50 +1505,158 @@ fn parse_type(pair: Pair<Rule>) -> Result<Type, String> {
 fn parse_block(pair: Pair<Rule>) -> Result<Vec<Statement>, String> {
     let mut stmts = Vec::new();
     for item in pair.into_inner() {
-        if let Some(stmt) = parse_statement(item)? {
-            stmts.push(stmt);
-        }
+        stmts.extend(parse_statement(item)?);
     }
     Ok(stmts)
 }
 
-fn parse_var_decl(pair: Pair<Rule>) -> Result<VarDecl, String> {
+fn parse_var_decl(pair: Pair<Rule>) -> Result<Vec<Statement>, String> {
     let mut inner = pair.into_inner();
     let kind = inner.next().unwrap();
     let mutable = kind.as_str() == "var";
-    let name = inner.next().unwrap().as_str().to_string();
+    let head = inner.next().ok_or("var decl missing binding")?;
 
-    let mut ty = None;
-    let mut value = None;
-
-    for item in inner {
-        match item.as_rule() {
-            Rule::type_expr => {
-                ty = Some(parse_type(item)?);
-            }
-            Rule::expr => {
-                value = Some(parse_expr(item)?);
-            }
-            _ => {}
+    match head.as_rule() {
+        Rule::destructure_binding => {
+            let value = parse_expr(inner.next().ok_or("destructure requires initializer")?)?;
+            expand_destructure(mutable, head, value)
         }
+        Rule::ident | Rule::splice => {
+            let (name, name_is_splice) = if head.as_rule() == Rule::splice {
+                match parse_splice(head)? {
+                    Expr::Splice { name, .. } => (name, true),
+                    _ => return Err("internal: splice did not parse as splice".to_string()),
+                }
+            } else {
+                (head.as_str().to_string(), false)
+            };
+            let mut ty = None;
+            let mut value = None;
+            for item in inner {
+                match item.as_rule() {
+                    Rule::type_expr => ty = Some(parse_type(item)?),
+                    Rule::expr => value = Some(parse_expr(item)?),
+                    _ => {}
+                }
+            }
+            Ok(vec![Statement::VarDecl(VarDecl {
+                name,
+                mutable,
+                ty,
+                value,
+                name_is_splice,
+            })])
+        }
+        other => Err(format!("Unexpected var binding: {:?}", other)),
     }
-
-    Ok(VarDecl {
-        name,
-        mutable,
-        ty,
-        value,
-    })
 }
 
-fn parse_if_stmt(pair: Pair<Rule>) -> Result<IfStmt, String> {
+/// Expand `let (a, b) = e` / `let Point { x, y } = p` into temp + bindings.
+fn expand_destructure(
+    mutable: bool,
+    binding: Pair<Rule>,
+    value: Expr,
+) -> Result<Vec<Statement>, String> {
+    let temp = fresh_temp("dt");
+    let mut stmts = vec![Statement::VarDecl(VarDecl {
+        name: temp.clone(),
+        mutable: false,
+        ty: None,
+        value: Some(value),
+        name_is_splice: false,
+    })];
+
+    let binding_inner = binding.into_inner().next().unwrap();
+    match binding_inner.as_rule() {
+        Rule::tuple_binding => {
+            let elems: Vec<_> = binding_inner.into_inner().collect();
+            for (i, elem) in elems.into_iter().enumerate() {
+                // binding_elem may be a wrapper or the inner discard/ident rule
+                let leaf = if elem.as_rule() == Rule::binding_elem {
+                    elem.into_inner().next().ok_or("empty binding element")?
+                } else {
+                    elem
+                };
+                let name = match leaf.as_rule() {
+                    Rule::discard_bind => None,
+                    Rule::ident => {
+                        let n = leaf.as_str();
+                        if n == "_" {
+                            None
+                        } else {
+                            Some(n.to_string())
+                        }
+                    }
+                    other => {
+                        return Err(format!("invalid tuple binding element: {:?}", other));
+                    }
+                };
+                if let Some(name) = name {
+                    let rhs = Expr::Index(
+                        Box::new(Expr::Ident(temp.clone())),
+                        Box::new(Expr::Int(i as i64)),
+                    );
+                    stmts.push(Statement::VarDecl(VarDecl {
+                        name,
+                        mutable,
+                        ty: None,
+                        value: Some(rhs),
+                        name_is_splice: false,
+                    }));
+                }
+            }
+        }
+        Rule::struct_binding => {
+            let mut fields = binding_inner.into_inner();
+            let _type_name = fields.next().ok_or("struct binding missing type name")?;
+            // Type name is documentation/optional check only for now.
+            for field in fields {
+                if field.as_rule() != Rule::struct_field_bind {
+                    continue;
+                }
+                let mut parts = field.into_inner();
+                let field_name = parts.next().unwrap().as_str().to_string();
+                let bind_name = if let Some(alias) = parts.next() {
+                    match alias.as_rule() {
+                        Rule::discard_bind => None,
+                        Rule::ident => {
+                            let n = alias.as_str();
+                            if n == "_" {
+                                None
+                            } else {
+                                Some(n.to_string())
+                            }
+                        }
+                        _ => Some(field_name.clone()),
+                    }
+                } else {
+                    Some(field_name.clone())
+                };
+                if let Some(name) = bind_name {
+                    let rhs = Expr::Member(Box::new(Expr::Ident(temp.clone())), field_name);
+                    stmts.push(Statement::VarDecl(VarDecl {
+                        name,
+                        mutable,
+                        ty: None,
+                        value: Some(rhs),
+                        name_is_splice: false,
+                    }));
+                }
+            }
+        }
+        other => return Err(format!("Unknown destructure binding: {:?}", other)),
+    }
+
+    Ok(stmts)
+}
+
+fn parse_if_stmt(pair: Pair<Rule>) -> Result<Statement, String> {
     let mut inner = pair.into_inner();
-    let condition = parse_expr(inner.next().unwrap())?;
+    let head = inner.next().unwrap();
     let then_body = parse_block(inner.next().unwrap())?;
 
     let mut elif_branches = Vec::new();
     let mut else_body = None;
-
     for item in inner {
         match item.as_rule() {
             Rule::elif_branch => {
@@ -797,19 +1672,125 @@ fn parse_if_stmt(pair: Pair<Rule>) -> Result<IfStmt, String> {
         }
     }
 
-    Ok(IfStmt {
+    if head.as_rule() == Rule::if_let_clause {
+        // if let P = e { then } [elif...] [else...]
+        // → match e { P => then, _ => { if elif... else... } }
+        let mut let_inner = head.into_inner();
+        // kw_let is silent? It's a rule that produces a pair - skip non-pattern
+        let mut pattern = None;
+        let mut scrutinee = None;
+        for item in let_inner.by_ref() {
+            match item.as_rule() {
+                Rule::pattern => pattern = Some(parse_pattern(item)?),
+                Rule::expr => scrutinee = Some(parse_expr(item)?),
+                // kw_let
+                _ => {}
+            }
+        }
+        let pattern = pattern.ok_or("if let missing pattern")?;
+        let scrutinee = scrutinee.ok_or("if let missing expression")?;
+        validate_if_let_pattern(&pattern)?;
+
+        let fallback = build_elif_else_chain(elif_branches, else_body);
+        return Ok(Statement::Match(MatchStmt {
+            expr: scrutinee,
+            arms: vec![
+                MatchArm {
+                    pattern,
+                    body: then_body,
+                },
+                MatchArm {
+                    pattern: Pattern::Wildcard,
+                    body: fallback,
+                },
+            ],
+        }));
+    }
+
+    let condition = parse_expr(head)?;
+    Ok(Statement::If(IfStmt {
         condition,
         then_body,
         elif_branches,
         else_body,
-    })
+    }))
 }
 
-fn parse_while_stmt(pair: Pair<Rule>) -> Result<WhileStmt, String> {
+fn build_elif_else_chain(
+    elif_branches: Vec<(Expr, Vec<Statement>)>,
+    else_body: Option<Vec<Statement>>,
+) -> Vec<Statement> {
+    if elif_branches.is_empty() {
+        return else_body.unwrap_or_default();
+    }
+    let mut iter = elif_branches.into_iter();
+    let (first_cond, first_body) = iter.next().unwrap();
+    let rest: Vec<_> = iter.collect();
+    vec![Statement::If(IfStmt {
+        condition: first_cond,
+        then_body: first_body,
+        elif_branches: rest,
+        else_body,
+    })]
+}
+
+fn validate_if_let_pattern(pattern: &Pattern) -> Result<(), String> {
+    match pattern {
+        Pattern::Variant { .. } | Pattern::Wildcard | Pattern::Bind(_) => Ok(()),
+        Pattern::Tuple(_) => Err(
+            "`if let` / `while let` does not support tuple patterns yet; use `let (a, b) = expr;` instead"
+                .to_string(),
+        ),
+        Pattern::None | Pattern::Int(_) | Pattern::Bool(_) | Pattern::String(_) => Err(
+            "`if let` / `while let` currently supports enum/union patterns (e.g. `Option.Some(v)`)"
+                .to_string(),
+        ),
+    }
+}
+
+fn parse_while_stmt(pair: Pair<Rule>) -> Result<Statement, String> {
     let mut inner = pair.into_inner();
-    let condition = parse_expr(inner.next().unwrap())?;
+    let head = inner.next().unwrap();
     let body = parse_block(inner.next().unwrap())?;
-    Ok(WhileStmt { condition, body })
+
+    if head.as_rule() == Rule::while_let_clause {
+        // while let P = e { body } → while true { match e { P => body, _ => break } }
+        let mut let_inner = head.into_inner();
+        let mut pattern = None;
+        let mut scrutinee = None;
+        for item in let_inner.by_ref() {
+            match item.as_rule() {
+                Rule::pattern => pattern = Some(parse_pattern(item)?),
+                Rule::expr => scrutinee = Some(parse_expr(item)?),
+                _ => {}
+            }
+        }
+        let pattern = pattern.ok_or("while let missing pattern")?;
+        let scrutinee = scrutinee.ok_or("while let missing expression")?;
+        validate_if_let_pattern(&pattern)?;
+
+        let match_stmt = Statement::Match(MatchStmt {
+            expr: scrutinee,
+            arms: vec![
+                MatchArm {
+                    pattern,
+                    body,
+                },
+                MatchArm {
+                    pattern: Pattern::Wildcard,
+                    body: vec![Statement::Break],
+                },
+            ],
+        });
+
+        return Ok(Statement::While(WhileStmt {
+            condition: Expr::Bool(true),
+            body: vec![match_stmt],
+        }));
+    }
+
+    let condition = parse_expr(head)?;
+    Ok(Statement::While(WhileStmt { condition, body }))
 }
 
 fn parse_for_stmt(pair: Pair<Rule>) -> Result<ForStmt, String> {
@@ -959,6 +1940,43 @@ fn parse_try_stmt(pair: Pair<Rule>) -> Result<TryStmt, String> {
     })
 }
 
+fn parse_with_stmt(pair: Pair<Rule>) -> Result<WithStmt, String> {
+    let mut items = Vec::new();
+    let mut body = Vec::new();
+    for part in pair.into_inner() {
+        match part.as_rule() {
+            Rule::with_item_list => {
+                for it in part.into_inner() {
+                    if it.as_rule() != Rule::with_item {
+                        continue;
+                    }
+                    let mut inner = it.into_inner();
+                    let expr = parse_expr(inner.next().ok_or("with item missing expr")?)?;
+                    let binding = inner
+                        .find(|p| p.as_rule() == Rule::ident)
+                        .map(|p| p.as_str().to_string());
+                    items.push(WithItem { expr, binding });
+                }
+            }
+            Rule::block => body = parse_block(part)?,
+            Rule::with_item => {
+                // 单 item 时可能直接露出
+                let mut inner = part.into_inner();
+                let expr = parse_expr(inner.next().ok_or("with item missing expr")?)?;
+                let binding = inner
+                    .find(|p| p.as_rule() == Rule::ident)
+                    .map(|p| p.as_str().to_string());
+                items.push(WithItem { expr, binding });
+            }
+            _ => {}
+        }
+    }
+    if items.is_empty() {
+        return Err("with statement requires at least one context manager".to_string());
+    }
+    Ok(WithStmt { items, body })
+}
+
 fn parse_match_stmt(pair: Pair<Rule>) -> Result<MatchStmt, String> {
     let mut inner = pair.into_inner();
     let expr = parse_expr(inner.next().ok_or("match is missing expression")?)?;
@@ -1001,6 +2019,18 @@ fn parse_pattern(pair: Pair<Rule>) -> Result<Pattern, String> {
         }
         Rule::bool_pattern => Ok(Pattern::Bool(inner.as_str() == "true")),
         Rule::none_pattern => Ok(Pattern::None),
+        Rule::tuple_pattern => {
+            let mut fields = Vec::new();
+            for item in inner.into_inner() {
+                if item.as_rule() == Rule::pattern {
+                    fields.push(parse_pattern(item)?);
+                }
+            }
+            if fields.len() < 2 {
+                return Err("tuple pattern needs at least two elements".to_string());
+            }
+            Ok(Pattern::Tuple(fields))
+        }
         Rule::variant_pattern => {
             let mut enum_name = None;
             let mut variant = None;
@@ -1065,17 +2095,31 @@ fn parse_import(pair: Pair<Rule>) -> Result<Import, String> {
 
 fn parse_class_def(pair: Pair<Rule>) -> Result<ClassDef, String> {
     let mut inner = pair.into_inner();
-    let name = inner.next().unwrap().as_str().to_string();
-
+    let mut attrs = Vec::new();
+    let mut name = None;
     let mut parent = None;
+    let mut mixins = Vec::new();
     let mut fields = Vec::new();
     let mut methods = Vec::new();
 
     for item in inner {
         match item.as_rule() {
+            Rule::attr => attrs.push(parse_attr(item)?),
             Rule::ident => {
-                // 父类名
-                parent = Some(item.as_str().to_string());
+                if name.is_none() {
+                    name = Some(item.as_str().to_string());
+                }
+            }
+            Rule::class_parents => {
+                let mut parents: Vec<String> = item
+                    .into_inner()
+                    .filter(|p| p.as_rule() == Rule::ident)
+                    .map(|p| p.as_str().to_string())
+                    .collect();
+                if !parents.is_empty() {
+                    parent = Some(parents.remove(0));
+                    mixins = parents;
+                }
             }
             Rule::class_body => {
                 for member in item.into_inner() {
@@ -1105,28 +2149,43 @@ fn parse_class_def(pair: Pair<Rule>) -> Result<ClassDef, String> {
     }
 
     Ok(ClassDef {
-        name,
+        name: name.ok_or("class is missing name")?,
         parent,
+        mixins,
         fields,
         methods,
+        impl_traits: vec![],
+        attrs,
     })
 }
 
 fn parse_value_def(pair: Pair<Rule>) -> Result<ValueDef, String> {
     let mut inner = pair.into_inner();
-    let name = inner.next().unwrap().as_str().to_string();
-
+    let mut attrs = Vec::new();
+    let mut name = None;
     let mut fields = Vec::new();
-    if let Some(fields_pair) = inner.next() {
-        for field in fields_pair.into_inner() {
-            let mut f = field.into_inner();
-            let fname = f.next().unwrap().as_str().to_string();
-            let fty = parse_type(f.next().unwrap())?;
-            fields.push(ValueField { name: fname, ty: fty });
+
+    for item in inner {
+        match item.as_rule() {
+            Rule::attr => attrs.push(parse_attr(item)?),
+            Rule::ident if name.is_none() => name = Some(item.as_str().to_string()),
+            Rule::value_fields => {
+                for field in item.into_inner() {
+                    let mut f = field.into_inner();
+                    let fname = f.next().unwrap().as_str().to_string();
+                    let fty = parse_type(f.next().unwrap())?;
+                    fields.push(ValueField { name: fname, ty: fty });
+                }
+            }
+            _ => {}
         }
     }
 
-    Ok(ValueDef { name, fields })
+    Ok(ValueDef {
+        name: name.ok_or("value type is missing name")?,
+        fields,
+        attrs,
+    })
 }
 
 // 表达式解析
@@ -1245,7 +2304,7 @@ fn parse_unary_expr(pair: Pair<Rule>) -> Result<Expr, String> {
     if first.as_rule() == Rule::unary_op {
         let op = match first.as_str() {
             "-" => UnaryOp::Neg,
-            "not" => UnaryOp::Not,
+            "!" | "not" => UnaryOp::Not,
             _ => return Err(format!("Unknown unary op: {}", first.as_str())),
         };
         let expr = parse_postfix_expr(inner.next().unwrap())?;
@@ -1298,7 +2357,7 @@ fn parse_postfix_expr(pair: Pair<Rule>) -> Result<Expr, String> {
                 }
             }
             Rule::member => {
-                let name = item.into_inner().next().unwrap().as_str().to_string();
+                let name = parse_member_name(item)?;
                 expr = Expr::Member(Box::new(expr), name);
             }
             Rule::propagate_op => {
@@ -1450,6 +2509,128 @@ fn parse_closure_expr(pair: Pair<Rule>) -> Result<Expr, String> {
     })
 }
 
+/// f"a{x}b" → "a" + str(x) + "b"
+///
+/// The whole `f"..."` is matched atomically; this function scans the content
+/// for `{expr}` interpolations (with `{{` / `}}` escapes) and re-parses each
+/// expression fragment.
+fn parse_f_string(pair: Pair<Rule>) -> Result<Expr, String> {
+    let raw = pair.as_str();
+    // raw is f"..." or F"..."
+    if raw.len() < 3 || !(raw.starts_with("f\"") || raw.starts_with("F\"")) || !raw.ends_with('"')
+    {
+        return Err(format!("invalid f-string literal: {}", raw));
+    }
+    let content = &raw[2..raw.len() - 1];
+    let pieces = split_f_string_content(content)?;
+    if pieces.is_empty() {
+        return Ok(Expr::String(String::new()));
+    }
+    let mut iter = pieces.into_iter();
+    let mut acc = iter.next().unwrap();
+    for piece in iter {
+        acc = Expr::BinOp(Box::new(acc), BinOp::Add, Box::new(piece));
+    }
+    Ok(acc)
+}
+
+fn split_f_string_content(content: &str) -> Result<Vec<Expr>, String> {
+    let mut pieces: Vec<Expr> = Vec::new();
+    let mut text = String::new();
+    let mut chars = content.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' => {
+                // Keep escapes for unescape_string later
+                text.push('\\');
+                if let Some(n) = chars.next() {
+                    text.push(n);
+                }
+            }
+            '{' => {
+                if chars.peek() == Some(&'{') {
+                    chars.next();
+                    text.push('{');
+                    continue;
+                }
+                if !text.is_empty() {
+                    pieces.push(Expr::String(unescape_string(&text)));
+                    text.clear();
+                }
+                // Collect expression until matching `}`
+                let mut expr_src = String::new();
+                let mut depth = 1i32;
+                let mut in_str = false;
+                let mut str_escape = false;
+                while let Some(ec) = chars.next() {
+                    if in_str {
+                        expr_src.push(ec);
+                        if str_escape {
+                            str_escape = false;
+                        } else if ec == '\\' {
+                            str_escape = true;
+                        } else if ec == '"' {
+                            in_str = false;
+                        }
+                        continue;
+                    }
+                    match ec {
+                        '"' => {
+                            in_str = true;
+                            expr_src.push(ec);
+                        }
+                        '{' => {
+                            depth += 1;
+                            expr_src.push(ec);
+                        }
+                        '}' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                break;
+                            }
+                            expr_src.push(ec);
+                        }
+                        _ => expr_src.push(ec),
+                    }
+                }
+                if depth != 0 {
+                    return Err("f-string interpolation is missing closing `}`".to_string());
+                }
+                let expr_src = expr_src.trim();
+                if expr_src.is_empty() {
+                    return Err("f-string interpolation `{}` cannot be empty".to_string());
+                }
+                let mut expr_pairs = BolideParser::parse(Rule::expr, expr_src).map_err(|e| {
+                    format!("invalid expression in f-string `{{{}}}`: {}", expr_src, e)
+                })?;
+                let expr_pair = expr_pairs.next().ok_or("empty f-string expression parse")?;
+                let expr = parse_expr(expr_pair)?;
+                pieces.push(Expr::Call(
+                    Box::new(Expr::Ident("str".to_string())),
+                    vec![expr],
+                ));
+            }
+            '}' => {
+                if chars.peek() == Some(&'}') {
+                    chars.next();
+                    text.push('}');
+                } else {
+                    return Err(
+                        "f-string has stray `}`; use `}}` for a literal brace".to_string(),
+                    );
+                }
+            }
+            _ => text.push(c),
+        }
+    }
+
+    if !text.is_empty() {
+        pieces.push(Expr::String(unescape_string(&text)));
+    }
+    Ok(pieces)
+}
+
 fn unescape_string(s: &str) -> String {
     let mut res = String::with_capacity(s.len());
     let mut chars = s.chars();
@@ -1563,9 +2744,19 @@ fn parse_primary(pair: Pair<Rule>) -> Result<Expr, String> {
             let s = inner.as_str();
             Ok(Expr::String(unescape_string(&s[1..s.len() - 1])))
         }
+        Rule::f_string => parse_f_string(inner),
         Rule::bool_lit => Ok(Expr::Bool(inner.as_str() == "true")),
         Rule::none_lit => Ok(Expr::None),
         Rule::ident => Ok(Expr::Ident(inner.as_str().to_string())),
+        Rule::macro_invoke => Ok(Expr::MacroInvoke(parse_macro_invoke(inner)?)),
+        Rule::comptime_expr => {
+            let block = inner
+                .into_inner()
+                .next()
+                .ok_or("comptime missing block")?;
+            Ok(Expr::Comptime(parse_block(block)?))
+        }
+        Rule::splice => parse_splice(inner),
         Rule::list_literal => {
             let mut inner_iter = inner.into_inner();
             if let Some(first) = inner_iter.next() {
@@ -1792,31 +2983,50 @@ fn parse_c_type(pair: Pair<Rule>) -> Result<CType, String> {
 
 fn parse_c_basic_type(pair: Pair<Rule>) -> Result<CType, String> {
     let s = pair.as_str();
-    Ok(match s {
-        "void" => CType::Void,
-        "char" => CType::Char,
-        "uchar" => CType::UChar,
-        "short" => CType::Short,
-        "ushort" => CType::UShort,
-        "c_int" => CType::Int,
-        "c_uint" => CType::UInt,
-        "long" => CType::Long,
-        "ulong" => CType::ULong,
-        "longlong" => CType::LongLong,
-        "ulonglong" => CType::ULongLong,
-        "c_float" => CType::Float,
-        "c_double" => CType::Double,
-        "c_bool" => CType::Bool,
-        "i8" => CType::I8,
-        "u8" => CType::U8,
-        "i16" => CType::I16,
-        "u16" => CType::U16,
-        "i32" => CType::I32,
-        "u32" => CType::U32,
-        "i64" => CType::I64,
-        "u64" => CType::U64,
-        "size_t" => CType::SizeT,
-        "ptrdiff_t" => CType::PtrDiffT,
-        _ => CType::Struct(s.to_string()),
-    })
+    match s {
+        "c_void" => Ok(CType::Void),
+
+        "c_char" => Ok(CType::Char),
+        "c_uchar" => Ok(CType::UChar),
+        "c_short" => Ok(CType::Short),
+        "c_ushort" => Ok(CType::UShort),
+        "c_int" => Ok(CType::Int),
+        "c_uint" => Ok(CType::UInt),
+        "c_long" => Ok(CType::Long),
+        "c_ulong" => Ok(CType::ULong),
+        "c_longlong" => Ok(CType::LongLong),
+        "c_ulonglong" => Ok(CType::ULongLong),
+        "c_float" | "f32" => Ok(CType::Float),
+        "c_double" | "f64" => Ok(CType::Double),
+        "c_bool" => Ok(CType::Bool),
+        "c_size_t" => Ok(CType::SizeT),
+        "c_ptrdiff_t" => Ok(CType::PtrDiffT),
+
+        "i8" => Ok(CType::I8),
+        "u8" => Ok(CType::U8),
+        "i16" => Ok(CType::I16),
+        "u16" => Ok(CType::U16),
+        "i32" => Ok(CType::I32),
+        "u32" => Ok(CType::U32),
+        "i64" => Ok(CType::I64),
+        "u64" => Ok(CType::U64),
+
+        // Removed historical spellings — do not silently treat as struct tags.
+        "void" => Err(
+            "unknown C type `void`; use `c_void` (e.g. `*c_void`)".to_string(),
+        ),
+        "char" => Err("unknown C type `char`; use `c_char` (e.g. `*c_char`)".to_string()),
+        "uchar" => Err("unknown C type `uchar`; use `c_uchar`".to_string()),
+        "short" => Err("unknown C type `short`; use `c_short`".to_string()),
+        "ushort" => Err("unknown C type `ushort`; use `c_ushort`".to_string()),
+        "long" => Err("unknown C type `long`; use `c_long`".to_string()),
+        "ulong" => Err("unknown C type `ulong`; use `c_ulong`".to_string()),
+        "longlong" => Err("unknown C type `longlong`; use `c_longlong`".to_string()),
+        "ulonglong" => Err("unknown C type `ulonglong`; use `c_ulonglong`".to_string()),
+        "size_t" => Err("unknown C type `size_t`; use `c_size_t`".to_string()),
+        "ptrdiff_t" => Err("unknown C type `ptrdiff_t`; use `c_ptrdiff_t`".to_string()),
+
+        // Managed / custom names (str, list, bytes, dynamic, …)
+        _ => Ok(CType::Struct(s.to_string())),
+    }
 }

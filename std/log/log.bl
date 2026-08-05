@@ -1,15 +1,17 @@
-// Bolide logging helper library.
-// Usage: import "std/log/log.bl" as log;
+// 日志。
+// import "std/log" as log;
 
-import "std/fs/fs.bl" as fs;
+import "std/fs" as fs;
+import "std/time" as time;
 
 let DEBUG: int = 10;
 let INFO: int = 20;
 let WARN: int = 30;
 let ERROR: int = 40;
 
-let current_level: int = 20;
-let output_file: str = "";
+var current_level: int = 20;
+var output_file: str = "";
+var show_time: bool = false;
 
 fn level_name(level: int) -> str {
     if level <= DEBUG {
@@ -52,12 +54,19 @@ fn clear_file() {
     output_file = "";
 }
 
+fn enable_time(on: bool) {
+    show_time = on;
+}
+
 fn write(level: int, message: str) {
     if level < current_level {
         return;
     }
-    let line: str = "[" + level_name(level) + "] " + message;
-    print(line + "\n");
+    var line: str = "[" + level_name(level) + "] " + message;
+    if show_time {
+        line = str(time.now_ms()) + " " + line;
+    }
+    print(line);
     if output_file != "" {
         fs.append_text(output_file, line + "\n");
     }
@@ -77,4 +86,13 @@ fn warn(message: str) {
 
 fn error(message: str) {
     write(ERROR, message);
+}
+
+/// 格式：key=value 附加字段
+fn info_kv(message: str, key: str, value: str) {
+    info(message + " " + key + "=" + value);
+}
+
+fn error_kv(message: str, key: str, value: str) {
+    error(message + " " + key + "=" + value);
 }

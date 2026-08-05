@@ -1,7 +1,7 @@
 // Contextual keywords should be valid identifiers outside their grammar roles.
 
 extern "bolide" {
-    fn bolide_env_get_or(default: *char, from: *char) -> str;
+    fn bolide_env_get_or(default: *c_char, from: *c_char) -> str;
 }
 
 class KeywordBox {

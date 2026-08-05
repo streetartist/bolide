@@ -8,7 +8,7 @@ mod convert;
 use pest_derive::Parser;
 
 pub use ast::*;
-pub use convert::{parse, parse_with_diagnostics, ParseDiagnostic};
+pub use convert::{from_converter_name, parse, parse_with_diagnostics, ParseDiagnostic};
 
 #[derive(Parser)]
 #[grammar = "bolide.pest"]

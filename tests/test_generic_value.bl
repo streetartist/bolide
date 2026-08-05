@@ -1,0 +1,37 @@
+// Generic functions as first-class values (monomorphized from expected func type)
+
+fn id<T>(x: T) -> T {
+    return x;
+}
+
+fn label(x: int) -> str {
+    return "n=" + str(x);
+}
+
+// Typed binding
+let f: func(int) -> int = id;
+print(f(42));
+
+let g: func(str) -> str = id;
+print(g("hi"));
+
+// Pass as argument to higher-order function
+fn apply(cb: func(int) -> int, x: int) -> int {
+    return cb(x);
+}
+print(apply(id, 7));
+
+// Reassign another monomorph of the same generic
+var h: func(int) -> int = id;
+print(h(3));
+h = id;
+print(h(4));
+
+// Multiple type params
+fn pair_first<A, B>(a: A, b: B) -> A {
+    return a;
+}
+let pf: func(int, str) -> int = pair_first;
+print(pf(99, "x"));
+
+print(999);

@@ -1,21 +1,21 @@
 // Bolide SQLite standard library.
-// Usage: import "std/sqlite/sqlite.bl";
+// Usage: import "std/sqlite";
 
 extern "bolide" {
-    fn bolide_sqlite_open(path: *char) -> *void;
-    fn bolide_sqlite_close(db: *void);
-    fn bolide_sqlite_last_error(db: *void) -> str;
-    fn bolide_sqlite_execute(db: *void, sql: *char) -> i64;
-    fn bolide_sqlite_exec_p(db: *void, sql: *char, params: *void) -> i64;
-    fn bolide_sqlite_query(db: *void, sql: *char) -> list;
-    fn bolide_sqlite_query_p(db: *void, sql: *char, params: *void) -> list;
-    fn bolide_sqlite_prepare(db: *void, sql: *char) -> *void;
-    fn bolide_sqlite_step(stmt: *void) -> i64;
-    fn bolide_sqlite_column_count(stmt: *void) -> i64;
-    fn bolide_sqlite_column_name(stmt: *void, index: i64) -> str;
-    fn bolide_sqlite_column_value(stmt: *void, index: i64) -> dynamic;
-    fn bolide_sqlite_finalize(stmt: *void);
-    fn bolide_sqlite_last_insert_rowid(db: *void) -> i64;
+    fn bolide_sqlite_open(path: *c_char) -> *c_void;
+    fn bolide_sqlite_close(db: *c_void);
+    fn bolide_sqlite_last_error(db: *c_void) -> str;
+    fn bolide_sqlite_execute(db: *c_void, sql: *c_char) -> i64;
+    fn bolide_sqlite_exec_p(db: *c_void, sql: *c_char, params: *c_void) -> i64;
+    fn bolide_sqlite_query(db: *c_void, sql: *c_char) -> list;
+    fn bolide_sqlite_query_p(db: *c_void, sql: *c_char, params: *c_void) -> list;
+    fn bolide_sqlite_prepare(db: *c_void, sql: *c_char) -> *c_void;
+    fn bolide_sqlite_step(stmt: *c_void) -> i64;
+    fn bolide_sqlite_column_count(stmt: *c_void) -> i64;
+    fn bolide_sqlite_column_name(stmt: *c_void, index: i64) -> str;
+    fn bolide_sqlite_column_value(stmt: *c_void, index: i64) -> dynamic;
+    fn bolide_sqlite_finalize(stmt: *c_void);
+    fn bolide_sqlite_last_insert_rowid(db: *c_void) -> i64;
 }
 
 class Statement {

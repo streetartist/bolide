@@ -1,5 +1,5 @@
 // Bolide CSV helper library.
-// Usage: import "std/csv/csv.bl" as csv;
+// Usage: import "std/csv" as csv;
 
 fn escape(value: str) -> str {
     if value.contains(",") or value.contains("\"") or value.contains("\n") or value.contains("\r") {

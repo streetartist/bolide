@@ -1,10 +1,10 @@
 // Bolide template standard library.
-// Usage: import "std/template/template.bl";
+// Usage: import "std/template";
 
 extern "bolide" {
-    fn bolide_template_escape_html(value: *char) -> str;
-    fn bolide_template_render(source: *char, context: *void) -> str;
-    fn bolide_template_render_file(path: *char, context: *void) -> str;
+    fn bolide_template_escape_html(value: *c_char) -> str;
+    fn bolide_template_render(source: *c_char, context: *c_void) -> str;
+    fn bolide_template_render_file(path: *c_char, context: *c_void) -> str;
 }
 
 fn escape_html(value: str) -> str {

@@ -1,0 +1,53 @@
+import "macro_lib.bl" as lib;
+
+// short name via export
+shout!("hi");
+print(add1!(41));
+
+// qualified path
+lib.shout!("yo");
+print(lib.add1!(9));
+
+// attr macro prologue
+attr macro traced($item:item) {
+    print("enter");
+}
+
+@traced
+fn work() {
+    print("body");
+}
+work();
+
+// comptime fold
+let N: int = comptime {
+    let a = 10;
+    let b = 20;
+    a + b * 2;
+};
+print(N);
+
+// derive with real field values
+@derive(Debug, Eq)
+class Pt {
+    x: int;
+    y: int;
+}
+let p: Pt = Pt(3, 4);
+print(p.debug());
+print(p.eq(Pt(3, 4)));
+print(p.eq(Pt(0, 0)));
+
+// 模式侧重复：$(, $rest:expr)* 收集后，模板里只写含 $rest 的单句会按次展开
+macro print_all($x:expr $(, $rest:expr)*) {
+    print($x);
+    print($rest);
+}
+print_all!(1, 2, 3);
+
+macro sum2($a:expr, $b:expr) quote {
+    ($a) + ($b);
+}
+print(sum2!(10, 5));
+
+print("macros_more_ok");

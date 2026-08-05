@@ -1,0 +1,54 @@
+// Built-in and user macros
+// 宏体写法：pattern 后直接 quote { ... } 或 { ... }（不要再套一层）
+
+macro twice($x:expr) quote {
+    ($x) + ($x);
+}
+
+macro log_pair($a:expr, $b:expr) {
+    print($a);
+    print($b);
+}
+
+macro bind {
+    ($name:ident = $val:expr) => {
+        let $name = $val;
+        print($name);
+    },
+}
+
+assert!(1 + 1 == 2);
+assert_eq!(2 + 2, 4);
+
+let t = twice!(21);
+print(t);
+
+log_pair!(10, 20);
+
+bind!(n = 42);
+
+let d = dbg!(3 + 4);
+print(d);
+
+let s = stringify!(1 + 2 * 3);
+print(s);
+
+@derive(Debug, Eq)
+class Point {
+    x: int;
+    y: int;
+}
+
+let p1: Point = Point(1, 2);
+let p2: Point = Point(1, 2);
+print(p1.debug());
+print(p1.eq(p2));
+
+@test
+fn sample_test() {
+    assert!(true);
+}
+
+sample_test();
+
+print("macros_ok");

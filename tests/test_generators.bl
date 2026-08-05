@@ -1,0 +1,187 @@
+// 懒生成器：yield + next() + for + elif + break/continue + 类方法
+
+fn count_to(n: int) {
+    var i: int = 0;
+    while i < n {
+        yield i;
+        i = i + 1;
+    }
+}
+
+for x in count_to(4) {
+    print(x);
+}
+
+// 手动 next
+let g = count_to(2);
+match g.next() {
+    Option.Some(a) => { print(a); },
+    Option.None() => { print(-1); },
+}
+match g.next() {
+    Option.Some(a) => { print(a); },
+    Option.None() => { print(-1); },
+}
+match g.next() {
+    Option.Some(a) => { print(a); },
+    Option.None() => { print(-1); },
+}
+
+fn evens(n: int) {
+    var i: int = 0;
+    while i < n {
+        if i % 2 == 0 {
+            yield i;
+        }
+        i = i + 1;
+    }
+}
+
+var sum: int = 0;
+for e in evens(6) {
+    sum = sum + e;
+}
+print(sum);  // 0+2+4 = 6
+
+fn greet() {
+    yield "hi";
+    yield "bolide";
+}
+
+for s in greet() {
+    print(s);
+}
+
+// early finish
+fn early(n: int) {
+    var i: int = 0;
+    while i < n {
+        if i == 2 {
+            return;
+        }
+        yield i;
+        i = i + 1;
+    }
+}
+
+for x in early(10) {
+    print(x);
+}
+
+// 无限生成器（只取前几个）
+fn naturals() {
+    var n: int = 0;
+    while true {
+        yield n;
+        n = n + 1;
+    }
+}
+
+let nats = naturals();
+var k: int = 0;
+while k < 3 {
+    match nats.next() {
+        Option.Some(v) => { print(v); },
+        Option.None() => { break; },
+    }
+    k = k + 1;
+}
+
+// elif
+fn classify(n: int) {
+    var i: int = 0;
+    while i < n {
+        if i == 0 {
+            yield 100;
+        } elif i == 1 {
+            yield 200;
+        } else {
+            yield i;
+        }
+        i = i + 1;
+    }
+}
+
+for c in classify(4) {
+    print(c);  // 100 200 2 3
+}
+
+// 内层 for range
+fn from_range(n: int) {
+    for i in range(n) {
+        yield i * 10;
+    }
+}
+
+for r in from_range(3) {
+    print(r);  // 0 10 20
+}
+
+// 内层 for 列表
+fn from_list() {
+    let xs: list<int> = [1, 2, 3];
+    for x in xs {
+        yield x + 100;
+    }
+}
+
+for v in from_list() {
+    print(v);  // 101 102 103
+}
+
+// break / continue
+fn skip_and_stop(n: int) {
+    var i: int = 0;
+    while i < n {
+        if i == 1 {
+            i = i + 1;
+            continue;
+        }
+        if i == 4 {
+            break;
+        }
+        yield i;
+        i = i + 1;
+    }
+}
+
+for s in skip_and_stop(10) {
+    print(s);  // 0 2 3
+}
+
+// 类方法生成器
+class Counter {
+    start: int;
+
+    fn count(n: int) {
+        var i: int = 0;
+        while i < n {
+            yield self.start + i;
+            i = i + 1;
+        }
+    }
+}
+
+let ctr = Counter(10);
+for m in ctr.count(3) {
+    print(m);  // 10 11 12
+}
+
+// for range + break 组合
+fn range_break(n: int) {
+    for i in range(n) {
+        if i == 3 {
+            break;
+        }
+        if i == 1 {
+            continue;
+        }
+        yield i;
+    }
+}
+
+for rb in range_break(8) {
+    print(rb);  // 0 2
+}
+
+print("generators_ok");

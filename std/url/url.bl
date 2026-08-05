@@ -1,5 +1,5 @@
 // Bolide URL helper library.
-// Usage: import "std/url/url.bl" as url;
+// Usage: import "std/url" as url;
 
 class Url {
     scheme: str;

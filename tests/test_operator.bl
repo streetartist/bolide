@@ -1,4 +1,4 @@
-// 测试运算符重载
+// 运算符重载：算术 / 比较 / 位运算 / 一元 / 右操作数反射 / 复合赋值
 
 class Vector {
     x: int;
@@ -6,6 +6,22 @@ class Vector {
 
     fn __add__(other: Vector) -> int {
         return self.x + other.x + self.y + other.y;
+    }
+
+    fn __sub__(other: Vector) -> int {
+        return self.x - other.x + self.y - other.y;
+    }
+
+    fn __mul__(other: Vector) -> int {
+        return self.x * other.x + self.y * other.y;
+    }
+
+    fn __div__(other: Vector) -> int {
+        return (self.x + self.y) / (other.x + other.y);
+    }
+
+    fn __mod__(other: Vector) -> int {
+        return (self.x + self.y) % (other.x + other.y);
     }
 
     fn __eq__(other: Vector) -> int {
@@ -16,19 +32,146 @@ class Vector {
         }
         return 0;
     }
+
+    fn __ne__(other: Vector) -> int {
+        if self.x != other.x {
+            return 1;
+        }
+        if self.y != other.y {
+            return 1;
+        }
+        return 0;
+    }
+
+    fn __lt__(other: Vector) -> int {
+        if self.x < other.x {
+            return 1;
+        }
+        return 0;
+    }
+
+    fn __le__(other: Vector) -> int {
+        if self.x < other.x {
+            return 1;
+        }
+        if self.x == other.x {
+            if self.y <= other.y {
+                return 1;
+            }
+        }
+        return 0;
+    }
+
+    fn __gt__(other: Vector) -> int {
+        if self.x > other.x {
+            return 1;
+        }
+        return 0;
+    }
+
+    fn __ge__(other: Vector) -> int {
+        if self.x > other.x {
+            return 1;
+        }
+        if self.x == other.x {
+            if self.y >= other.y {
+                return 1;
+            }
+        }
+        return 0;
+    }
+
+    fn __and__(other: Vector) -> int {
+        return self.x & other.x;
+    }
+
+    fn __or__(other: Vector) -> int {
+        return self.x | other.x;
+    }
+
+    fn __xor__(other: Vector) -> int {
+        return self.x ^ other.x;
+    }
+
+    fn __lshift__(n: int) -> int {
+        return self.x << n;
+    }
+
+    fn __rshift__(n: int) -> int {
+        return self.x >> n;
+    }
+
+    fn __neg__() -> int {
+        return 0 - self.x - self.y;
+    }
+
+    fn __not__() -> int {
+        if self.x == 0 {
+            if self.y == 0 {
+                return 1;
+            }
+        }
+        return 0;
+    }
+
+    // 右操作数：int + Vector
+    fn __radd__(n: int) -> int {
+        return n + self.x + self.y;
+    }
+
+    fn __rmul__(n: int) -> int {
+        return n * self.x * self.y;
+    }
 }
 
 let v1: Vector = Vector(10, 20);
+var v2: Vector = Vector(30, 40);
 
-let v2: Vector = Vector(30, 40);
-
-let sum: int = v1 + v2;
-print(sum);
-
-let eq: int = v1 == v2;
-print(eq);
+print(v1 + v2);   // 100
+print(v1 == v2);  // 0
 
 v2.x = 10;
 v2.y = 20;
-let eq2: int = v1 == v2;
-print(eq2);
+print(v1 == v2);  // 1
+print(v1 != v2);  // 0
+
+print(v2 - v1);   // 0
+print(v1 * v2);   // 500
+
+let v3: Vector = Vector(5, 0);
+print(v3 < v1);   // 1
+print(v1 > v3);   // 1
+print(v1 <= v2);  // 1
+print(v1 >= v2);  // 1
+
+// 位运算
+let vb: Vector = Vector(12, 1);  // 0b1100
+let vc: Vector = Vector(10, 1);  // 0b1010
+print(vb & vc);   // 8  (0b1000)
+print(vb | vc);   // 14 (0b1110)
+print(vb ^ vc);   // 6  (0b0110)
+print(vb << 1);   // 24
+print(vb >> 2);   // 3
+
+// 一元
+print(-v1);       // -30
+print(!v1);       // 0
+let z: Vector = Vector(0, 0);
+print(!z);        // 1
+
+// 右操作数反射：int 在左
+print(100 + v1);  // 130
+print(2 * v1);    // 400
+
+// div / mod
+let vd: Vector = Vector(10, 5);
+let ve: Vector = Vector(3, 2);
+print(vd / ve);   // 3
+print(vd % ve);   // 0
+
+// 复合赋值走 a = a + b 脱糖
+var acc: int = 0;
+acc = acc + (v1 + v2);
+print(acc);       // 60
+
+print("operator_ok");

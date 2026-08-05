@@ -1,7 +1,7 @@
 // Bolide config helper library.
-// Usage: import "std/config/config.bl" as config;
+// Usage: import "std/config" as config;
 
-import "std/fs/fs.bl" as fs;
+import "std/fs" as fs;
 
 class Config {
     values: dict<str, str>;

@@ -1,8 +1,11 @@
-// 测试 FFI 调用 C 库
+// 测试 FFI 调用 C 库（跨平台逻辑库名 + 统一 C 类型写法）
 
-extern "msvcrt.dll" {
+extern "dyn:c" {
     fn abs(x: c_int) -> c_int;
-    fn sqrt(x: c_double) -> c_double;
+}
+
+extern "dyn:m" {
+    fn sqrt(x: f64) -> f64;
 }
 
 // 测试 abs

@@ -1,0 +1,84 @@
+// cli + web 便捷 API 冒烟（不启真实服务器 / GUI 窗口）
+
+import "std/assert" as assert;
+import "std/cli" as cli;
+import "std/web" as web;
+import "std/http" as http;
+
+assert.reset();
+
+// ---- cli ----
+let specs: list<cli.Spec> = [
+    cli.help_flag(),
+    cli.flag("verbose", "v", "详细"),
+    cli.option("file", "f", "PATH", "in.txt", "输入文件"),
+    cli.required_option("name", "n", "NAME", "名称")
+];
+
+let ok_args: cli.Args = cli.parse_values(["--name", "bolide", "-v", "pos1"], specs);
+assert.is_true("cli_ok", ok_args.ok());
+assert.is_true("cli_flag", ok_args.flag("verbose"));
+assert.equal("cli_name", ok_args.value("name"), "bolide");
+assert.equal("cli_file_default", ok_args.value("file"), "in.txt");
+assert.equal("cli_pos", ok_args.positional(0), "pos1");
+assert.equal("cli_int", ok_args.int_or("missing", 7), 7);
+
+let help_args: cli.Args = cli.parse_values(["--help"], specs);
+assert.is_true("cli_help", help_args.wants_help());
+
+let bad_args: cli.Args = cli.parse_values(["--unknown"], specs);
+assert.is_true("cli_err", bad_args.has_errors());
+
+let help_text: str = cli.help("demo", "测试工具", specs);
+assert.contains("cli_help_text", help_text, "Options:");
+assert.contains("cli_help_name", help_text, "--name");
+
+// 短选项粘连 -fVALUE
+let glued: cli.Args = cli.parse_values(["-n", "x", "-fin.bl"], specs);
+assert.equal("cli_glue", glued.value("file"), "in.bl");
+
+// parse_simple
+let simple: cli.Args = cli.parse_simple(["prog", "--foo=bar", "-v", "a"]);
+assert.equal("simple_val", simple.value("foo"), "bar");
+assert.is_true("simple_flag", simple.flag("v"));
+assert.equal("simple_pos", simple.positional(0), "a");
+
+// ---- web 响应工厂 ----
+let t: web.Response = web.text("hello");
+assert.equal("web_text_status", t.status(), 200);
+assert.contains("web_text_body", t.body_text(), "hello");
+t.free();
+
+let j: web.Response = web.json("{\"ok\":true}");
+assert.contains("web_json", j.body_text(), "ok");
+j.free();
+
+let nf: web.Response = web.not_found();
+assert.equal("web_404", nf.status(), 404);
+nf.free();
+
+let bad: web.Response = web.bad_request("nope");
+assert.equal("web_400", bad.status(), 400);
+bad.free();
+
+// App 配置 API（不 listen）
+let app: web.App = web.app();
+app.set_workers(1);
+app.set_max_body(65536);
+app.cors_open();
+fn ping(req: web.Request) -> web.Response {
+    return web.text("pong");
+}
+assert.is_true("web_get_route", app.get("/ping", ping));
+app.free();
+
+// ---- http 模块结构（不发真实网络）----
+let hdrs: str = http.json_headers();
+assert.contains("http_ct", hdrs, "application/json");
+let lines: str = http.header_lines([http.header("X-A", "1")]);
+assert.contains("http_hdr", lines, "X-A: 1");
+
+if not assert.finish() {
+    throw Error("cli/web tests failed");
+}
+print("cli_web_ok");

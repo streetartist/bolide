@@ -1,40 +1,41 @@
-// Bolide file-system standard library.
-// Usage: import "std/fs/fs.bl" as fs;
+// 文件系统。
+// import "std/fs" as fs;
+// （兼容旧路径 import "std/fs"）
 
 extern "bolide" {
-    fn bolide_fs_read_text(path: *char) -> str;
-    fn bolide_fs_read_bytes(path: *char) -> bytes;
-    fn bolide_fs_read_lines(path: *char) -> list;
-    fn bolide_fs_write_text(path: *char, content: *char) -> i64;
-    fn bolide_fs_write_bytes(path: *char, data: *void) -> i64;
-    fn bolide_fs_append_text(path: *char, content: *char) -> i64;
-    fn bolide_fs_append_bytes(path: *char, data: *void) -> i64;
-    fn bolide_fs_touch(path: *char) -> i64;
-    fn bolide_fs_exists(path: *char) -> i64;
-    fn bolide_fs_is_file(path: *char) -> i64;
-    fn bolide_fs_is_dir(path: *char) -> i64;
-    fn bolide_fs_is_symlink(path: *char) -> i64;
-    fn bolide_fs_remove_file(path: *char) -> i64;
-    fn bolide_fs_copy(src: *char, dst: *char) -> i64;
-    fn bolide_fs_rename(src: *char, dst: *char) -> i64;
-    fn bolide_fs_create_dir(path: *char) -> i64;
-    fn bolide_fs_create_dir_all(path: *char) -> i64;
-    fn bolide_fs_remove_dir(path: *char) -> i64;
-    fn bolide_fs_remove_dir_all(path: *char) -> i64;
-    fn bolide_fs_read_dir(path: *char) -> list;
-    fn bolide_fs_file_name(path: *char) -> str;
-    fn bolide_fs_parent(path: *char) -> str;
-    fn bolide_fs_extension(path: *char) -> str;
-    fn bolide_fs_stem(path: *char) -> str;
-    fn bolide_fs_join(base: *char, child: *char) -> str;
-    fn bolide_fs_canonicalize(path: *char) -> str;
+    fn bolide_fs_read_text(path: *c_char) -> str;
+    fn bolide_fs_read_bytes(path: *c_char) -> bytes;
+    fn bolide_fs_read_lines(path: *c_char) -> list;
+    fn bolide_fs_write_text(path: *c_char, content: *c_char) -> i64;
+    fn bolide_fs_write_bytes(path: *c_char, data: *c_void) -> i64;
+    fn bolide_fs_append_text(path: *c_char, content: *c_char) -> i64;
+    fn bolide_fs_append_bytes(path: *c_char, data: *c_void) -> i64;
+    fn bolide_fs_touch(path: *c_char) -> i64;
+    fn bolide_fs_exists(path: *c_char) -> i64;
+    fn bolide_fs_is_file(path: *c_char) -> i64;
+    fn bolide_fs_is_dir(path: *c_char) -> i64;
+    fn bolide_fs_is_symlink(path: *c_char) -> i64;
+    fn bolide_fs_remove_file(path: *c_char) -> i64;
+    fn bolide_fs_copy(src: *c_char, dst: *c_char) -> i64;
+    fn bolide_fs_rename(src: *c_char, dst: *c_char) -> i64;
+    fn bolide_fs_create_dir(path: *c_char) -> i64;
+    fn bolide_fs_create_dir_all(path: *c_char) -> i64;
+    fn bolide_fs_remove_dir(path: *c_char) -> i64;
+    fn bolide_fs_remove_dir_all(path: *c_char) -> i64;
+    fn bolide_fs_read_dir(path: *c_char) -> list;
+    fn bolide_fs_file_name(path: *c_char) -> str;
+    fn bolide_fs_parent(path: *c_char) -> str;
+    fn bolide_fs_extension(path: *c_char) -> str;
+    fn bolide_fs_stem(path: *c_char) -> str;
+    fn bolide_fs_join(base: *c_char, child: *c_char) -> str;
+    fn bolide_fs_canonicalize(path: *c_char) -> str;
     fn bolide_fs_current_dir() -> str;
-    fn bolide_fs_set_current_dir(path: *char) -> i64;
-    fn bolide_fs_len(path: *char) -> i64;
-    fn bolide_fs_modified(path: *char) -> i64;
-    fn bolide_fs_created(path: *char) -> i64;
-    fn bolide_fs_readonly(path: *char) -> i64;
-    fn bolide_fs_set_readonly(path: *char, readonly: i64) -> i64;
+    fn bolide_fs_set_current_dir(path: *c_char) -> i64;
+    fn bolide_fs_len(path: *c_char) -> i64;
+    fn bolide_fs_modified(path: *c_char) -> i64;
+    fn bolide_fs_created(path: *c_char) -> i64;
+    fn bolide_fs_readonly(path: *c_char) -> i64;
+    fn bolide_fs_set_readonly(path: *c_char, readonly: i64) -> i64;
 }
 
 fn read_text(path: str) -> str {

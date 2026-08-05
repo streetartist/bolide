@@ -1,48 +1,59 @@
-// Bolide GUI standard library.
-// Usage: import "std/gui/gui.bl";
+// 桌面 GUI（egui 后端）。
+// import "std/gui" as gui;
+//
+// 典型用法：
+//   fn root(ui: gui.Ui) { ui.heading("Hi"); if ui.button("Go") { ... } }
+//   gui.run("App", 800, 600, root);
 
 extern "bolide" {
     fn bolide_gui_backend() -> str;
-    fn bolide_gui_run(title: str, width: i64, height: i64, view: fn(*void)) -> i64;
+    fn bolide_gui_run(title: str, width: i64, height: i64, view: func(*c_void)) -> i64;
 
-    fn bolide_gui_label(ui: *void, text: str);
-    fn bolide_gui_heading(ui: *void, text: str);
-    fn bolide_gui_small(ui: *void, text: str);
-    fn bolide_gui_strong(ui: *void, text: str);
-    fn bolide_gui_separator(ui: *void);
-    fn bolide_gui_space(ui: *void, points: i64);
-    fn bolide_gui_button(ui: *void, text: str) -> i64;
-    fn bolide_gui_selectable(ui: *void, text: str, selected: i64) -> i64;
-    fn bolide_gui_link(ui: *void, label: str, url: str) -> i64;
-    fn bolide_gui_text_input(ui: *void, id: str, value: str) -> str;
-    fn bolide_gui_password_input(ui: *void, id: str, value: str) -> str;
-    fn bolide_gui_multiline_input(ui: *void, id: str, value: str, rows: i64) -> str;
-    fn bolide_gui_checkbox(ui: *void, label: str, checked: i64) -> i64;
-    fn bolide_gui_slider(ui: *void, label: str, value: i64, min: i64, max: i64) -> i64;
-    fn bolide_gui_progress(ui: *void, value: i64, max: i64);
-    fn bolide_gui_pack(ui: *void, side: str, spacing: i64, child: fn(*void));
-    fn bolide_gui_row(ui: *void, child: fn(*void));
-    fn bolide_gui_column(ui: *void, child: fn(*void));
-    fn bolide_gui_group(ui: *void, child: fn(*void));
-    fn bolide_gui_grid(ui: *void, id: str, columns: i64, striped: i64, child: fn(*void));
-    fn bolide_gui_end_row(ui: *void);
-    fn bolide_gui_frame(ui: *void, title: str, child: fn(*void));
-    fn bolide_gui_scroll(ui: *void, id: str, max_height: i64, child: fn(*void));
-    fn bolide_gui_indent(ui: *void, id: str, child: fn(*void));
-    fn bolide_gui_centered(ui: *void, child: fn(*void));
-    fn bolide_gui_align(ui: *void, mode: str, child: fn(*void));
-    fn bolide_gui_pad(ui: *void, x: i64, y: i64, child: fn(*void));
-    fn bolide_gui_width(ui: *void, points: i64, child: fn(*void));
-    fn bolide_gui_height(ui: *void, points: i64, child: fn(*void));
-    fn bolide_gui_size(ui: *void, width: i64, height: i64, child: fn(*void));
-    fn bolide_gui_fill_width(ui: *void, child: fn(*void));
-    fn bolide_gui_fill_height(ui: *void, child: fn(*void));
-    fn bolide_gui_fill(ui: *void, child: fn(*void));
-    fn bolide_gui_place(ui: *void, x: i64, y: i64, width: i64, height: i64, child: fn(*void));
-    fn bolide_gui_collapsing(ui: *void, title: str, child: fn(*void));
-    fn bolide_gui_available_width(ui: *void) -> i64;
-    fn bolide_gui_available_height(ui: *void) -> i64;
-    fn bolide_gui_request_repaint(ui: *void);
+    fn bolide_gui_label(ui: *c_void, text: str);
+    fn bolide_gui_heading(ui: *c_void, text: str);
+    fn bolide_gui_small(ui: *c_void, text: str);
+    fn bolide_gui_strong(ui: *c_void, text: str);
+    fn bolide_gui_separator(ui: *c_void);
+    fn bolide_gui_space(ui: *c_void, points: i64);
+    fn bolide_gui_button(ui: *c_void, text: str) -> i64;
+    fn bolide_gui_selectable(ui: *c_void, text: str, selected: i64) -> i64;
+    fn bolide_gui_link(ui: *c_void, label: str, url: str) -> i64;
+    fn bolide_gui_text_input(ui: *c_void, id: str, value: str) -> str;
+    fn bolide_gui_password_input(ui: *c_void, id: str, value: str) -> str;
+    fn bolide_gui_multiline_input(ui: *c_void, id: str, value: str, rows: i64) -> str;
+    fn bolide_gui_checkbox(ui: *c_void, label: str, checked: i64) -> i64;
+    fn bolide_gui_slider(ui: *c_void, label: str, value: i64, min: i64, max: i64) -> i64;
+    fn bolide_gui_progress(ui: *c_void, value: i64, max: i64);
+    fn bolide_gui_pack(ui: *c_void, side: str, spacing: i64, child: func(*c_void));
+    fn bolide_gui_row(ui: *c_void, child: func(*c_void));
+    fn bolide_gui_column(ui: *c_void, child: func(*c_void));
+    fn bolide_gui_group(ui: *c_void, child: func(*c_void));
+    fn bolide_gui_grid(ui: *c_void, id: str, columns: i64, striped: i64, child: func(*c_void));
+    fn bolide_gui_end_row(ui: *c_void);
+    fn bolide_gui_frame(ui: *c_void, title: str, child: func(*c_void));
+    fn bolide_gui_scroll(ui: *c_void, id: str, max_height: i64, child: func(*c_void));
+    fn bolide_gui_indent(ui: *c_void, id: str, child: func(*c_void));
+    fn bolide_gui_centered(ui: *c_void, child: func(*c_void));
+    fn bolide_gui_align(ui: *c_void, mode: str, child: func(*c_void));
+    fn bolide_gui_pad(ui: *c_void, x: i64, y: i64, child: func(*c_void));
+    fn bolide_gui_width(ui: *c_void, points: i64, child: func(*c_void));
+    fn bolide_gui_height(ui: *c_void, points: i64, child: func(*c_void));
+    fn bolide_gui_size(ui: *c_void, width: i64, height: i64, child: func(*c_void));
+    fn bolide_gui_fill_width(ui: *c_void, child: func(*c_void));
+    fn bolide_gui_fill_height(ui: *c_void, child: func(*c_void));
+    fn bolide_gui_fill(ui: *c_void, child: func(*c_void));
+    fn bolide_gui_place(ui: *c_void, x: i64, y: i64, width: i64, height: i64, child: func(*c_void));
+    fn bolide_gui_collapsing(ui: *c_void, title: str, child: func(*c_void));
+    fn bolide_gui_available_width(ui: *c_void) -> i64;
+    fn bolide_gui_available_height(ui: *c_void) -> i64;
+    fn bolide_gui_request_repaint(ui: *c_void);
+}
+
+fn bool_i(v: bool) -> int {
+    if v {
+        return 1;
+    }
+    return 0;
 }
 
 class Ui {
@@ -64,6 +75,12 @@ class Ui {
         bolide_gui_strong(self.handle, text);
     }
 
+    /// 标签 + 值（一行信息）
+    fn kv(key: str, value: str) {
+        bolide_gui_strong(self.handle, key);
+        bolide_gui_label(self.handle, value);
+    }
+
     fn separator() {
         bolide_gui_separator(self.handle);
     }
@@ -72,15 +89,17 @@ class Ui {
         bolide_gui_space(self.handle, points);
     }
 
+    /// 默认 8pt 空白
+    fn spacer() {
+        bolide_gui_space(self.handle, 8);
+    }
+
     fn button(text: str) -> bool {
         return bolide_gui_button(self.handle, text) != 0;
     }
 
     fn selectable(text: str, selected: bool) -> bool {
-        if selected {
-            return bolide_gui_selectable(self.handle, text, 1) != 0;
-        }
-        return bolide_gui_selectable(self.handle, text, 0) != 0;
+        return bolide_gui_selectable(self.handle, text, bool_i(selected)) != 0;
     }
 
     fn link(label: str, url: str) -> bool {
@@ -100,10 +119,7 @@ class Ui {
     }
 
     fn checkbox(label: str, checked: bool) -> bool {
-        if checked {
-            return bolide_gui_checkbox(self.handle, label, 1) != 0;
-        }
-        return bolide_gui_checkbox(self.handle, label, 0) != 0;
+        return bolide_gui_checkbox(self.handle, label, bool_i(checked)) != 0;
     }
 
     fn slider(label: str, value: int, min: int, max: int) -> int {
@@ -112,6 +128,18 @@ class Ui {
 
     fn progress(value: int, max: int) {
         bolide_gui_progress(self.handle, value, max);
+    }
+
+    /// 0–100 进度条
+    fn progress_pct(pct: int) {
+        var v: int = pct;
+        if v < 0 {
+            v = 0;
+        }
+        if v > 100 {
+            v = 100;
+        }
+        bolide_gui_progress(self.handle, v, 100);
     }
 
     fn pack(side: str, spacing: int, child: func(Ui)) {
@@ -147,11 +175,7 @@ class Ui {
     }
 
     fn grid(id: str, columns: int, striped: bool, child: func(Ui)) {
-        if striped {
-            bolide_gui_grid(self.handle, id, columns, 1, child);
-        } else {
-            bolide_gui_grid(self.handle, id, columns, 0, child);
-        }
+        bolide_gui_grid(self.handle, id, columns, bool_i(striped), child);
     }
 
     fn end_row() {
@@ -241,4 +265,14 @@ fn backend() -> str {
 
 fn run(title: str, width: int, height: int, view: func(Ui)) -> int {
     return bolide_gui_run(title, width, height, view);
+}
+
+/// 默认 960×640 窗口
+fn run_default(title: str, view: func(Ui)) -> int {
+    return bolide_gui_run(title, 960, 640, view);
+}
+
+/// 紧凑窗口 640×480
+fn run_compact(title: str, view: func(Ui)) -> int {
+    return bolide_gui_run(title, 640, 480, view);
 }

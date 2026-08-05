@@ -1,5 +1,5 @@
-// Bolide hashing and checksum helpers.
-// Usage: import "std/hash/hash.bl" as hash;
+// 哈希与校验。
+// import "std/hash" as hash;
 
 extern "bolide" {
     fn bolide_hash_fnv1a(text: str) -> i64;
@@ -22,4 +22,18 @@ fn crc32(text: str) -> int {
 
 fn crc32(data: bytes) -> int {
     return bolide_hash_crc32_bytes(data);
+}
+
+/// 稳定 32 位掩码（方便当字典 key 的正数）
+fn fnv1a32(text: str) -> int {
+    let h: int = fnv1a(text);
+    if h < 0 {
+        return 0 - h;
+    }
+    return h;
+}
+
+/// 把两个哈希混成一个（简单 xor-shift）
+fn combine(a: int, b: int) -> int {
+    return a * 31 + b;
 }

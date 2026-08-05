@@ -1,0 +1,27 @@
+// Bolide 标准库 prelude：常用模块一键导入。
+//
+// import "std/prelude" as std;
+//
+// 之后：
+//   std.fs.read_text("a.txt")
+//   std.time.now_ms()
+//   std.json.parse(...)
+//
+// 需要更细分模块时仍可单独 import "std/web" 等。
+
+import "std/assert" as assert;
+import "std/collections" as collections;
+import "std/env" as env;
+import "std/fs" as fs;
+import "std/io" as io;
+import "std/iter" as iter;
+import "std/json" as json;
+import "std/log" as log;
+import "std/math" as math;
+import "std/option" as option;
+import "std/path" as path;
+import "std/process" as process;
+import "std/random" as random;
+import "std/result" as result;
+import "std/text" as text;
+import "std/time" as time;

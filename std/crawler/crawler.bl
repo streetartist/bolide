@@ -1,11 +1,11 @@
 // Bolide crawler helper library.
-// Usage: import "std/crawler/crawler.bl" as crawler;
+// Usage: import "std/crawler" as crawler;
 
-import "std/web/web.bl" as web;
-import "std/html/html.bl" as html;
-import "std/url/url.bl" as url;
-import "std/time/time.bl" as time;
-import "std/fs/fs.bl" as fs;
+import "std/web" as web;
+import "std/html" as html;
+import "std/url" as url;
+import "std/time" as time;
+import "std/fs" as fs;
 
 class Page {
     url: str;

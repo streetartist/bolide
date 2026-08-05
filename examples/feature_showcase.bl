@@ -336,7 +336,7 @@ extern "dyn:c" {
 }
 
 extern "dyn:m" {
-    fn sqrt(x: c_double) -> c_double;
+    fn sqrt(x: f64) -> f64;
 }
 
 let abs_result: int = abs(-42);

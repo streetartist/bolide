@@ -1,8 +1,8 @@
-// Bolide text helper library.
-// Usage: import "std/text/text.bl" as text;
+// 文本处理。
+// import "std/text" as text;
 
 fn join(items: list<str>, sep: str) -> str {
-    let out: str = "";
+    var out: str = "";
     for i in range(items.len()) {
         if i > 0 {
             out = out + sep;
@@ -21,9 +21,38 @@ fn is_space(ch: str) -> bool {
     return ch == " " or ch == "\n" or ch == "\r" or ch == "\t";
 }
 
+fn is_blank(value: str) -> bool {
+    for i in range(value.len()) {
+        if not is_space(value.char_at(i)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+fn trim_left(value: str) -> str {
+    var i: int = 0;
+    while i < value.len() and is_space(value.char_at(i)) {
+        i = i + 1;
+    }
+    return value.substring(i, value.len());
+}
+
+fn trim_right(value: str) -> str {
+    var j: int = value.len();
+    while j > 0 and is_space(value.char_at(j - 1)) {
+        j = j - 1;
+    }
+    return value.substring(0, j);
+}
+
+fn trim(value: str) -> str {
+    return trim_right(trim_left(value));
+}
+
 fn words(value: str) -> list<str> {
-    let out: list<str> = [];
-    let current: str = "";
+    var out: list<str> = [];
+    var current: str = "";
     for i in range(value.len()) {
         let ch: str = value.char_at(i);
         if is_space(ch) {
@@ -65,7 +94,7 @@ fn pad_left(value: str, width: int, fill: str) -> str {
     if value.len() >= width {
         return value;
     }
-    let token: str = fill;
+    var token: str = fill;
     if token == "" {
         token = " ";
     }
@@ -76,32 +105,177 @@ fn pad_right(value: str, width: int, fill: str) -> str {
     if value.len() >= width {
         return value;
     }
-    let token: str = fill;
+    var token: str = fill;
     if token == "" {
         token = " ";
     }
     return value + token.repeat(width - value.len());
 }
 
+fn center(value: str, width: int, fill: str) -> str {
+    if value.len() >= width {
+        return value;
+    }
+    var token: str = fill;
+    if token == "" {
+        token = " ";
+    }
+    let pad: int = width - value.len();
+    let left: int = pad / 2;
+    let right: int = pad - left;
+    return token.repeat(left) + value + token.repeat(right);
+}
+
 fn indent(value: str, prefix: str) -> str {
     let parts: list<str> = lines(value);
-    for i in range(parts.len()) {
-        parts[i] = prefix + parts[i];
+    var out: list<str> = [];
+    for line in parts {
+        out.push(prefix + line);
     }
-    return join(parts, "\n");
+    return join(out, "\n");
+}
+
+fn dedent(value: str) -> str {
+    let parts: list<str> = lines(value);
+    var min_indent: int = 0 - 1;
+    for line in parts {
+        if is_blank(line) {
+            continue;
+        }
+        var n: int = 0;
+        while n < line.len() and is_space(line.char_at(n)) {
+            n = n + 1;
+        }
+        if min_indent < 0 or n < min_indent {
+            min_indent = n;
+        }
+    }
+    if min_indent <= 0 {
+        return value;
+    }
+    var out: list<str> = [];
+    for line in parts {
+        if is_blank(line) {
+            out.push("");
+        } elif line.len() >= min_indent {
+            out.push(line.substring(min_indent, line.len()));
+        } else {
+            out.push(line);
+        }
+    }
+    return join(out, "\n");
 }
 
 fn is_alnum(ch: str) -> bool {
     return "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789".contains(ch);
 }
 
+fn is_alpha(ch: str) -> bool {
+    return "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ".contains(ch);
+}
+
+fn is_digit(ch: str) -> bool {
+    return "0123456789".contains(ch);
+}
+
 fn is_upper(ch: str) -> bool {
     return "ABCDEFGHIJKLMNOPQRSTUVWXYZ".contains(ch);
 }
 
+fn is_lower(ch: str) -> bool {
+    return "abcdefghijklmnopqrstuvwxyz".contains(ch);
+}
+
+fn capitalize(value: str) -> str {
+    if value.len() == 0 {
+        return "";
+    }
+    let first: str = value.char_at(0).upper();
+    if value.len() == 1 {
+        return first;
+    }
+    return first + value.substring(1, value.len()).lower();
+}
+
+fn title(value: str) -> str {
+    let parts: list<str> = words(value);
+    var out: list<str> = [];
+    for p in parts {
+        out.push(capitalize(p));
+    }
+    return join(out, " ");
+}
+
+fn reverse(value: str) -> str {
+    var out: str = "";
+    var i: int = value.len() - 1;
+    while i >= 0 {
+        out = out + value.char_at(i);
+        i = i - 1;
+    }
+    return out;
+}
+
+fn starts_with(value: str, prefix: str) -> bool {
+    return value.starts_with(prefix);
+}
+
+fn ends_with(value: str, suffix: str) -> bool {
+    return value.ends_with(suffix);
+}
+
+fn contains(value: str, needle: str) -> bool {
+    return value.contains(needle);
+}
+
+fn count(value: str, needle: str) -> int {
+    if needle == "" {
+        return 0;
+    }
+    var n: int = 0;
+    var i: int = 0;
+    while i + needle.len() <= value.len() {
+        if value.substring(i, i + needle.len()) == needle {
+            n = n + 1;
+            i = i + needle.len();
+        } else {
+            i = i + 1;
+        }
+    }
+    return n;
+}
+
+fn remove_prefix(value: str, prefix: str) -> str {
+    if value.starts_with(prefix) {
+        return value.substring(prefix.len(), value.len());
+    }
+    return value;
+}
+
+fn remove_suffix(value: str, suffix: str) -> str {
+    if value.ends_with(suffix) {
+        return value.substring(0, value.len() - suffix.len());
+    }
+    return value;
+}
+
+fn ensure_prefix(value: str, prefix: str) -> str {
+    if value.starts_with(prefix) {
+        return value;
+    }
+    return prefix + value;
+}
+
+fn ensure_suffix(value: str, suffix: str) -> str {
+    if value.ends_with(suffix) {
+        return value;
+    }
+    return value + suffix;
+}
+
 fn words_from_identifier(value: str) -> list<str> {
-    let out: list<str> = [];
-    let current: str = "";
+    var out: list<str> = [];
+    var current: str = "";
     for i in range(value.len()) {
         let ch: str = value.char_at(i);
         if is_alnum(ch) {
@@ -134,4 +308,35 @@ fn kebab(value: str) -> str {
 
 fn slug(value: str) -> str {
     return kebab(value);
+}
+
+fn camel(value: str) -> str {
+    let parts: list<str> = words_from_identifier(value);
+    if parts.len() == 0 {
+        return "";
+    }
+    var out: str = parts[0];
+    for i in range(1, parts.len()) {
+        out = out + capitalize(parts[i]);
+    }
+    return out;
+}
+
+fn pascal(value: str) -> str {
+    let parts: list<str> = words_from_identifier(value);
+    var out: str = "";
+    for p in parts {
+        out = out + capitalize(p);
+    }
+    return out;
+}
+
+/// 模板替换：把 "{name}" 换成 values["name"]
+fn format_map(template: str, values: dict<str, str>) -> str {
+    var out: str = template;
+    let keys: list<str> = values.keys();
+    for k in keys {
+        out = out.replace("{" + k + "}", values[k]);
+    }
+    return out;
 }

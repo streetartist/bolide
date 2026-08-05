@@ -1,27 +1,27 @@
-// Bolide math standard library.
-// Usage: import "std/math/math.bl" as math;
+// 数学函数。
+// import "std/math" as math;
 
 extern "bolide" {
     fn bolide_math_abs_i64(value: i64) -> i64;
     fn bolide_math_min_i64(a: i64, b: i64) -> i64;
     fn bolide_math_max_i64(a: i64, b: i64) -> i64;
     fn bolide_math_clamp_i64(value: i64, min: i64, max: i64) -> i64;
-    fn bolide_math_abs_f64(value: c_double) -> c_double;
-    fn bolide_math_min_f64(a: c_double, b: c_double) -> c_double;
-    fn bolide_math_max_f64(a: c_double, b: c_double) -> c_double;
-    fn bolide_math_clamp_f64(value: c_double, min: c_double, max: c_double) -> c_double;
-    fn bolide_math_floor(value: c_double) -> c_double;
-    fn bolide_math_ceil(value: c_double) -> c_double;
-    fn bolide_math_round(value: c_double) -> c_double;
-    fn bolide_math_trunc(value: c_double) -> c_double;
-    fn bolide_math_sqrt(value: c_double) -> c_double;
-    fn bolide_math_pow(value: c_double, exp: c_double) -> c_double;
-    fn bolide_math_sin(value: c_double) -> c_double;
-    fn bolide_math_cos(value: c_double) -> c_double;
-    fn bolide_math_tan(value: c_double) -> c_double;
-    fn bolide_math_log(value: c_double, base: c_double) -> c_double;
-    fn bolide_math_ln(value: c_double) -> c_double;
-    fn bolide_math_exp(value: c_double) -> c_double;
+    fn bolide_math_abs_f64(value: f64) -> f64;
+    fn bolide_math_min_f64(a: f64, b: f64) -> f64;
+    fn bolide_math_max_f64(a: f64, b: f64) -> f64;
+    fn bolide_math_clamp_f64(value: f64, min: f64, max: f64) -> f64;
+    fn bolide_math_floor(value: f64) -> f64;
+    fn bolide_math_ceil(value: f64) -> f64;
+    fn bolide_math_round(value: f64) -> f64;
+    fn bolide_math_trunc(value: f64) -> f64;
+    fn bolide_math_sqrt(value: f64) -> f64;
+    fn bolide_math_pow(value: f64, exp: f64) -> f64;
+    fn bolide_math_sin(value: f64) -> f64;
+    fn bolide_math_cos(value: f64) -> f64;
+    fn bolide_math_tan(value: f64) -> f64;
+    fn bolide_math_log(value: f64, base: f64) -> f64;
+    fn bolide_math_ln(value: f64) -> f64;
+    fn bolide_math_exp(value: f64) -> f64;
 }
 
 let PI: float = 3.141592653589793;
@@ -111,4 +111,51 @@ fn ln(value: float) -> float {
 
 fn exp(value: float) -> float {
     return bolide_math_exp(float(value));
+}
+
+fn deg_to_rad(deg: float) -> float {
+    return float(deg) * PI / 180.0;
+}
+
+fn rad_to_deg(rad: float) -> float {
+    return float(rad) * 180.0 / PI;
+}
+
+fn hypot(x: float, y: float) -> float {
+    return sqrt(float(x) * float(x) + float(y) * float(y));
+}
+
+fn sign(value: int) -> int {
+    if value > 0 {
+        return 1;
+    }
+    if value < 0 {
+        return 0 - 1;
+    }
+    return 0;
+}
+
+fn sign(value: float) -> int {
+    if value > 0.0 {
+        return 1;
+    }
+    if value < 0.0 {
+        return 0 - 1;
+    }
+    return 0;
+}
+
+fn lerp(a: float, b: float, t: float) -> float {
+    return float(a) + (float(b) - float(a)) * float(t);
+}
+
+fn is_finite(value: float) -> bool {
+    // 非 NaN 且非 Inf 的粗判：NaN != NaN
+    if value != value {
+        return false;
+    }
+    if value > 1.0e308 or value < 0.0 - 1.0e308 {
+        return false;
+    }
+    return true;
 }

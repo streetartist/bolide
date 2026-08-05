@@ -1,7 +1,7 @@
-// Bolide path helper library.
-// Usage: import "std/path/path.bl" as path;
+// 路径处理。
+// import "std/path" as path;
 
-import "std/fs/fs.bl" as fs;
+import "std/fs" as fs;
 
 fn normalize_separators(path: str) -> str {
     return path.replace("\\", "/");
@@ -22,13 +22,18 @@ fn normalize(path: str) -> str {
     let p: str = normalize_separators(path);
     let absolute: bool = p.starts_with("/");
     let parts: list<str> = p.split("/");
-    let stack: list<str> = [];
+    var stack: list<str> = [];
 
     for part in parts {
         if part != "" and part != "." {
             if part == ".." {
-                if stack.len() > 0 and stack.last() != ".." {
-                    let removed: str = stack.pop();
+                if stack.len() > 0 {
+                    let top: str = stack[stack.len() - 1];
+                    if top != ".." {
+                        let removed: str = stack.pop();
+                    } elif not absolute {
+                        stack.push(part);
+                    }
                 } elif not absolute {
                     stack.push(part);
                 }
@@ -38,7 +43,7 @@ fn normalize(path: str) -> str {
         }
     }
 
-    let out: str = "";
+    var out: str = "";
     for part in stack {
         if out == "" {
             out = part;
@@ -88,7 +93,7 @@ fn stem(path: str) -> str {
 fn with_extension(path: str, ext: str) -> str {
     let dir: str = parent(path);
     let name: str = stem(path);
-    let clean_ext: str = ext;
+    var clean_ext: str = ext;
     if clean_ext.starts_with(".") {
         clean_ext = clean_ext.substring(1, clean_ext.len());
     }

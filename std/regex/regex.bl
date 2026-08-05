@@ -1,16 +1,16 @@
 // Bolide regex standard library.
-// Usage: import "std/regex/regex.bl" as regex;
+// Usage: import "std/regex" as regex;
 
 extern "bolide" {
-    fn bolide_regex_is_valid(pattern: *char) -> i64;
-    fn bolide_regex_escape(text: *char) -> str;
-    fn bolide_regex_is_match(pattern: *char, text: *char) -> i64;
-    fn bolide_regex_find(pattern: *char, text: *char) -> str;
-    fn bolide_regex_find_all(pattern: *char, text: *char) -> list;
-    fn bolide_regex_captures(pattern: *char, text: *char) -> list;
-    fn bolide_regex_replace(pattern: *char, text: *char, replacement: *char) -> str;
-    fn bolide_regex_replace_all(pattern: *char, text: *char, replacement: *char) -> str;
-    fn bolide_regex_split(pattern: *char, text: *char) -> list;
+    fn bolide_regex_is_valid(pattern: *c_char) -> i64;
+    fn bolide_regex_escape(text: *c_char) -> str;
+    fn bolide_regex_is_match(pattern: *c_char, text: *c_char) -> i64;
+    fn bolide_regex_find(pattern: *c_char, text: *c_char) -> str;
+    fn bolide_regex_find_all(pattern: *c_char, text: *c_char) -> list;
+    fn bolide_regex_captures(pattern: *c_char, text: *c_char) -> list;
+    fn bolide_regex_replace(pattern: *c_char, text: *c_char, replacement: *c_char) -> str;
+    fn bolide_regex_replace_all(pattern: *c_char, text: *c_char, replacement: *c_char) -> str;
+    fn bolide_regex_split(pattern: *c_char, text: *c_char) -> list;
 }
 
 fn is_valid(pattern: str) -> bool {

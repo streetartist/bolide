@@ -1,7 +1,7 @@
 // Bolide UUID and id helper library.
-// Usage: import "std/uuid/uuid.bl" as uuid;
+// Usage: import "std/uuid" as uuid;
 
-import "std/random/random.bl" as random;
+import "std/random" as random;
 
 let hex_chars: str = "0123456789abcdef";
 let id_chars: str = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
@@ -11,7 +11,7 @@ fn hex_random() -> str {
 }
 
 fn random_hex(count: int) -> str {
-    let out: str = "";
+    var out: str = "";
     for i in range(count) {
         out = out + hex_random();
     }
@@ -43,7 +43,7 @@ fn short_id(length: int) -> str {
     if length <= 0 {
         return "";
     }
-    let out: str = "";
+    var out: str = "";
     for i in range(length) {
         out = out + id_chars.char_at(random.range(0, id_chars.len()));
     }
