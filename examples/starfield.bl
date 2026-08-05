@@ -1,0 +1,187 @@
+// ============================================================
+// Starfield — 终端 ASCII 星空
+//   bolide run examples/starfield.bl
+// 约 5 秒自动结束；Ctrl+C 可提前退出
+//
+// 注意：Bolide 字符串目前不支持 \u001b；ANSI 用字面 ESC (0x1B)。
+// ============================================================
+
+import "std/time" as time;
+import "std/random" as random;
+
+let W: int = 72;
+let H: int = 22;
+let STAR_N: int = 56;
+let FRAMES: int = 100;
+
+// ESC = U+001B（源码里是真实控制字符，不是 \u 转义）
+let ESC: str = "";
+
+class Star {
+    x: float;
+    y: float;
+    z: float;
+    kind: int;
+}
+
+fn randf() -> float {
+    return random.rand_float();
+}
+
+fn make_star() -> Star {
+    return Star(
+        randf() * 2.0 - 1.0,
+        randf() * 2.0 - 1.0,
+        randf() * 0.85 + 0.15,
+        random.rand_int(4)
+    );
+}
+
+fn clampi(v: int, lo: int, hi: int) -> int {
+    if v < lo {
+        return lo;
+    }
+    if v > hi {
+        return hi;
+    }
+    return v;
+}
+
+fn color_for(z: float) -> str {
+    if z < 0.25 {
+        return ESC + "[97m";
+    }
+    if z < 0.45 {
+        return ESC + "[96m";
+    }
+    if z < 0.7 {
+        return ESC + "[36m";
+    }
+    return ESC + "[34m";
+}
+
+fn glyph_for(kind: int, z: float) -> str {
+    if z < 0.2 {
+        return "#";
+    }
+    if z < 0.35 {
+        return "*";
+    }
+    if kind == 0 {
+        return ".";
+    }
+    if kind == 1 {
+        return "+";
+    }
+    if kind == 2 {
+        return "o";
+    }
+    return "*";
+}
+
+fn clear_screen() {
+    print(ESC + "[2J" + ESC + "[H");
+}
+
+fn hide_cursor() {
+    print(ESC + "[?25l");
+}
+
+fn show_cursor() {
+    print(ESC + "[?25h");
+}
+
+fn blank_grid() -> list<list<str>> {
+    var grid: list<list<str>> = [];
+    for y in range(H) {
+        var row: list<str> = [];
+        for x in range(W) {
+            row.push(" ");
+        }
+        grid.push(row);
+    }
+    return grid;
+}
+
+fn blank_colors() -> list<list<str>> {
+    var grid: list<list<str>> = [];
+    for y in range(H) {
+        var row: list<str> = [];
+        for x in range(W) {
+            row.push("");
+        }
+        grid.push(row);
+    }
+    return grid;
+}
+
+// ---- main ----
+random.seed(time.now_ms());
+hide_cursor();
+clear_screen();
+
+var stars: list<Star> = [];
+for i in range(STAR_N) {
+    stars.push(make_star());
+}
+
+var frame: int = 0;
+while frame < FRAMES {
+    // 1) 更新位置（飞向相机）
+    for i in range(stars.len()) {
+        let s: Star = stars[i];
+        var z: float = s.z - 0.04;
+        if z < 0.06 {
+            stars[i] = make_star();
+        } else {
+            stars[i] = Star(s.x, s.y, z, s.kind);
+        }
+    }
+
+    // 2) 清空帧缓冲
+    var grid: list<list<str>> = blank_grid();
+    var colors: list<list<str>> = blank_colors();
+
+    // 3) 透视投影到格子
+    for i in range(stars.len()) {
+        let s: Star = stars[i];
+        let scale: float = 1.0 / s.z;
+        let sx: int = clampi(int((s.x * scale * 0.5 + 0.5) * float(W)), 0, W - 1);
+        let sy: int = clampi(int((s.y * scale * 0.5 + 0.5) * float(H)), 0, H - 1);
+        // 就近覆盖：更近的星盖住远星
+        let prev: str = grid[sy][sx];
+        if prev == " " or s.z < 0.4 {
+            grid[sy][sx] = glyph_for(s.kind, s.z);
+            colors[sy][sx] = color_for(s.z);
+        }
+    }
+
+    // 4) 绘制
+    clear_screen();
+    print(ESC + "[95m  ◆ BOLIDE STARFIELD" + ESC + "[0m  " + ESC + "[90mframe " + str(frame + 1) + "/" + str(FRAMES) + ESC + "[0m");
+    print(ESC + "[90m  ------------------------------------------------------------------------" + ESC + "[0m");
+
+    for y in range(H) {
+        var line: str = "  ";
+        for x in range(W) {
+            let cell: str = grid[y][x];
+            if cell == " " {
+                line = line + " ";
+            } else {
+                line = line + colors[y][x] + cell + ESC + "[0m";
+            }
+        }
+        print(line);
+    }
+
+    print(ESC + "[90m  ------------------------------------------------------------------------" + ESC + "[0m");
+    print(ESC + "[36m  thrusters online · warp " + str(100 + frame % 50) + "% · Ctrl+C to abort" + ESC + "[0m");
+
+    time.sleep_ms(45);
+    frame = frame + 1;
+}
+
+show_cursor();
+print("");
+print("  " + ESC + "[92m✓" + ESC + "[0m hyperspace jump complete.");
+print("");

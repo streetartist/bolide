@@ -1,0 +1,223 @@
+// ============================================================
+// Neon Lang — Bolide 0.14 特性霓虹秀
+//   bolide run examples/neon_lang.bl
+// 展示：trait / 运算符重载 / 生成器 / 宏 / 标准库
+// ============================================================
+
+import "std/time" as time;
+import "std/math" as math;
+import "std/iter" as iter;
+import "std/text" as text;
+import "std/macros" as m;
+
+// ---- 宏：霓虹标题 ----
+// 注意：macro 定义与 fn/class 一样，以 } 结束，不要写 };
+macro banner($title:expr) quote {
+    print("");
+    print("  ╔══════════════════════════════════════════════════════╗");
+    print("  ║  " + text.pad_right($title, 50, " ") + "║");
+    print("  ╚══════════════════════════════════════════════════════╝");
+    print("");
+}
+
+// ---- 运算符重载：2D 向量 ----
+class Vec2 {
+    x: int;
+    y: int;
+
+    fn __add__(o: Vec2) -> Vec2 {
+        return Vec2(self.x + o.x, self.y + o.y);
+    }
+
+    fn __mul__(k: int) -> Vec2 {
+        return Vec2(self.x * k, self.y * k);
+    }
+
+    fn __eq__(o: Vec2) -> bool {
+        return self.x == o.x and self.y == o.y;
+    }
+
+    fn __neg__() -> Vec2 {
+        return Vec2(0 - self.x, 0 - self.y);
+    }
+
+    fn len2() -> int {
+        return self.x * self.x + self.y * self.y;
+    }
+
+    fn show() -> str {
+        return "(" + str(self.x) + "," + str(self.y) + ")";
+    }
+}
+
+// ---- Trait + 默认方法 ----
+trait Drawable {
+    fn glyph() -> str;
+    fn label() -> str {
+        return "shape";
+    }
+}
+
+class Star {
+    n: int;
+}
+
+impl Drawable for Star {
+    fn glyph() -> str {
+        if self.n % 3 == 0 {
+            return "✦";
+        }
+        if self.n % 2 == 0 {
+            return "✧";
+        }
+        return "·";
+    }
+    fn label() -> str {
+        return "star#" + str(self.n);
+    }
+}
+
+fn paint_all<T: Drawable>(items: list<T>) -> str {
+    var line: str = "  ";
+    for it in items {
+        line = line + it.glyph() + " ";
+    }
+    return line;
+}
+
+// ---- 生成器：质数流 ----
+fn primes_upto(limit: int) {
+    var n: int = 2;
+    while n < limit {
+        var ok: bool = true;
+        var d: int = 2;
+        while d * d <= n {
+            if n % d == 0 {
+                ok = false;
+                break;
+            }
+            d = d + 1;
+        }
+        if ok {
+            yield n;
+        }
+        n = n + 1;
+    }
+}
+
+// ---- 生成器：斐波那契 ----
+fn fib(n: int) {
+    var a: int = 0;
+    var b: int = 1;
+    var i: int = 0;
+    while i < n {
+        yield a;
+        let c: int = a + b;
+        a = b;
+        b = c;
+        i = i + 1;
+    }
+}
+
+// ---- 装饰器风格：计时包装（手写 Python 式） ----
+fn timed_name(name: str) -> func(func() -> int) -> func() -> int {
+    return fn(f: func() -> int) -> func() -> int {
+        return fn() -> int {
+            let t0: int = time.monotonic_ms();
+            let r: int = f();
+            let dt: int = time.monotonic_ms() - t0;
+            print("  ⏱  " + name + " took " + str(dt) + "ms → " + str(r));
+            return r;
+        };
+    };
+}
+
+fn heavy_sum() -> int {
+    var s: int = 0;
+    for i in range(50000) {
+        s = s + i;
+    }
+    return s;
+}
+
+// ============================================================
+// main show
+// ============================================================
+
+print("");
+print("  ██████████╗  ██████╗ ██╗     ██╗██████╗ ███████╗");
+print("  ██╔══██╔══╝ ██╔═══██╗██║     ██║██╔══██╗██╔════╝");
+print("  ███████║    ██║   ██║██║     ██║██║  ██║█████╗  ");
+print("  ██╔══██║    ██║   ██║██║     ██║██║  ██║██╔══╝  ");
+print("  ██████████╗ ╚██████╔╝███████╗██║██████╔╝███████╗");
+print("  ╚═════════╝  ╚═════╝ ╚══════╝╚═╝╚═════╝ ╚══════╝");
+print("         0.14  ·  neon feature showcase");
+print("");
+
+// 1. 运算符
+banner!("1 · Operator Overload");
+let a: Vec2 = Vec2(3, 4);
+let b: Vec2 = Vec2(1, 2);
+let c: Vec2 = a + b;
+let d: Vec2 = a * 2;
+let e: Vec2 = -a;
+print("  a      = " + a.show());
+print("  b      = " + b.show());
+print("  a + b  = " + c.show());
+print("  a * 2  = " + d.show());
+print("  -a     = " + e.show());
+print("  a==b   = " + str(a == b));
+print("  |a|²   = " + str(a.len2()));
+
+// 2. Trait + 泛型约束
+banner!("2 · Trait + Bounds");
+var sky: list<Star> = [];
+for i in range(24) {
+    sky.push(Star(i));
+}
+print(paint_all(sky));
+print("  " + sky[0].label() + "  " + sky[7].label() + "  " + sky[13].label());
+
+// 3. 生成器
+banner!("3 · Lazy Generators");
+print("  primes < 40:");
+var p_line: str = "  ";
+for p in primes_upto(40) {
+    p_line = p_line + str(p) + " ";
+}
+print(p_line);
+
+print("  fib(12):");
+var f_line: str = "  ";
+for f in fib(12) {
+    f_line = f_line + str(f) + " ";
+}
+print(f_line);
+
+// 4. 宏
+banner!("4 · Macros");
+let x: int = 7;
+let y: int = 11;
+print("  max2(7,11) = " + str(m.max2!(x, y)));
+print("  add1(41)   = " + str(m.add1!(41)));
+
+// 5. 标准库
+banner!("5 · Std Library");
+let nums: list<int> = iter.ints(1, 11);
+print("  sum(1..10)     = " + str(iter.sum(nums)));
+print("  unique([1,1,2,3,3]) = " + str(iter.unique([1, 1, 2, 3, 3]).len()) + " items");
+print("  snake(HelloWorld)  = " + text.snake("HelloWorld"));
+print("  duration(3661000)  = " + time.format_duration_ms(3661000));
+print("  hypot(3,4)         = " + str(math.hypot(3.0, 4.0)));
+
+// 6. 计时装饰
+banner!("6 · Timed Closure");
+let run_heavy: func() -> int = timed_name("heavy_sum")(heavy_sum);
+let _r: int = run_heavy();
+
+// 尾灯
+print("");
+print("  ✦  Bolide feels fast.  ✦  Types when you want them.  ✦");
+print("  Try:  bolide run examples/starfield.bl");
+print("        bolide run examples/pulse_web.bl");
+print("");

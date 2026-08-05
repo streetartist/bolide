@@ -25,6 +25,19 @@
 
 - 新增宏/装饰器/生成器/trait/运算符/`dynamic` vs `dyn`/标准库核心与 cli-web 等回归用例。
 
+### 性能
+
+- 无 `throw`/`try`/`?` 的程序跳过调用点异常 pending 检查（递归数值代码收益大）。
+- `list.len()` 内联；新增 `list.reserve` / `list.resize`（批量填充）。
+- 常用 `bolide_math_*` 降为 Cranelift 指令（sqrt/fabs/floor/min/max 等）。
+- 自动内联小叶子函数（标量参数/返回值、单出口、含 if/while）。
+- `list[i]` 保持边界检查（越界读 0、越界写忽略）；不以牺牲安全换速度。
+- bench 套件与 `bench/README.md` 更新参考比值（几何平均约 1.3x vs C `-O3`）。
+
+### 示例
+
+- `examples/neon_lang.bl`、`examples/starfield.bl` 特性演示。
+
 ## 0.13.7
 
 - 修复 `list + list` 在 JIT/AOT 两个后端中的 lowering 漏洞：此前会错误落到整数 `iadd`，导致 `rows = rows + [row]` 这类嵌套列表构造在运行期静默退出。

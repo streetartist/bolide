@@ -19,12 +19,9 @@ fn count_primes(limit: int, reps: int) -> int {
     var count: int = 0;
     var r: int = 0;
     while r < reps {
+        // bulk fill：一次分配 + 批量写，避免逐 push 扩容
         var flags: list<int> = [];
-        var i: int = 0;
-        while i <= limit {
-            flags.push(1);
-            i = i + 1;
-        }
+        flags.resize(limit + 1, 1);
 
         count = 0;
         var p: int = 2;

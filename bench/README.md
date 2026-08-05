@@ -41,11 +41,19 @@ Checksums are printed by every program and **must match** between Bolide and C
 
 ## Interpreting results
 
-`fib` is the outlier (~2.4x) because it is pure call overhead: the ratio there
-measures prologue/epilogue and call-ABI cost with no loop body to amortize it.
-The array/float benchmarks land around 1.4–1.6x, which is the cost of bounds
-checks, ARC, and Cranelift's codegen versus LLVM `-O3`. The geometric mean is
-the single headline number to watch across releases.
+Typical local ratios after the performance passes (best of 3, Windows,
+Cranelift `opt_level=speed` vs clang `-O3 -march=native`):
+
+| Benchmark | Bolide / C | Notes |
+|---|---|---|
+| `fib` | ~1.8x | pure call overhead; skip exception checks when no `throw`/`try`/`?` |
+| `sieve` | ~1.1–1.2x | `list.resize` bulk init; `list[i]` keeps bounds checks |
+| `mandelbrot` | ~1.4x | float loop codegen; auto-inlines small leaf helpers |
+| `nbody_perf` | ~1.2x | math intrinsics + list access + auto-inline |
+
+`fib` remains the outlier because it is pure call overhead: the ratio measures
+prologue/epilogue and call-ABI cost with no loop body to amortize it. The
+geometric mean is the single headline number to watch across releases.
 
 ## Adding a benchmark
 

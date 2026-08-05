@@ -478,6 +478,70 @@ pub extern "C" fn bolide_list_len(list: *const BolideList) -> usize {
     unsafe { (*list).len() }
 }
 
+/// 预分配容量到至少 `capacity` 个元素（不改变 len）
+#[no_mangle]
+pub extern "C" fn bolide_list_reserve(list: *mut BolideList, capacity: i64) {
+    if list.is_null() || capacity <= 0 {
+        return;
+    }
+    unsafe {
+        let l = &mut *list;
+        let cap = capacity as usize;
+        if cap > l.capacity {
+            l.reserve(cap - l.len);
+        }
+    }
+}
+
+/// 调整长度为 `new_len`；扩展时用 `fill` 填充新槽位。
+/// 对 Int/Float/Bool/Ptr 走批量填充，避免逐元素函数调用开销。
+#[no_mangle]
+pub extern "C" fn bolide_list_resize(list: *mut BolideList, new_len: i64, fill: i64) {
+    if list.is_null() || new_len < 0 {
+        return;
+    }
+    unsafe {
+        let l = &mut *list;
+        let new_len = new_len as usize;
+        if new_len <= l.len {
+            // 收缩：释放多余 RC 元素
+            for i in new_len..l.len {
+                let v = l.read_at(i);
+                l.release_element(v);
+            }
+            l.len = new_len;
+            return;
+        }
+        if new_len > l.capacity {
+            l.reserve(new_len - l.len);
+        }
+        let old_len = l.len;
+        match l.elem_type {
+            ElementType::Int | ElementType::Float | ElementType::Ptr => {
+                // 8 字节元素：用 fill 批量写
+                let base = l.data as *mut i64;
+                for i in old_len..new_len {
+                    *base.add(i) = fill;
+                }
+            }
+            ElementType::Bool => {
+                let base = l.data;
+                let b = fill as u8;
+                for i in old_len..new_len {
+                    *base.add(i) = b;
+                }
+            }
+            _ => {
+                for i in old_len..new_len {
+                    l.write_at(i, fill);
+                    l.retain_element(fill);
+                }
+            }
+        }
+        l.len = new_len;
+    }
+}
+
 /// 追加元素
 #[no_mangle]
 pub extern "C" fn bolide_list_push(list: *mut BolideList, value: i64) {

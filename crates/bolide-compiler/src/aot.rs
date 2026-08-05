@@ -245,6 +245,8 @@ pub struct AotCompiler {
     adts: HashMap<String, AdtInfo>,
     /// 类名 -> 异常类型标签（>=100，按声明顺序分配，用于 catch 类型过滤）
     class_tags: HashMap<String, i64>,
+    /// 程序是否可能跨函数传播异常；false 时跳过调用点 pending 检查
+    needs_exception_checks: bool,
     /// async 函数集合
     async_funcs: HashSet<String>,
     /// extern 函数信息: 函数名 -> (库路径, 函数声明)
@@ -550,6 +552,9 @@ pub const RUNTIME_SYMBOLS: &[&str] = &[
     "list_release",
     "list_clone",
     "list_new",
+    "list_with_capacity",
+    "list_reserve",
+    "list_resize",
     "list_push",
     "list_pop",
     "list_len",
@@ -980,6 +985,7 @@ impl AotCompiler {
             value_types: HashMap::new(),
             adts: HashMap::new(),
             class_tags: HashMap::new(),
+            needs_exception_checks: true,
             async_funcs: HashSet::new(),
             extern_funcs: HashMap::new(),
             modules: HashMap::new(),
@@ -1317,6 +1323,8 @@ impl AotCompiler {
         // 泛型函数单态化
         let program = crate::monomorphize(program)?;
         let program = crate::inline_expand(program)?;
+        // 无 throw/try/? 时跳过调用点异常传播检查
+        self.needs_exception_checks = crate::program_needs_exception_checks(&program);
         // 保存程序快照用于后续字符串扫描（类字段默认值）
         self.program_snapshot = program.clone();
 
@@ -3280,6 +3288,18 @@ impl AotCompiler {
                 "bolide_list_with_capacity",
                 vec![i8t, i64t],
                 Some(p),
+            ),
+            (
+                "@_list_reserve",
+                "bolide_list_reserve",
+                vec![p, i64t],
+                None,
+            ),
+            (
+                "@_list_resize",
+                "bolide_list_resize",
+                vec![p, i64t, i64t],
+                None,
             ),
             ("@_list_push", "bolide_list_push", vec![p, i64t], None),
             ("@_list_pop", "bolide_list_pop", vec![p], Some(i64t)),
@@ -5984,6 +6004,7 @@ impl AotCompiler {
                 self.value_types.clone(),
                 self.overloaded_methods.clone(),
             );
+            ctx.needs_exception_checks = self.needs_exception_checks;
             let params: Vec<_> = ctx.builder.block_params(entry).to_vec();
             let self_var = ctx.declare_variable("self", self.ptr_type);
             ctx.builder.def_var(self_var, params[0]);
@@ -6199,6 +6220,7 @@ impl AotCompiler {
                 self.value_types.clone(),
                 self.overloaded_methods.clone(),
             );
+            ctx.needs_exception_checks = self.needs_exception_checks;
 
             // 设置参数变量
             let params: Vec<_> = ctx.builder.block_params(entry).to_vec();
@@ -6413,6 +6435,7 @@ impl AotCompiler {
                 self.value_types.clone(),
                 self.overloaded_methods.clone(),
             );
+            ctx.needs_exception_checks = self.needs_exception_checks;
 
             // 闭包 lifted 函数的返回类型必须登记
             if let Some(ref ret) = job.return_type {
@@ -6523,6 +6546,8 @@ struct AotCompileContext<'a, 'b> {
     loop_stack: Vec<(Block, Block, usize, usize)>,
     /// catch 落点栈：每个 try 块的 catch_block，用于编译 throw（同函数内直接跳转）
     catch_stack: Vec<Block>,
+    /// 程序是否可能跨函数传播异常
+    needs_exception_checks: bool,
     /// 当前是否位于 catch 体内；用于决定 throw 是否需要先执行当前 try 的 finally。
     catch_body_depth: usize,
     /// 当前激活的 finally 语句栈（外层到内层）。
@@ -6647,6 +6672,7 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             temp_rc_values: Vec::new(),
             loop_stack: Vec::new(),
             catch_stack: Vec::new(),
+            needs_exception_checks: true,
             catch_body_depth: 0,
             finally_stack: Vec::new(),
             finally_visibility_limit: None,
@@ -7287,6 +7313,9 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
     }
 
     fn emit_exception_pending_check(&mut self) -> Result<(), String> {
+        if !self.needs_exception_checks {
+            return Ok(());
+        }
         let pending_fn = *self
             .func_refs
             .get("@_exception_pending")
@@ -9965,9 +9994,43 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         }
 
         match method_name {
-            "len" | "length" | "size" => call0!("@_list_len"),
+            "len" | "length" | "size" => self.emit_list_len_inline(list_val),
             "pop" => call0!("@_list_pop"),
-            "is_empty" | "empty" => call0!("@_list_is_empty"),
+            "is_empty" | "empty" => {
+                let len = self.emit_list_len_inline(list_val)?;
+                let zero = self.builder.ins().iconst(types::I64, 0);
+                let is_empty = self.builder.ins().icmp(IntCC::Equal, len, zero);
+                Ok(self.builder.ins().uextend(types::I64, is_empty))
+            }
+            "reserve" => {
+                if args.len() != 1 {
+                    return Err("reserve expects 1 argument".to_string());
+                }
+                let cap = self.compile_expr(&args[0])?;
+                let f = *self
+                    .func_refs
+                    .get("@_list_reserve")
+                    .ok_or("list_reserve not found")?;
+                self.builder.ins().call(f, &[list_val, cap]);
+                Ok(self.builder.ins().iconst(types::I64, 0))
+            }
+            "resize" => {
+                if args.len() != 2 {
+                    return Err("resize expects 2 arguments (len, fill)".to_string());
+                }
+                let new_len = self.compile_expr(&args[0])?;
+                let list_elem_ty = self.infer_expr_type_from_list(base);
+                let fill = self.compile_expr(&args[1])?;
+                let fill = self.prepare_list_runtime_value(fill, &args[1], &list_elem_ty)?;
+                let f = *self
+                    .func_refs
+                    .get("@_list_resize")
+                    .ok_or("list_resize not found")?;
+                self.builder
+                    .ins()
+                    .call(f, &[list_val, new_len, fill]);
+                Ok(self.builder.ins().iconst(types::I64, 0))
+            }
             "first" => call0!("@_list_first"),
             "last" => call0!("@_list_last"),
             "sort" => {
@@ -11854,15 +11917,52 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             return self.compile_dynamic_extern_call(lib_path, extern_func, args);
         }
 
+        let arg_values = self.compile_extern_args(extern_func, args)?;
+        if let Some(v) = self.try_emit_math_intrinsic(&extern_func.name, &arg_values) {
+            return Ok(v);
+        }
+
         let func_ref = *self
             .func_refs
             .get(&extern_func.name)
             .ok_or_else(|| format!("Extern function not declared: {}", extern_func.name))?;
 
-        let arg_values = self.compile_extern_args(extern_func, args)?;
         let call = self.builder.ins().call(func_ref, &arg_values);
         let results = self.builder.inst_results(call).to_vec();
         self.convert_extern_result(extern_func, &results)
+    }
+
+    fn try_emit_math_intrinsic(&mut self, name: &str, args: &[Value]) -> Option<Value> {
+        match name {
+            "bolide_math_sqrt" if args.len() == 1 => Some(self.builder.ins().sqrt(args[0])),
+            "bolide_math_abs_f64" if args.len() == 1 => Some(self.builder.ins().fabs(args[0])),
+            "bolide_math_floor" if args.len() == 1 => Some(self.builder.ins().floor(args[0])),
+            "bolide_math_ceil" if args.len() == 1 => Some(self.builder.ins().ceil(args[0])),
+            "bolide_math_trunc" if args.len() == 1 => Some(self.builder.ins().trunc(args[0])),
+            "bolide_math_round" if args.len() == 1 => Some(self.builder.ins().nearest(args[0])),
+            "bolide_math_min_f64" if args.len() == 2 => {
+                Some(self.builder.ins().fmin(args[0], args[1]))
+            }
+            "bolide_math_max_f64" if args.len() == 2 => {
+                Some(self.builder.ins().fmax(args[0], args[1]))
+            }
+            "bolide_math_abs_i64" if args.len() == 1 => Some(self.builder.ins().iabs(args[0])),
+            "bolide_math_min_i64" if args.len() == 2 => {
+                let lt = self
+                    .builder
+                    .ins()
+                    .icmp(IntCC::SignedLessThan, args[0], args[1]);
+                Some(self.builder.ins().select(lt, args[0], args[1]))
+            }
+            "bolide_math_max_i64" if args.len() == 2 => {
+                let gt = self
+                    .builder
+                    .ins()
+                    .icmp(IntCC::SignedGreaterThan, args[0], args[1]);
+                Some(self.builder.ins().select(gt, args[0], args[1]))
+            }
+            _ => None,
+        }
     }
 
     fn compile_dynamic_extern_call(
@@ -12737,6 +12837,15 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
     const LIST_DATA_OFFSET: i64 = 16;
     const LIST_LEN_OFFSET: i64 = 24;
 
+    fn emit_list_len_inline(&mut self, list_ptr: Value) -> Result<Value, String> {
+        let len_ptr = self.builder.ins().iadd_imm(list_ptr, Self::LIST_LEN_OFFSET);
+        Ok(self
+            .builder
+            .ins()
+            .load(types::I64, MemFlags::new(), len_ptr, 0))
+    }
+
+    /// 内联 list[index]：始终 bounds check；越界读返回 0 / 0.0。
     fn emit_list_get_inline(
         &mut self,
         list_ptr: Value,
@@ -12781,6 +12890,7 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         Ok(self.builder.ins().select(in_bounds, value, zero))
     }
 
+    /// 内联 list[index] = value：越界写忽略。
     fn emit_list_set_inline(
         &mut self,
         list_ptr: Value,
@@ -12794,10 +12904,20 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             _ => (8, types::I64),
         };
         let len_ptr = self.builder.ins().iadd_imm(list_ptr, Self::LIST_LEN_OFFSET);
-        let _len = self
+        let len = self
             .builder
             .ins()
             .load(types::I64, MemFlags::new(), len_ptr, 0);
+        let in_bounds = self.builder.ins().icmp(IntCC::UnsignedLessThan, index, len);
+
+        let do_store = self.builder.create_block();
+        let cont = self.builder.create_block();
+        self.builder
+            .ins()
+            .brif(in_bounds, do_store, &[], cont, &[]);
+
+        self.builder.switch_to_block(do_store);
+        self.builder.seal_block(do_store);
         let data_ptr_addr = self
             .builder
             .ins()
@@ -12808,7 +12928,6 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             .load(self.ptr_type, MemFlags::new(), data_ptr_addr, 0);
         let offset = self.builder.ins().imul_imm(index, elem_byte_width);
         let elem_addr = self.builder.ins().iadd(data_ptr, offset);
-        // 窄存储时必须 ireduce，否则 store 按 value 类型宽度写出
         let store_val = if store_ty == types::I8 {
             self.builder.ins().ireduce(types::I8, value)
         } else {
@@ -12817,6 +12936,10 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         self.builder
             .ins()
             .store(MemFlags::new(), store_val, elem_addr, 0);
+        self.builder.ins().jump(cont, &[]);
+
+        self.builder.switch_to_block(cont);
+        self.builder.seal_block(cont);
         Ok(())
     }
 
