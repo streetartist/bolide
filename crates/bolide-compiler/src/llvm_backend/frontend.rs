@@ -17,6 +17,21 @@ pub struct ExternSig {
     pub name: String,
     pub params: Vec<&'static str>,
     pub ret: &'static str,
+    /// true at the index of a `func(...)` callback param — the runtime invokes it
+    /// as a raw `extern "C" fn(...)` pointer, so codegen must pass the bare
+    /// function address, not a closure object.
+    pub funcptr_params: Vec<bool>,
+    /// parallel to params: for each `func(...)` callback param, its full
+    /// `(callback param LLVM types, callback return LLVM type)` signature, used to
+    /// build a bare-call trampoline when a closure value is forwarded.
+    pub funcptr_sigs: Vec<Option<(Vec<&'static str>, &'static str)>>,
+    /// true at the index of a `*c_char` param — a Bolide `str` must be converted
+    /// to a C string pointer via `bolide_string_as_cstr` before the call.
+    pub cstr_params: Vec<bool>,
+    /// true at the index of a `*dynamic` param — the runtime expects a
+    /// `BolideDynamic` wrapper, so the arg must be converted via
+    /// `bolide_dynamic_from_*` before the call.
+    pub dynamic_params: Vec<bool>,
 }
 
 /// Fully expanded, monomorphized program ready for LLVM IR emission.
@@ -331,10 +346,15 @@ fn collect_externs(program: &Program) -> Vec<ExternSig> {
         ("bolide_math_floor", vec!["double"], "double"),
         ("bolide_math_ceil", vec!["double"], "double"),
     ] {
+        let n_params = params.len();
         out.push(ExternSig {
             name: name.into(),
             params: params.into_iter().map(|s| s).collect(),
             ret,
+            funcptr_params: vec![false; n_params],
+            funcptr_sigs: vec![None; n_params],
+            cstr_params: vec![false; n_params],
+            dynamic_params: vec![false; n_params],
         });
     }
     for stmt in &program.statements {
@@ -344,6 +364,36 @@ fn collect_externs(program: &Program) -> Vec<ExternSig> {
                 if let ExternDecl::Function(f) = d {
                     let params: Vec<&'static str> =
                         f.params.iter().map(|p| ctype_llvm(&p.ty)).collect();
+                    let funcptr_params: Vec<bool> = f
+                        .params
+                        .iter()
+                        .map(|p| matches!(p.ty, CType::FuncPtr { .. }))
+                        .collect();
+                    let funcptr_sigs: Vec<Option<(Vec<&'static str>, &'static str)>> = f
+                        .params
+                        .iter()
+                        .map(|p| match &p.ty {
+                            CType::FuncPtr { params, return_type } => Some((
+                                params.iter().map(ctype_llvm).collect(),
+                                ctype_llvm(return_type),
+                            )),
+                            _ => None,
+                        })
+                        .collect();
+                    let cstr_params: Vec<bool> = f
+                        .params
+                        .iter()
+                        .map(|p| {
+                            matches!(&p.ty, CType::Ptr(inner) if matches!(inner.as_ref(), CType::Char))
+                        })
+                        .collect();
+                    let dynamic_params: Vec<bool> = f
+                        .params
+                        .iter()
+                        .map(|p| {
+                            matches!(&p.ty, CType::Ptr(inner) if matches!(inner.as_ref(), CType::Struct(n) if n == "dynamic"))
+                        })
+                        .collect();
                     let ret = f
                         .return_type
                         .as_ref()
@@ -355,6 +405,10 @@ fn collect_externs(program: &Program) -> Vec<ExternSig> {
                             name: f.name.clone(),
                             params,
                             ret,
+                            funcptr_params,
+                            funcptr_sigs,
+                            cstr_params,
+                            dynamic_params,
                         });
                     }
                 }
@@ -386,6 +440,7 @@ fn ctype_llvm(ty: &CType) -> &'static str {
     match ty {
         CType::Float | CType::Double => "double",
         CType::Void => "void",
+        CType::FuncPtr { .. } => "ptr", // callback: raw extern "C" fn pointer
         CType::Ptr(_) | CType::Struct(_) => "ptr", // str, list, *c_char, …
         _ => "i64",
     }
@@ -479,6 +534,15 @@ fn resolve_import_path(
     if let Ok(home) = std::env::var("BOLIDE_HOME") {
         search_roots.push(PathBuf::from(home));
     }
+    // 按 exe 位置找依赖（与 Cranelift JIT 一致）：bolide.exe 同目录下的 std/、
+    // std 子模块等。这样从任意 CWD 运行都能解析 import。
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            search_roots.push(exe_dir.to_path_buf());
+            // 常见布局：exe 在 target/release/，std 在仓库根
+            search_roots.push(exe_dir.join(".."));
+        }
+    }
     // CWD
     if let Ok(cwd) = std::env::current_dir() {
         search_roots.push(cwd);
@@ -498,7 +562,7 @@ fn resolve_import_path(
         }
     }
     Err(format!(
-        "Cannot resolve import '{}' (tried under base_dir/BOLIDE_HOME/cwd)",
+        "Cannot resolve import '{}' (tried under base_dir/BOLIDE_HOME/exe-dir/cwd)",
         rel
     ))
 }

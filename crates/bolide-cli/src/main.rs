@@ -477,7 +477,62 @@ fn locate_compile_error(source: &str, message: &str) -> Option<(usize, usize, St
         }
     }
 
+    // `let`-immutability errors: point at the ACTUAL mutation site (`.method(`
+    // call or `= ` assignment) rather than the first binding with that name,
+    // which may live in an unrelated function (e.g. a param named `status`).
+    if let Some(name) = message
+        .strip_prefix("Cannot call mutating method on immutable binding '")
+        .and_then(|rest| rest.split("';").next())
+    {
+        let name = trim_error_name(name);
+        if let Some((offset, len)) = find_mutation_site(source, name, true) {
+            return Some((
+                offset,
+                len,
+                format!("mutating method call on immutable '{}'", name),
+            ));
+        }
+    }
+    if let Some(name) = message
+        .strip_prefix("Cannot assign to immutable binding '")
+        .and_then(|rest| rest.split("';").next())
+    {
+        let name = trim_error_name(name);
+        if let Some((offset, len)) = find_mutation_site(source, name, false) {
+            return Some((
+                offset,
+                len,
+                format!("assignment to immutable '{}'", name),
+            ));
+        }
+    }
+
     locate_message_token(source, message)
+}
+
+/// Find the occurrence of `name` that is a mutation target: followed by `.` when
+/// `method` is true (a `.push(...)`-style call), or by `=` when false (an
+/// assignment LHS). Declarations (`var x:`/`let x:`) and reads (`return x`)
+/// are skipped.
+fn find_mutation_site(source: &str, name: &str, method: bool) -> Option<(usize, usize)> {
+    let mut from = 0;
+    while let Some(rel) = source[from..].find(name) {
+        let offset = from + rel;
+        let end = offset + name.len();
+        if is_identifier_boundary(source, offset, end) {
+            let after = source[end..].trim_start();
+            let is_mutation = if method {
+                after.starts_with('.')
+            } else {
+                after.starts_with('=')
+            };
+            if is_mutation {
+                return Some((offset, name.len()));
+            }
+        }
+        from = end;
+    }
+    None
 }
 
 fn locate_message_token(source: &str, message: &str) -> Option<(usize, usize, String)> {

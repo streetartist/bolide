@@ -183,7 +183,7 @@ fn current_user(req: web.Request) -> dict<str, dynamic> {
 
     let probe: web.Response = web.empty(204);
     let session: web.Session = web.session(req, probe);
-    let result: dict<str, dynamic> = guest_user();
+    var result: dict<str, dynamic> = guest_user();
 
     if session.contains("user_id") {
         let id: int = int(session.get("user_id"));
@@ -226,7 +226,7 @@ fn render_page(page_title: str, template_path: str, ctx: dict<str, dynamic>, use
 
 fn published_comments(post_id: int) -> list<dict<str, dynamic>> {
     let rows: list<dict<str, dynamic>> = store.where_eq("comments", "post_id", post_id);
-    let result: list<dict<str, dynamic>> = [];
+    var result: list<dict<str, dynamic>> = [];
     for comment in rows {
         if str(comment["status"]) == "已通过" {
             result.push(comment);
@@ -328,7 +328,7 @@ fn login_submit(req: web.Request) -> web.Response {
         return login_form(req, "用户名或密码不正确。");
     }
 
-    let target: str = "/";
+    var target: str = "/";
     if str(row["role"]) == "管理员" {
         target = "/admin";
     }
@@ -463,7 +463,7 @@ fn create_user(req: web.Request) -> web.Response {
     let username: str = req.form_param("username");
     let password: str = req.form_param("password");
     let display_name: str = req.form_param("display_name");
-    let role: str = req.form_param("role");
+    var role: str = req.form_param("role");
     if role != "管理员" {
         role = "用户";
     }
@@ -488,7 +488,7 @@ fn toggle_user_role(req: web.Request) -> web.Response {
     let id: int = int(req.path_param("id"));
     let row: dict<str, dynamic> = store.get("users", id);
     if row.contains("username") {
-        let next_role: str = "管理员";
+        var next_role: str = "管理员";
         if str(row["role"]) == "管理员" {
             next_role = "用户";
         }
@@ -513,7 +513,7 @@ fn toggle_user_status(req: web.Request) -> web.Response {
 
     let row: dict<str, dynamic> = store.get("users", id);
     if row.contains("username") {
-        let next_status: str = "停用";
+        var next_status: str = "停用";
         if str(row["status"]) == "停用" {
             next_status = "启用";
         }
@@ -546,7 +546,7 @@ fn create_comment(req: web.Request) -> web.Response {
 
     let content: str = req.form_param("content");
     if content != "" {
-        let status: str = "待审核";
+        var status: str = "待审核";
         if is_admin_user(user) {
             status = "已通过";
         }

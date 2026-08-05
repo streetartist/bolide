@@ -7,7 +7,7 @@ use bolide_parser::{
     Assign, BinOp, Expr, ForStmt, FuncDef, IfStmt, Param, Pattern, Program, Statement, Type,
     UnaryOp, VarDecl, WhileStmt,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 
 use super::frontend::{ExternSig, PreparedProgram};
@@ -24,6 +24,14 @@ pub fn emit_llvm_ir(prepared: &PreparedProgram) -> Result<String, String> {
     for ext in &prepared.externs {
         cg.funcs
             .insert(ext.name.clone(), (ext.params.clone(), ext.ret));
+        cg.extern_funcptr
+            .insert(ext.name.clone(), ext.funcptr_params.clone());
+        cg.extern_funcptr_sigs
+            .insert(ext.name.clone(), ext.funcptr_sigs.clone());
+        cg.extern_cstr
+            .insert(ext.name.clone(), ext.cstr_params.clone());
+        cg.extern_dynamic
+            .insert(ext.name.clone(), ext.dynamic_params.clone());
         cg.extern_decls.push(ext.clone());
     }
     cg.emit_program(&prepared.program)?;
@@ -41,11 +49,18 @@ enum ValKind {
     List(u8),
     /// list of class instances (element is object ptr)
     ListObj(String),
+    /// nested list: `list<list<T>>`, carries the inner list's kind so that
+    /// `grid[y][x]` type inference can resolve `T` (e.g. Str)
+    NestedList(Box<ValKind>),
     Dict,
     Object(String),
     Adt(String),
     /// bolide_closure object
     Closure,
+    /// raw function pointer (bare ABI), e.g. a FuncSig param not receiving closures
+    RawFunc,
+    /// a BolideDynamic value (dict values, `dynamic` vars) — conversions must unwrap
+    Dynamic,
     Ptr,
 }
 
@@ -67,6 +82,21 @@ struct Codegen {
     /// constructor / free function return high-level kind
     func_ret_kind: HashMap<String, ValKind>,
     extern_decls: Vec<ExternSig>,
+    /// extern name → per-param flag: is a `func(...)` callback (raw fn ptr)
+    extern_funcptr: HashMap<String, Vec<bool>>,
+    /// extern name → per-param full callback signature (params, ret) for trampolines
+    extern_funcptr_sigs: HashMap<String, Vec<Option<(Vec<&'static str>, &'static str)>>>,
+    /// extern name → per-param flag: is a `*c_char` (str → C string conversion)
+    extern_cstr: HashMap<String, Vec<bool>>,
+    /// extern name → per-param flag: is a `*dynamic` (wrap into a BolideDynamic)
+    extern_dynamic: HashMap<String, Vec<bool>>,
+    /// callback closure globals (`@__cb_N`) emitted in the module globals section
+    cb_globals: Vec<String>,
+    /// function/method name → params (for FuncSig param classification)
+    func_params: HashMap<String, Vec<Param>>,
+    /// function name → indices of FuncSig params that receive closure objects
+    /// (everything else is a raw function pointer, matching Cranelift)
+    funcsig_closure_params: HashMap<String, HashSet<usize>>,
     strings: Vec<String>,
     body: String,
     tmp: usize,
@@ -196,6 +226,17 @@ impl Codegen {
             ("bolide_math_max_f64", vec!["double", "double"], "double"),
             ("bolide_math_clamp_i64", vec!["i64", "i64", "i64"], "i64"),
             ("bolide_math_clamp_f64", vec!["double", "double", "double"], "double"),
+            // Dynamic wrappers (extern `*dynamic` params)
+            ("bolide_dynamic_from_int", vec!["i64"], "ptr"),
+            ("bolide_dynamic_from_float", vec!["double"], "ptr"),
+            ("bolide_dynamic_from_bool", vec!["i64"], "ptr"),
+            ("bolide_dynamic_from_string", vec!["ptr"], "ptr"),
+            ("bolide_dynamic_from_list", vec!["ptr"], "ptr"),
+            ("bolide_dynamic_from_dict", vec!["ptr"], "ptr"),
+            ("bolide_dynamic_to_string", vec!["ptr"], "ptr"),
+            ("bolide_dynamic_to_int", vec!["ptr"], "i64"),
+            ("bolide_dynamic_to_float", vec!["ptr"], "double"),
+            ("bolide_print_dynamic", vec!["ptr"], "void"),
         ] {
             funcs.insert(n.into(), (ps, r));
         }
@@ -205,6 +246,13 @@ impl Codegen {
             overloads: HashMap::new(),
             func_ret_kind: HashMap::new(),
             extern_decls: Vec::new(),
+            extern_funcptr: HashMap::new(),
+            extern_funcptr_sigs: HashMap::new(),
+            extern_cstr: HashMap::new(),
+            extern_dynamic: HashMap::new(),
+            cb_globals: Vec::new(),
+            func_params: HashMap::new(),
+            funcsig_closure_params: HashMap::new(),
             strings: Vec::new(),
             body: String::new(),
             tmp: 0,
@@ -361,6 +409,16 @@ declare double @bolide_math_min_f64(double, double)
 declare double @bolide_math_max_f64(double, double)
 declare i64 @bolide_math_clamp_i64(i64, i64, i64)
 declare double @bolide_math_clamp_f64(double, double, double)
+declare ptr @bolide_dynamic_from_int(i64)
+declare ptr @bolide_dynamic_from_float(double)
+declare ptr @bolide_dynamic_from_bool(i64)
+declare ptr @bolide_dynamic_from_string(ptr)
+declare ptr @bolide_dynamic_from_list(ptr)
+declare ptr @bolide_dynamic_from_dict(ptr)
+declare ptr @bolide_dynamic_to_string(ptr)
+declare i64 @bolide_dynamic_to_int(ptr)
+declare double @bolide_dynamic_to_float(ptr)
+declare void @bolide_print_dynamic(ptr)
 
 "#,
         );
@@ -480,6 +538,10 @@ declare double @bolide_math_clamp_f64(double, double, double)
                 }
             }
         }
+        // callback closure globals used by bare-call trampolines
+        for g in &self.cb_globals {
+            let _ = writeln!(out, "@{} = global ptr null, align 8", g);
+        }
         out.push('\n');
         out.push_str(&self.body);
         out
@@ -535,6 +597,12 @@ declare double @bolide_math_clamp_f64(double, double, double)
             }
         }
 
+        // Classify FuncSig params: which ones receive closure objects (capturing
+        // lambdas). Everything else is a raw function pointer, so web/GUI callbacks
+        // (bare functions forwarded through a std method to a `func(*c_void)` extern)
+        // are passed as their bare address instead of a closure object.
+        self.collect_funcsig_closure_params(program);
+
         // Every top-level `let`/`var` is a true LLVM global so non-main
         // functions can read/write it (mirrors the Cranelift backend, where
         // top-level bindings become globals rather than locals of `__main__`).
@@ -542,37 +610,21 @@ declare double @bolide_math_clamp_f64(double, double, double)
             if let Statement::VarDecl(d) = stmt {
                 let mut kind = if let Some(ref t) = d.ty {
                     kind_of_type(&Some(t.clone()))
-                } else {
-                    ValKind::Int
-                };
-                if let Some(ref v) = d.value {
-                    kind = match v {
-                        Expr::Float(_) => ValKind::Float,
+                } else if let Some(ref v) = d.value {
+                    // No explicit type → infer from the value: literals, closure
+                    // literal, function-returning call, `channel()`/`bytes()`/
+                    // class ctors → the global holds a ptr/closure object.
+                    match v {
+                        Expr::Float(_) | Expr::Decimal(_) => ValKind::Float,
                         Expr::String(_) => ValKind::Str,
                         Expr::Bool(_) => ValKind::Bool,
                         Expr::Int(_) => ValKind::Int,
                         Expr::Closure { .. } => ValKind::Closure,
-                        Expr::Call(callee, _) => {
-                            // function-returning call (e.g. `let f = make_adder(5)`)
-                            // → the global holds a closure object, not an int
-                            if let Expr::Ident(name) = callee.as_ref() {
-                                if self
-                                    .func_ret_kind
-                                    .get(name)
-                                    .map(|k| matches!(k, ValKind::Closure))
-                                    .unwrap_or(false)
-                                {
-                                    ValKind::Closure
-                                } else {
-                                    kind
-                                }
-                            } else {
-                                kind
-                            }
-                        }
-                        _ => kind,
-                    };
-                }
+                        _ => self.infer_kind(v),
+                    }
+                } else {
+                    ValKind::Int
+                };
                 let ty = kind_to_llvm(&kind);
                 self.global_vars.insert(d.name.clone(), (ty, kind));
             }
@@ -846,11 +898,11 @@ declare double @bolide_math_clamp_f64(double, double, double)
             tname
         };
         let clo = self.fresh();
+        // tramp is a fully-mangled concrete symbol — do NOT re-mangle it
         let _ = writeln!(
             self.body,
             "  {} = call ptr @bolide_closure_new(ptr @{}, ptr null, i64 0, ptr null)",
-            clo,
-            llvm_func_name(&tramp)
+            clo, tramp
         );
         Ok((clo, "ptr"))
     }
@@ -936,6 +988,36 @@ declare double @bolide_math_clamp_f64(double, double, double)
             env_size
         );
         Ok((clo, "ptr"))
+    }
+
+    /// Call a raw function pointer value (bare ABI `fn(args) -> ret`), used for
+    /// FuncSig params that carry bare function addresses.
+    fn emit_raw_func_call(
+        &mut self,
+        fn_ptr: &str,
+        args: &[Expr],
+        ret_ty: &'static str,
+    ) -> Result<(String, &'static str), String> {
+        let mut arg_s = String::new();
+        for (i, a) in args.iter().enumerate() {
+            if i > 0 {
+                arg_s.push_str(", ");
+            }
+            let (v, ty) = self.emit_expr(a)?;
+            let _ = write!(arg_s, "{} {}", ty, v);
+        }
+        if ret_ty == "void" {
+            let _ = writeln!(self.body, "  call void {}({})", fn_ptr, arg_s);
+            Ok(("0".into(), "i64"))
+        } else {
+            let d = self.fresh();
+            let _ = writeln!(
+                self.body,
+                "  {} = call {} {}({})",
+                d, ret_ty, fn_ptr, arg_s
+            );
+            Ok((d, ret_ty))
+        }
     }
 
     fn emit_closure_call(
@@ -1055,6 +1137,187 @@ declare double @bolide_math_clamp_f64(double, double, double)
         self.emit_function(&m2)
     }
 
+    /// Classify FuncSig params that receive closure objects (capturing lambdas);
+    /// params not listed are treated as raw function pointers.
+    fn collect_funcsig_closure_params(&mut self, program: &Program) {
+        // 1) collect signatures
+        for stmt in &program.statements {
+            match stmt {
+                Statement::FuncDef(f) => {
+                    self.func_params.insert(f.name.clone(), f.params.clone());
+                }
+                Statement::ClassDef(c) => {
+                    for m in &c.methods {
+                        let mut params = vec![Param {
+                            name: "self".to_string(),
+                            ty: Type::Custom(c.name.clone()),
+                            mode: bolide_parser::ParamMode::Borrow,
+                            default_value: None,
+                            is_variadic: false,
+                            is_kw_variadic: false,
+                        }];
+                        params.extend(m.params.iter().cloned());
+                        self.func_params
+                            .insert(method_full_name(&c.name, &m.name), params);
+                    }
+                }
+                _ => {}
+            }
+        }
+        // 2) scan call sites; a FuncSig param receives a closure if any call passes
+        //    a closure literal or a closure-returning expression to it
+        let mut out: HashMap<String, HashSet<usize>> = HashMap::new();
+        for _ in 0..8 {
+            let before = out.clone();
+            for stmt in &program.statements {
+                match stmt {
+                    Statement::FuncDef(f) => {
+                        self.scan_closure_usage(&f.body, &mut out);
+                    }
+                    Statement::ClassDef(c) => {
+                        for m in &c.methods {
+                            self.scan_closure_usage(&m.body, &mut out);
+                        }
+                    }
+                    Statement::VarDecl(d) => {
+                        if let Some(v) = &d.value {
+                            self.scan_closure_usage_expr(v, &mut out);
+                        }
+                    }
+                    // top-level executable statements (the main body) too
+                    other => {
+                        self.scan_closure_usage(std::slice::from_ref(other), &mut out);
+                    }
+                }
+            }
+            if out == before {
+                break;
+            }
+        }
+        self.funcsig_closure_params = out;
+    }
+
+    fn scan_closure_usage(&mut self, stmts: &[Statement], out: &mut HashMap<String, HashSet<usize>>) {
+        for s in stmts {
+            match s {
+                Statement::Expr(e) => self.scan_closure_usage_expr(e, out),
+                Statement::Return(Some(e)) => self.scan_closure_usage_expr(e, out),
+                Statement::VarDecl(d) => {
+                    if let Some(v) = &d.value {
+                        self.scan_closure_usage_expr(v, out);
+                    }
+                }
+                Statement::Assign(a) => {
+                    self.scan_closure_usage_expr(&a.value, out);
+                }
+                Statement::If(i) => {
+                    self.scan_closure_usage(&i.then_body, out);
+                    for (_, b) in &i.elif_branches {
+                        self.scan_closure_usage(b, out);
+                    }
+                    if let Some(b) = &i.else_body {
+                        self.scan_closure_usage(b, out);
+                    }
+                }
+                Statement::While(w) => self.scan_closure_usage(&w.body, out),
+                Statement::For(f) => self.scan_closure_usage(&f.body, out),
+                Statement::Match(m) => {
+                    for a in &m.arms {
+                        self.scan_closure_usage(&a.body, out);
+                    }
+                }
+                Statement::Try(t) => {
+                    self.scan_closure_usage(&t.try_body, out);
+                    for c in &t.catch_clauses {
+                        self.scan_closure_usage(&c.body, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn scan_closure_usage_expr(
+        &mut self,
+        e: &Expr,
+        out: &mut HashMap<String, HashSet<usize>>,
+    ) {
+        match e {
+            Expr::Call(callee, args) => {
+                if let Expr::Ident(name) = callee.as_ref() {
+                    if let Some(params) = self.func_params.get(name).cloned() {
+                        for (i, arg) in args.iter().enumerate() {
+                            if let Some(p) = params.get(i) {
+                                if matches!(p.ty, Type::Func | Type::FuncSig(_, _)) {
+                                    if self.expr_is_closure(arg) {
+                                        out.entry(name.to_string())
+                                            .or_default()
+                                            .insert(i);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                for a in args {
+                    self.scan_closure_usage_expr(a, out);
+                }
+                self.scan_closure_usage_expr(callee, out);
+            }
+            Expr::Closure { body, .. } => {
+                self.scan_closure_usage(body, out);
+            }
+            Expr::List(items) | Expr::Tuple(items) => {
+                for it in items {
+                    self.scan_closure_usage_expr(it, out);
+                }
+            }
+            Expr::Dict(pairs) => {
+                for (k, v) in pairs {
+                    self.scan_closure_usage_expr(k, out);
+                    self.scan_closure_usage_expr(v, out);
+                }
+            }
+            Expr::BinOp(l, _, r) => {
+                self.scan_closure_usage_expr(l, out);
+                self.scan_closure_usage_expr(r, out);
+            }
+            Expr::UnaryOp(_, x)
+            | Expr::Member(x, _)
+            | Expr::Index(x, _)
+            | Expr::Await(x)
+            | Expr::Propagate(x)
+            | Expr::Raise(x) => self.scan_closure_usage_expr(x, out),
+            _ => {}
+        }
+    }
+
+    /// Is an expression a closure object (lambda literal or a call returning a func)?
+    fn expr_is_closure(&self, e: &Expr) -> bool {
+        match e {
+            Expr::Closure { .. } => true,
+            Expr::Call(c, _) => {
+                if let Expr::Ident(n) = c.as_ref() {
+                    if let Some(k) = self.func_ret_kind.get(n) {
+                        return matches!(k, ValKind::Closure);
+                    }
+                }
+                false
+            }
+            Expr::Ident(n) => self
+                .local_kind
+                .get(n)
+                .map(|k| matches!(k, ValKind::Closure))
+                .or_else(|| {
+                    self.global_vars
+                        .get(n)
+                        .map(|(_, k)| matches!(k, ValKind::Closure))
+                })
+                .unwrap_or(false),
+            _ => false,
+        }
+    }
+
     fn emit_function(&mut self, f: &FuncDef) -> Result<(), String> {
         self.locals.clear();
         self.local_kind.clear();
@@ -1079,7 +1342,20 @@ declare double @bolide_math_clamp_f64(double, double, double)
 
         for (i, p) in f.params.iter().enumerate() {
             let ty = llvm_type_of(&Some(p.ty.clone()));
-            let kind = kind_of_type(&Some(p.ty.clone()));
+            let mut kind = kind_of_type(&Some(p.ty.clone()));
+            // FuncSig/Func params are raw function pointers (bare address) UNLESS
+            // the scan found a closure object being passed to them — matching
+            // Cranelift, so web/GUI callbacks forwarded to a `func(*c_void)` extern
+            // are passed as their bare address and invoked directly by the runtime.
+            if matches!(p.ty, Type::Func | Type::FuncSig(_, _))
+                && !self
+                    .funcsig_closure_params
+                    .get(&f.name)
+                    .map(|s| s.contains(&i))
+                    .unwrap_or(false)
+            {
+                kind = ValKind::RawFunc;
+            }
             let slot = self.fresh_local(&p.name);
             let _ = writeln!(self.body, "  {} = alloca {}, align 8", slot, ty);
             let _ = writeln!(
@@ -1135,7 +1411,22 @@ declare double @bolide_math_clamp_f64(double, double, double)
                 Ok(false)
             }
             Statement::Return(None) => {
-                let _ = writeln!(self.body, "  ret void");
+                // bare `return;` in a function with a declared return type falls
+                // back to the type default (matches the implicit fallthrough)
+                match self.current_ret_ty {
+                    "double" => {
+                        let _ = writeln!(self.body, "  ret double 0.0");
+                    }
+                    "ptr" => {
+                        let _ = writeln!(self.body, "  ret ptr null");
+                    }
+                    "void" => {
+                        let _ = writeln!(self.body, "  ret void");
+                    }
+                    _ => {
+                        let _ = writeln!(self.body, "  ret i64 0");
+                    }
+                }
                 Ok(true)
             }
             Statement::Return(Some(e)) => {
@@ -1745,6 +2036,7 @@ declare double @bolide_math_clamp_f64(double, double, double)
         let (list, _) = self.emit_expr(iter)?;
         let (tag, elem_kind) = match self.infer_kind(iter) {
             ValKind::List(t) => (t, list_tag_to_kind(t)),
+            ValKind::NestedList(inner) => (6u8, *inner.clone()),
             ValKind::ListObj(n) => (4u8, ValKind::Object(n)),
             _ => (0u8, ValKind::Int),
         };
@@ -2191,7 +2483,6 @@ declare double @bolide_math_clamp_f64(double, double, double)
     }
 
     fn emit_dict_lit(&mut self, pairs: &[(Expr, Expr)]) -> Result<(String, &'static str), String> {
-        // default str→dynamic style uses key_type=3 (str), value_type=0 (int packed) — use int/int if possible
         let key_tag: u8 = if pairs
             .first()
             .map(|(k, _)| matches!(self.infer_kind(k), ValKind::Str))
@@ -2201,21 +2492,13 @@ declare double @bolide_math_clamp_f64(double, double, double)
         } else {
             0
         };
-        let val_tag: u8 = if pairs
-            .first()
-            .map(|(_, v)| matches!(self.infer_kind(v), ValKind::Str))
-            .unwrap_or(false)
-        {
-            3
-        } else if pairs
-            .first()
-            .map(|(_, v)| matches!(self.infer_kind(v), ValKind::Float))
-            .unwrap_or(false)
-        {
-            1
-        } else {
-            0
-        };
+        // Dict values are stored as BolideDynamic wrappers (value_type=9) so that
+        // reads (`row["key"]`) return a uniform dynamic the runtime can convert,
+        // and `where_eq` comparisons see the same representation as the query
+        // value. (Using the FIRST value's type for a mixed dict would store e.g. a
+        // bool as a string → the runtime reads it as a pointer and crashes.)
+        let use_dynamic = true;
+        let val_tag: u8 = 9;
         let d = self.fresh();
         let _ = writeln!(
             self.body,
@@ -2226,7 +2509,38 @@ declare double @bolide_math_clamp_f64(double, double, double)
             let (kv, kty) = self.emit_expr(k)?;
             let (vv, vty) = self.emit_expr(v)?;
             let key = self.pack_as_i64(kv, kty)?;
-            let val = self.pack_as_i64(vv, vty)?;
+            let val = if use_dynamic {
+                let dyn_ = self.fresh();
+                let from_fn = match self.infer_kind(v) {
+                    ValKind::Str => Some("bolide_dynamic_from_string"),
+                    ValKind::Float => Some("bolide_dynamic_from_float"),
+                    ValKind::Bool => Some("bolide_dynamic_from_bool"),
+                    ValKind::Dict => Some("bolide_dynamic_from_dict"),
+                    ValKind::List(_) | ValKind::ListObj(_) | ValKind::NestedList(_) => {
+                        Some("bolide_dynamic_from_list")
+                    }
+                    _ => None,
+                };
+                if let Some(fn_name) = from_fn {
+                    let v = self.cast_to(vv, vty, "ptr")?;
+                    let _ = writeln!(
+                        self.body,
+                        "  {} = call ptr @{}(ptr {})",
+                        dyn_, fn_name, v
+                    );
+                    self.pack_as_i64(dyn_, "ptr")?
+                } else {
+                    let v = self.cast_to(vv, vty, "i64")?;
+                    let _ = writeln!(
+                        self.body,
+                        "  {} = call ptr @bolide_dynamic_from_int(i64 {})",
+                        dyn_, v
+                    );
+                    self.pack_as_i64(dyn_, "ptr")?
+                }
+            } else {
+                self.pack_as_i64(vv, vty)?
+            };
             let _ = writeln!(
                 self.body,
                 "  call void @bolide_dict_set(ptr {}, i64 {}, i64 {})",
@@ -2420,8 +2734,10 @@ declare double @bolide_math_clamp_f64(double, double, double)
                 "  {} = call i64 @bolide_dict_get(ptr {}, i64 {})",
                 d, base_v, key
             );
-            // default unpack as i64; str dict values need ptr cast by user context
-            return Ok((d, "i64"));
+            // dict values are stored as BolideDynamic wrappers → return the ptr
+            let p = self.fresh();
+            let _ = writeln!(self.body, "  {} = inttoptr i64 {} to ptr", p, d);
+            return Ok((p, "ptr"));
         }
         if matches!(base_kind, ValKind::Str) {
             let ix = self.cast_to(ix, ixty, "i64")?;
@@ -2436,11 +2752,21 @@ declare double @bolide_math_clamp_f64(double, double, double)
         let ix = self.cast_to(ix, ixty, "i64")?;
         let tag = match base_kind {
             ValKind::List(t) => t,
+            ValKind::NestedList(_) => 6, // list element
             _ => 0,
         };
-        let kind = list_tag_to_kind(tag);
+        let kind = match &base_kind {
+            ValKind::NestedList(inner) => *inner.clone(),
+            _ => list_tag_to_kind(tag),
+        };
         let raw = self.emit_list_get_inline(&base_v, &ix, tag)?;
         let v = self.unpack_list_value(raw, &kind)?;
+        // nested list element is a list pointer stored as i64 → inttoptr
+        if matches!(base_kind, ValKind::NestedList(_)) {
+            let p = self.fresh();
+            let _ = writeln!(self.body, "  {} = inttoptr i64 {} to ptr", p, v);
+            return Ok((p, "ptr"));
+        }
         Ok((v, kind_to_llvm(&kind)))
     }
 
@@ -2976,7 +3302,11 @@ declare double @bolide_math_clamp_f64(double, double, double)
             | ValKind::Object(_)
             | ValKind::Adt(_)
             | ValKind::Closure
-            | ValKind::Dict => {
+            | ValKind::Dict
+            | ValKind::List(_)
+            | ValKind::NestedList(_) => {
+                // list elements are stored as i64 (packed ptr); nested list /
+                // object elements must be re-cast to ptr for iteration/access
                 let b = self.fresh();
                 let _ = writeln!(self.body, "  {} = inttoptr i64 {} to ptr", b, raw);
                 Ok(b)
@@ -3053,6 +3383,16 @@ declare double @bolide_math_clamp_f64(double, double, double)
                 let _ = writeln!(
                     self.body,
                     "  {} = call ptr @bolide_string_from_bool(i64 {})",
+                    d, v
+                );
+                Ok(d)
+            }
+            ValKind::Dynamic => {
+                let v = self.cast_to(v, ty, "ptr")?;
+                let d = self.fresh();
+                let _ = writeln!(
+                    self.body,
+                    "  {} = call ptr @bolide_dynamic_to_string(ptr {})",
                     d, v
                 );
                 Ok(d)
@@ -3364,6 +3704,21 @@ declare double @bolide_math_clamp_f64(double, double, double)
             if is_func_value && !self.funcs.contains_key(name) && !self.classes.contains_key(name)
             {
                 let (clo, _) = self.emit_expr(callee)?;
+                // raw FuncSig param (bare function pointer) → direct call; a
+                // closure object → closure ABI call
+                if self
+                    .local_kind
+                    .get(name)
+                    .map(|k| matches!(k, ValKind::RawFunc))
+                    .unwrap_or(false)
+                    || self
+                        .global_vars
+                        .get(name)
+                        .map(|(_, k)| matches!(k, ValKind::RawFunc))
+                        .unwrap_or(false)
+                {
+                    return self.emit_raw_func_call(&clo, args, "i64");
+                }
                 return self.emit_closure_call(&clo, args, "i64");
             }
             if name == "print" {
@@ -3371,6 +3726,15 @@ declare double @bolide_math_clamp_f64(double, double, double)
             }
             if name == "int" && args.len() == 1 {
                 let (v, ty) = self.emit_expr(&args[0])?;
+                if matches!(self.infer_kind(&args[0]), ValKind::Dynamic) {
+                    let d = self.fresh();
+                    let _ = writeln!(
+                        self.body,
+                        "  {} = call i64 @bolide_dynamic_to_int(ptr {})",
+                        d, v
+                    );
+                    return Ok((d, "i64"));
+                }
                 if ty == "ptr" || matches!(self.infer_kind(&args[0]), ValKind::Str) {
                     let d = self.fresh();
                     let _ = writeln!(
@@ -3384,6 +3748,15 @@ declare double @bolide_math_clamp_f64(double, double, double)
             }
             if name == "float" && args.len() == 1 {
                 let (v, ty) = self.emit_expr(&args[0])?;
+                if matches!(self.infer_kind(&args[0]), ValKind::Dynamic) {
+                    let d = self.fresh();
+                    let _ = writeln!(
+                        self.body,
+                        "  {} = call double @bolide_dynamic_to_float(ptr {})",
+                        d, v
+                    );
+                    return Ok((d, "double"));
+                }
                 if ty == "ptr" || matches!(self.infer_kind(&args[0]), ValKind::Str) {
                     let d = self.fresh();
                     let _ = writeln!(
@@ -3398,6 +3771,15 @@ declare double @bolide_math_clamp_f64(double, double, double)
             if name == "str" && args.len() == 1 {
                 let (v, ty) = self.emit_expr(&args[0])?;
                 let d = self.fresh();
+                if matches!(self.infer_kind(&args[0]), ValKind::Dynamic) {
+                    // dict value / dynamic → unwrap to its string form
+                    let _ = writeln!(
+                        self.body,
+                        "  {} = call ptr @bolide_dynamic_to_string(ptr {})",
+                        d, v
+                    );
+                    return Ok((d, "ptr"));
+                }
                 if matches!(self.infer_kind(&args[0]), ValKind::Bool) {
                     // bools are stored as i64 0/1 in LLVM; convert to "true"/"false"
                     let v = self.cast_to(v, ty, "i64")?;
@@ -3537,6 +3919,100 @@ declare double @bolide_math_clamp_f64(double, double, double)
         self.emit_closure_call(&clo, args, "i64")
     }
 
+    /// Generate a bare-call trampoline for a closure passed to a `func(...)`
+    /// extern param. The runtime invokes it as `extern "C" fn(params) -> ret`,
+    /// so the trampoline loads the closure object from a global `@__cb_N`,
+    /// extracts fn_ptr/env_ptr, and calls it with the closure ABI `(env, args)`.
+    /// Returns the trampoline name to pass as the callback address.
+    fn emit_funcptr_trampoline(
+        &mut self,
+        sig: &(Vec<&'static str>, &'static str),
+        closure_val: String,
+    ) -> Result<String, String> {
+        let n = self.tmp;
+        self.tmp += 1;
+        let gname = format!("__cb_{}", n);
+        let tname = format!("__cb_tramp_{}", n);
+        self.cb_globals.push(gname.clone());
+
+        let (params, ret) = sig;
+        let mut params_s = String::new();
+        for (i, p) in params.iter().enumerate() {
+            if i > 0 {
+                params_s.push_str(", ");
+            }
+            let _ = write!(params_s, "{} %a{}", p, i);
+        }
+        let mut call_args = String::from("ptr %env");
+        for (i, p) in params.iter().enumerate() {
+            let _ = write!(call_args, ", {} %a{}", p, i);
+        }
+        let mut def = String::new();
+        let _ = writeln!(def, "define {} @{}({}) {{", ret, tname, params_s);
+        let _ = writeln!(def, "entry:");
+        let _ = writeln!(def, "  %clo = load ptr, ptr @{}, align 8", gname);
+        let _ = writeln!(def, "  %env = call ptr @bolide_closure_env_ptr(ptr %clo)");
+        let _ = writeln!(def, "  %fn = call ptr @bolide_closure_fn_ptr(ptr %clo)");
+        if *ret == "void" {
+            let _ = writeln!(def, "  call void %fn({})", call_args);
+            let _ = writeln!(def, "  ret void");
+        } else {
+            let _ = writeln!(def, "  %r = call {} %fn({})", ret, call_args);
+            let _ = writeln!(def, "  ret {} %r", ret);
+        }
+        let _ = writeln!(def, "}}");
+        let _ = writeln!(def);
+        self.trampoline_ir.push_str(&def);
+
+        // store the closure into the global so the trampoline can find it
+        let _ = writeln!(
+            self.body,
+            "  store ptr {}, ptr @{}, align 8",
+            closure_val, gname
+        );
+        Ok(tname)
+    }
+
+    /// Map a possibly module-qualified class name (`gui.Ui`, `@gui_Ui`) to the
+    /// class name actually registered by `collect_classes` (`Ui`), trying the
+    /// raw name, the module-prefixed name, and the short name.
+    fn resolve_class_name(&self, name: &str) -> Option<String> {
+        if self.classes.contains_key(name) {
+            return Some(name.to_string());
+        }
+        if let Some((module, short)) = name.split_once('.') {
+            let prefixed = format!("@{}_{}", module, short);
+            if self.classes.contains_key(&prefixed) {
+                return Some(prefixed);
+            }
+            if self.classes.contains_key(short) {
+                return Some(short.to_string());
+            }
+        }
+        if let Some(stripped) = name.strip_prefix('@') {
+            if self.classes.contains_key(stripped) {
+                return Some(stripped.to_string());
+            }
+        }
+        None
+    }
+
+    /// Resolve a class method name on a class, walking the parent chain.
+    fn find_class_method(&self, cn: &str, method: &str) -> Option<String> {
+        let mut cur = self.resolve_class_name(cn);
+        while let Some(c) = cur {
+            if let Some(ci) = self.classes.get(&c) {
+                if ci.methods.contains_key(method) {
+                    return Some(method_full_name(&c, method));
+                }
+                cur = ci.parent.clone();
+            } else {
+                break;
+            }
+        }
+        None
+    }
+
     fn emit_method_call(
         &mut self,
         base: &Expr,
@@ -3639,6 +4115,17 @@ declare double @bolide_math_clamp_f64(double, double, double)
                     let _ = writeln!(
                         self.body,
                         "  {} = call i64 @bolide_string_ends_with(ptr {}, ptr {})",
+                        d, obj, a
+                    );
+                    return Ok((d, "i64"));
+                }
+                "count" if args.len() == 1 => {
+                    let (a, aty) = self.emit_expr(&args[0])?;
+                    let a = self.cast_to(a, aty, "ptr")?;
+                    let d = self.fresh();
+                    let _ = writeln!(
+                        self.body,
+                        "  {} = call i64 @bolide_string_count(ptr {}, ptr {})",
                         d, obj, a
                     );
                     return Ok((d, "i64"));
@@ -3780,6 +4267,16 @@ declare double @bolide_math_clamp_f64(double, double, double)
                     return Ok(("0".into(), "i64"));
                 }
                 _ => {}
+            }
+        }
+        // Class object method: dispatch BEFORE the generic list/string arms, which
+        // would otherwise mis-handle same-named methods (e.g. `set` on a class vs
+        // the list `set(index, value)` builtin).
+        if let ValKind::Object(ref cn) = &base_kind {
+            if let Some(full) = self.find_class_method(cn, method) {
+                let mut call_args = vec![base.clone()];
+                call_args.extend(args.iter().cloned());
+                return self.emit_named_call(&full, &call_args);
             }
         }
         match method {
@@ -3963,34 +4460,131 @@ declare double @bolide_math_clamp_f64(double, double, double)
                 self.emit_list_set_inline(&obj, &ix, &packed, tag)?;
                 Ok(("1".into(), "i64"))
             }
+            "insert" => {
+                if args.len() != 2 {
+                    return Err("insert expects (index, value)".into());
+                }
+                let (ix, ixty) = self.emit_expr(&args[0])?;
+                let ix = self.cast_to(ix, ixty, "i64")?;
+                let (v, ty) = self.emit_expr(&args[1])?;
+                let packed = self.pack_list_value(v, ty, base)?;
+                let _ = writeln!(
+                    self.body,
+                    "  call void @bolide_list_insert(ptr {}, i64 {}, i64 {})",
+                    obj, ix, packed
+                );
+                Ok(("0".into(), "i64"))
+            }
+            "remove" => {
+                if args.len() != 1 {
+                    return Err("remove expects 1 arg".into());
+                }
+                let (ix, ixty) = self.emit_expr(&args[0])?;
+                let ix = self.cast_to(ix, ixty, "i64")?;
+                let d = self.fresh();
+                let _ = writeln!(
+                    self.body,
+                    "  {} = call i64 @bolide_list_remove(ptr {}, i64 {})",
+                    d, obj, ix
+                );
+                let kind = match self.infer_kind(base) {
+                    ValKind::List(t) => list_tag_to_kind(t),
+                    _ => ValKind::Int,
+                };
+                let v = self.unpack_list_value(d, &kind)?;
+                return Ok((v, kind_to_llvm(&kind)));
+            }
+            "index_of" | "index" | "find" => {
+                if args.len() != 1 {
+                    return Err("index_of expects 1 arg".into());
+                }
+                let (v, ty) = self.emit_expr(&args[0])?;
+                let packed = self.pack_list_value(v, ty, base)?;
+                let d = self.fresh();
+                let _ = writeln!(
+                    self.body,
+                    "  {} = call i64 @bolide_list_index_of(ptr {}, i64 {})",
+                    d, obj, packed
+                );
+                return Ok((d, "i64"));
+            }
+            "count" => {
+                if args.len() != 1 {
+                    return Err("count expects 1 arg".into());
+                }
+                let (v, ty) = self.emit_expr(&args[0])?;
+                let packed = self.pack_list_value(v, ty, base)?;
+                let d = self.fresh();
+                let _ = writeln!(
+                    self.body,
+                    "  {} = call i64 @bolide_list_count(ptr {}, i64 {})",
+                    d, obj, packed
+                );
+                return Ok((d, "i64"));
+            }
+            "extend" => {
+                if args.len() != 1 {
+                    return Err("extend expects 1 arg".into());
+                }
+                let (o, oty) = self.emit_expr(&args[0])?;
+                let o = self.cast_to(o, oty, "ptr")?;
+                let _ = writeln!(
+                    self.body,
+                    "  call void @bolide_list_extend(ptr {}, ptr {})",
+                    obj, o
+                );
+                return Ok(("0".into(), "i64"));
+            }
+            "clone" => {
+                if args.len() != 0 {
+                    return Err("clone expects 0 args".into());
+                }
+                let d = self.fresh();
+                let _ = writeln!(
+                    self.body,
+                    "  {} = call ptr @bolide_list_clone(ptr {})",
+                    d, obj
+                );
+                return Ok((d, "ptr"));
+            }
+            "send" => {
+                // channel.send(value) → bolide_channel_send(chan, packed)
+                if args.len() != 1 {
+                    return Err("send expects 1 arg".into());
+                }
+                let (v, ty) = self.emit_expr(&args[0])?;
+                let packed = self.cast_to(v, ty, "i64")?;
+                let d = self.fresh();
+                let _ = writeln!(
+                    self.body,
+                    "  {} = call i64 @bolide_channel_send(ptr {}, i64 {})",
+                    d, obj, packed
+                );
+                return Ok((d, "i64"));
+            }
+            "recv" => {
+                if args.len() != 0 {
+                    return Err("recv expects 0 args".into());
+                }
+                let d = self.fresh();
+                let _ = writeln!(
+                    self.body,
+                    "  {} = call i64 @bolide_channel_recv(ptr {})",
+                    d, obj
+                );
+                return Ok((d, "i64"));
+            }
+            "close" => {
+                let _ = writeln!(self.body, "  call void @bolide_channel_close(ptr {})", obj);
+                return Ok(("0".into(), "i64"));
+            }
             other => {
-                // Class method call
+                // Class method call (walk parent chain for inherited methods)
                 if let ValKind::Object(ref cn) = self.infer_kind(base) {
-                    if self
-                        .classes
-                        .get(cn)
-                        .map(|c| c.methods.contains_key(other))
-                        .unwrap_or(false)
-                    {
-                        let full = method_full_name(cn, other);
+                    if let Some(full) = self.find_class_method(cn, other) {
                         let mut call_args = vec![base.clone()];
                         call_args.extend(args.iter().cloned());
                         return self.emit_named_call(&full, &call_args);
-                    }
-                    // walk parent chain for method
-                    let mut cur = Some(cn.clone());
-                    while let Some(c) = cur {
-                        if let Some(ci) = self.classes.get(&c) {
-                            if ci.methods.contains_key(other) {
-                                let full = method_full_name(&c, other);
-                                let mut call_args = vec![base.clone()];
-                                call_args.extend(args.iter().cloned());
-                                return self.emit_named_call(&full, &call_args);
-                            }
-                            cur = ci.parent.clone();
-                        } else {
-                            break;
-                        }
                     }
                 }
                 // dict helpers
@@ -4133,11 +4727,113 @@ declare double @bolide_math_clamp_f64(double, double, double)
             ));
         }
         let mut arg_s = String::new();
+        let funcptr_flags = self.extern_funcptr.get(&resolved).cloned();
         for (i, a) in args.iter().enumerate() {
             if i > 0 {
                 arg_s.push_str(", ");
             }
+            // func(...) callback param on an extern: the runtime invokes it as a raw
+            // `extern "C" fn(...)`, so a bare function name must be passed as its
+            // address — NOT wrapped into a closure object (which the runtime would
+            // call as a bare pointer and crash, e.g. gui.run(root), web handlers).
+            if funcptr_flags.as_ref().map(|f| f.get(i)).flatten() == Some(&true) {
+                if let Expr::Ident(fname) = a {
+                    // only bare top-level functions have a stable symbol; local
+                    // closures fall through to the closure-object path
+                    if self.funcs.contains_key(fname) && !self.locals.contains_key(fname) {
+                        let link = llvm_func_name(fname);
+                        let _ = write!(arg_s, "ptr @{}", link);
+                        continue;
+                    }
+                }
+                // forwarded/local closure: the runtime invokes it as a raw
+                // `extern "C" fn(...)`. A top-level-function closure now has
+                // fn_ptr = the bare function, so passing the closure object
+                // directly makes the runtime call `@func(obj)` — correct, and
+                // avoids a per-method shared trampoline global (which would make
+                // every route dispatch to the same closure).
+                let (v, ty) = self.emit_expr(a)?;
+                let v = self.cast_to(v, ty, "ptr")?;
+                let _ = write!(arg_s, "ptr {}", v);
+                continue;
+            }
+            // raw FuncSig param (bare function pointer, not closure-expecting):
+            // a bare function name is passed as its address so the callee can
+            // forward it to a `func(*c_void)` extern (web/GUI callbacks).
+            let is_raw_funcsig = self
+                .func_params
+                .get(&resolved)
+                .and_then(|params| params.get(i))
+                .map(|p| matches!(p.ty, Type::Func | Type::FuncSig(_, _)))
+                .unwrap_or(false)
+                && !self
+                    .funcsig_closure_params
+                    .get(&resolved)
+                    .map(|s| s.contains(&i))
+                    .unwrap_or(false);
+            if is_raw_funcsig {
+                if let Expr::Ident(fname) = a {
+                    if self.funcs.contains_key(fname) && !self.locals.contains_key(fname) {
+                        let link = llvm_func_name(fname);
+                        let _ = write!(arg_s, "ptr @{}", link);
+                        continue;
+                    }
+                }
+            }
             let (v, ty) = self.emit_expr(a)?;
+            // `*dynamic` param: wrap the arg into a BolideDynamic
+            if self
+                .extern_dynamic
+                .get(&resolved)
+                .map(|flags| flags.get(i) == Some(&true))
+                .unwrap_or(false)
+            {
+                let d = self.fresh();
+                let from_fn = match self.infer_kind(a) {
+                    ValKind::Str => "bolide_dynamic_from_string",
+                    ValKind::Float => "bolide_dynamic_from_float",
+                    ValKind::Bool => "bolide_dynamic_from_bool",
+                    ValKind::Dict => "bolide_dynamic_from_dict",
+                    ValKind::List(_) | ValKind::ListObj(_) | ValKind::NestedList(_) => {
+                        "bolide_dynamic_from_list"
+                    }
+                    _ => {
+                        let v = self.cast_to(v, ty, "i64")?;
+                        let _ = writeln!(
+                            self.body,
+                            "  {} = call ptr @bolide_dynamic_from_int(i64 {})",
+                            d, v
+                        );
+                        let _ = write!(arg_s, "ptr {}", d);
+                        continue;
+                    }
+                };
+                let v = self.cast_to(v, ty, "ptr")?;
+                let _ = writeln!(
+                    self.body,
+                    "  {} = call ptr @{}(ptr {})",
+                    d, from_fn, v
+                );
+                let _ = write!(arg_s, "ptr {}", d);
+                continue;
+            }
+            // `*c_char` param: convert a Bolide str (ptr) to a C string pointer
+            if self
+                .extern_cstr
+                .get(&resolved)
+                .map(|flags| flags.get(i) == Some(&true))
+                .unwrap_or(false)
+            {
+                let v = self.cast_to(v, ty, "ptr")?;
+                let d = self.fresh();
+                let _ = writeln!(
+                    self.body,
+                    "  {} = call ptr @bolide_string_as_cstr(ptr {})",
+                    d, v
+                );
+                let _ = write!(arg_s, "ptr {}", d);
+                continue;
+            }
             let v = self.cast_to(v, ty, param_tys[i])?;
             let _ = write!(arg_s, "{} {}", param_tys[i], v);
         }
@@ -4191,6 +4887,10 @@ declare double @bolide_math_clamp_f64(double, double, double)
                 ValKind::Bool => {
                     let v = self.cast_to(v, ty, "i64")?;
                     let _ = writeln!(self.body, "  call void @bolide_print_bool(i64 {})", v);
+                }
+                ValKind::Dynamic => {
+                    let v = self.cast_to(v, ty, "ptr")?;
+                    let _ = writeln!(self.body, "  call void @bolide_print_dynamic(ptr {})", v);
                 }
                 _ => {
                     if ty == "double" {
@@ -4297,7 +4997,7 @@ declare double @bolide_math_clamp_f64(double, double, double)
 
     fn infer_kind(&self, expr: &Expr) -> ValKind {
         match expr {
-            Expr::Float(_) => ValKind::Float,
+            Expr::Float(_) | Expr::Decimal(_) => ValKind::Float,
             Expr::String(_) => ValKind::Str,
             Expr::Bool(_) => ValKind::Bool,
             Expr::Int(_) => ValKind::Int,
@@ -4334,8 +5034,9 @@ declare double @bolide_math_clamp_f64(double, double, double)
                 .unwrap_or(ValKind::Int),
             Expr::Index(base, _) => match self.infer_kind(base) {
                 ValKind::List(t) => list_tag_to_kind(t),
+                ValKind::NestedList(inner) => *inner,
                 ValKind::ListObj(cn) => ValKind::Object(cn),
-                ValKind::Dict => ValKind::Int,
+                ValKind::Dict => ValKind::Dynamic,
                 ValKind::Str => ValKind::Str,
                 _ => ValKind::Int,
             },
@@ -4372,6 +5073,13 @@ declare double @bolide_math_clamp_f64(double, double, double)
                         }
                     }
                 }
+                // comparisons produce bool (printed as true/false)
+                if matches!(
+                    op,
+                    BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge
+                ) {
+                    return ValKind::Bool;
+                }
                 if matches!(self.infer_kind(l), ValKind::Float)
                     || matches!(self.infer_kind(r), ValKind::Float)
                 {
@@ -4391,8 +5099,25 @@ declare double @bolide_math_clamp_f64(double, double, double)
                     if n == "int" {
                         return ValKind::Int;
                     }
+                    if n == "channel" || n == "bytes" {
+                        return ValKind::Ptr;
+                    }
                     if n == "bolide_env_args" {
                         return ValKind::List(3);
+                    }
+                    // calling a closure-valued variable returns a heap object
+                    if self
+                        .global_vars
+                        .get(n)
+                        .map(|(_, k)| matches!(k, ValKind::Closure | ValKind::Ptr))
+                        .unwrap_or(false)
+                        || self
+                            .local_kind
+                            .get(n)
+                            .map(|k| matches!(k, ValKind::Closure | ValKind::Ptr))
+                            .unwrap_or(false)
+                    {
+                        return ValKind::Ptr;
                     }
                     if let Some(k) = self.func_ret_kind.get(n) {
                         return k.clone();
@@ -4424,12 +5149,20 @@ declare double @bolide_math_clamp_f64(double, double, double)
                     if method == "split" {
                         return ValKind::List(3);
                     }
-                    if method == "find"
-                        || method == "contains"
+                    if method == "contains"
+                        || method == "includes"
                         || method == "starts_with"
                         || method == "ends_with"
+                        || method == "is_empty"
+                        || method == "empty"
+                    {
+                        return ValKind::Bool;
+                    }
+                    if method == "find"
                         || method == "count"
                         || method == "len"
+                        || method == "index_of"
+                        || method == "index"
                     {
                         return ValKind::Int;
                     }
@@ -4569,7 +5302,7 @@ fn llvm_type_of(ty: &Option<Type>) -> &'static str {
 
 fn kind_of_type(ty: &Option<Type>) -> ValKind {
     match ty {
-        Some(Type::Float) => ValKind::Float,
+        Some(Type::Float) | Some(Type::Decimal) => ValKind::Float,
         Some(Type::Bool) => ValKind::Bool,
         Some(Type::Str) => ValKind::Str,
         Some(Type::List(inner)) => match inner.as_ref() {
@@ -4578,9 +5311,9 @@ fn kind_of_type(ty: &Option<Type>) -> ValKind {
             Type::Str => ValKind::List(3),
             Type::Custom(n) | Type::Dyn(n) => ValKind::ListObj(n.clone()),
             Type::Adt(n, _) => ValKind::ListObj(n.clone()),
-            Type::Dict(_, _) | Type::List(_) | Type::Func | Type::FuncSig(_, _) => {
-                ValKind::List(4)
-            }
+            // list<list<T>> — carry the inner list kind so grid[y][x] resolves
+            Type::List(_) => ValKind::NestedList(Box::new(kind_of_list_inner(inner))),
+            Type::Dict(_, _) | Type::Func | Type::FuncSig(_, _) => ValKind::List(4),
             _ => ValKind::List(0),
         },
         Some(Type::Dict(_, _)) => ValKind::Dict,
@@ -4598,10 +5331,13 @@ fn kind_to_llvm(k: &ValKind) -> &'static str {
         ValKind::Str
         | ValKind::List(_)
         | ValKind::ListObj(_)
+        | ValKind::NestedList(_)
         | ValKind::Dict
         | ValKind::Object(_)
         | ValKind::Adt(_)
         | ValKind::Closure
+        | ValKind::RawFunc
+        | ValKind::Dynamic
         | ValKind::Ptr => "ptr",
         ValKind::Int | ValKind::Bool => "i64",
     }
@@ -4760,6 +5496,11 @@ fn walk_stmt_collect(stmt: &Statement, out: &mut Vec<String>) {
         }
         _ => {}
     }
+}
+
+/// Kind of the element type of a list (used to build `list<list<T>>` kinds).
+fn kind_of_list_inner(inner: &Type) -> ValKind {
+    kind_of_type(&Some(inner.clone()))
 }
 
 fn list_tag_to_kind(tag: u8) -> ValKind {
@@ -4928,8 +5669,13 @@ fn llvm_func_name(name: &str) -> String {
     // "main" is reserved for the generated C entry point wrapper.
     if mangled == "main" {
         "bolide_user_main".to_string()
-    } else {
+    } else if mangled.starts_with("bolide_") || mangled.starts_with("object_") {
+        // runtime / extern symbols stay raw
         mangled
+    } else {
+        // namespace user functions so they can't collide with C/CRT/WinSock
+        // symbols (e.g. a Bolide fn named `send` vs ws2_32's `send`)
+        format!("bolide_user_{}", mangled)
     }
 }
 
