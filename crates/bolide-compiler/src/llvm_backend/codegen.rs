@@ -1354,6 +1354,16 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
                 .or_else(|| self.local_kind.get(n).cloned()),
             _ => None,
         };
+        self.emit_await_value(&future, ret_kind, is_spawn)
+    }
+
+    /// Await an already-emitted handle/future value.
+    fn emit_await_value(
+        &mut self,
+        future: &str,
+        ret_kind: Option<ValKind>,
+        is_spawn: bool,
+    ) -> Result<(String, &'static str), String> {
         let is_float = matches!(ret_kind, Some(ValKind::Float));
         let is_ptr = matches!(
             ret_kind,
@@ -1366,7 +1376,6 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
                     | ValKind::Dict
             )
         );
-
         let d = self.fresh();
         if is_spawn {
             let suffix = if is_float {
@@ -1376,18 +1385,13 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
             } else {
                 "int"
             };
+            let rty = if is_float { "double" } else if is_ptr { "ptr" } else { "i64" };
             let _ = writeln!(
                 self.body,
                 "  {} = call {} @bolide_thread_join_{}(ptr {})",
-                d,
-                if is_float { "double" } else if is_ptr { "ptr" } else { "i64" },
-                suffix,
-                future
+                d, rty, suffix, future
             );
-            Ok((
-                d,
-                if is_float { "double" } else if is_ptr { "ptr" } else { "i64" },
-            ))
+            Ok((d, rty))
         } else {
             let _ = writeln!(
                 self.body,
@@ -2622,18 +2626,31 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
             Expr::SpawnThread(name, args) => self.emit_spawn(name, args, true),
             Expr::Await(inner) => self.emit_await(inner),
             Expr::SpawnAll(items) => {
-                // spawn each and await the last (basic support)
-                let mut last = "null".to_string();
+                // spawn each task, await all, collect results into a list
+                let list = self.fresh();
+                let _ = writeln!(self.body, "  {} = call ptr @bolide_list_new(i8 0)", list);
                 for it in items {
-                    if let Expr::Spawn(name, args) = it {
-                        let (h, _) = self.emit_spawn(name, args, false)?;
-                        last = h;
-                    } else {
-                        let (h, _) = self.emit_expr(it)?;
-                        last = h;
-                    }
+                    let (name, args) = match it {
+                        Expr::Call(callee, args) => match callee.as_ref() {
+                            Expr::Ident(n) => (n.clone(), args.clone()),
+                            _ => continue,
+                        },
+                        Expr::Spawn(n, args) | Expr::SpawnThread(n, args) => {
+                            (n.clone(), args.clone())
+                        }
+                        _ => continue,
+                    };
+                    let (h, _) = self.emit_spawn(&name, &args, false)?;
+                    let ret_kind = self.func_ret_kind.get(&name).cloned();
+                    let (res, rty) = self.emit_await_value(&h, ret_kind, true)?;
+                    let packed = self.pack_as_i64(res, rty)?;
+                    let _ = writeln!(
+                        self.body,
+                        "  call void @bolide_list_push(ptr {}, i64 {})",
+                        list, packed
+                    );
                 }
-                Ok((last, "ptr"))
+                Ok((list, "ptr"))
             }
             other => Err(format!(
                 "LLVM backend: unsupported expression {:?}",
