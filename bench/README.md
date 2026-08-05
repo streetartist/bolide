@@ -41,19 +41,35 @@ Checksums are printed by every program and **must match** between Bolide and C
 
 ## Interpreting results
 
-Typical local ratios after the performance passes (best of 3, Windows,
-Cranelift `opt_level=speed` vs clang `-O3 -march=native`):
+Reference machine: Windows, best of 3, self-reported `ms=`.  
+C = `clang -O3 -march=native`. Bolide AOT via `--backend cranelift` (default) or `--backend llvm`.
 
-| Benchmark | Bolide / C | Notes |
-|---|---|---|
-| `fib` | ~1.8x | pure call overhead; skip exception checks when no `throw`/`try`/`?` |
-| `sieve` | ~1.1–1.2x | `list.resize` bulk init; `list[i]` keeps bounds checks |
-| `mandelbrot` | ~1.4x | float loop codegen; auto-inlines small leaf helpers |
-| `nbody_perf` | ~1.2x | math intrinsics + list access + auto-inline |
+| Benchmark | Args | C (ms) | Cranelift (ms) | LLVM (ms) | Clif/C | LLVM/C |
+|---|---|---:|---:|---:|---:|---:|
+| `fib` | 35 | 14 | 25 | **13** | 1.79× | **0.93×** |
+| `sieve` | 5e6 | 71 | 78 | **68** | 1.10× | **0.96×** |
+| `mandelbrot` | 800²×256 | 67 | 88 | **62** | 1.31× | **0.93×** |
+| `nbody_perf` | 500×80 | 30 | 75 | **41** | 2.50× | **1.37×** |
+| **geomean** | | | | | **~1.59×** | **~1.03×** |
 
-`fib` remains the outlier because it is pure call overhead: the ratio measures
-prologue/epilogue and call-ABI cost with no loop body to amortize it. The
-geometric mean is the single headline number to watch across releases.
+Notes:
+
+- **LLVM** is near C overall (~1.03× geomean): scalar loops often slightly faster than C; `list[i]`/`len` are **inlined** (same layout + bounds checks as Cranelift), not runtime calls.
+- **Cranelift** remains the default full-language backend; list-heavy work is solid, scalar a bit behind LLVM.
+- Checksums match C for all four (nbody float print may differ in last digits).
+- Geometric mean is the headline number across releases; re-run after backend changes.
+
+### Compare LLVM vs Cranelift yourself
+
+```powershell
+$env:BOLIDE_HOME = (Get-Location).Path
+bolide compile bench/fib.bl -o tmp/fib_llvm.exe --backend llvm
+bolide compile bench/fib.bl -o tmp/fib_clif.exe --backend cranelift
+clang -O3 -march=native bench/fib.c -o tmp/fib_c.exe
+./tmp/fib_llvm.exe 35 1
+./tmp/fib_clif.exe 35 1
+./tmp/fib_c.exe 35 1
+```
 
 ## Adding a benchmark
 

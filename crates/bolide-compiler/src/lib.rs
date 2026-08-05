@@ -1,6 +1,7 @@
 //! Bolide Compiler
 //!
-//! 使用 Cranelift 进行代码生成
+//! 默认使用 Cranelift 进行 JIT/AOT 代码生成。
+//! 另提供独立的 **LLVM 后端**（`llvm_backend`），与 Cranelift 路径并存、互不影响。
 
 mod aot;
 mod builtins;
@@ -10,6 +11,7 @@ mod ffi_spec;
 mod generators;
 mod inline;
 mod jit;
+mod llvm_backend;
 mod macro_expand;
 mod monomorph;
 mod operator_overload;
@@ -21,6 +23,7 @@ pub use aot::RUNTIME_SYMBOLS;
 pub use deps::DependencyManifest;
 pub use generators::desugar_generators;
 pub use jit::JitCompiler;
+pub use llvm_backend::{LlvmAotCompileResult, LlvmAotCompiler, LlvmJitCompiler};
 pub use traits::desugar_traits;
 pub use macro_expand::{expand_macros, expand_macros_with_ctx, pretty_print, ExpandContext};
 

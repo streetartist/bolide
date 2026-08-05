@@ -3043,23 +3043,6 @@ impl JitCompiler {
             .module
             .declare_function(&function_key, Linkage::Export, &sig)
             .map_err(|e| format!("Declare function error: {}", e))?;
-        if func.name.contains("Foo_bar") || func.name.contains("__main__") {
-            std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open("declare_function_debug.txt")
-                .and_then(|mut f| {
-                    use std::io::Write;
-                    writeln!(
-                        f,
-                        "name={} module_func_id={:?} sig_params={}",
-                        func.name,
-                        func_id,
-                        sig.params.len()
-                    )
-                })
-                .ok();
-        }
         self.functions.insert(function_key.clone(), func_id);
         self.functions.entry(func.name.clone()).or_insert(func_id);
         // 存储函数返回类型
@@ -6682,15 +6665,6 @@ impl JitCompiler {
 
     /// 编译函数（第二遍）
     fn compile_function(&mut self, func: &FuncDef) -> Result<(), String> {
-        std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open("compile_function_debug.txt")
-            .and_then(|mut f| {
-                use std::io::Write;
-                writeln!(f, "name={} params={}", func.name, func.params.len())
-            })
-            .ok();
         let function_key = self.overload_key_for_params(&func.name, &func.params);
         let func_id = *self
             .functions
@@ -6769,23 +6743,6 @@ impl JitCompiler {
         for (name, id) in &self.functions {
             let func_ref = self.module.declare_func_in_func(*id, builder.func);
             func_refs.insert(name.clone(), func_ref);
-            if name.contains("Foo_bar") || name.contains("__main__") {
-                std::fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open("func_refs_debug.txt")
-                    .and_then(|mut f| {
-                        use std::io::Write;
-                        writeln!(
-                            f,
-                            "compile_function={} registering_func_ref={} func_id={}",
-                            func.name,
-                            name,
-                            id.as_u32()
-                        )
-                    })
-                    .ok();
-            }
         }
 
         // 收集 trampoline 引用
@@ -7973,21 +7930,6 @@ impl JitCompiler {
                         .module
                         .declare_function(&method_name, Linkage::Export, &sig)
                         .map_err(|e| format!("Declare method error: {}", e))?;
-                    std::fs::OpenOptions::new()
-                        .create(true)
-                        .append(true)
-                        .open("declare_class_methods_debug.txt")
-                        .and_then(|mut f| {
-                            use std::io::Write;
-                            writeln!(
-                                f,
-                                "name={} module_func_id={:?} sig_params={}",
-                                method_name,
-                                func_id,
-                                sig.params.len()
-                            )
-                        })
-                        .ok();
                     self.functions.insert(method_name.clone(), func_id);
                     self.func_return_types
                         .insert(method_name.clone(), method.return_type.clone());

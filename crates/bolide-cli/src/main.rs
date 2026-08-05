@@ -5,7 +5,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use bolide_compiler::{
-    expand_macros_with_ctx, pretty_print, AotCompiler, ExpandContext, JitCompiler,
+    expand_macros_with_ctx, pretty_print, AotCompiler, ExpandContext, JitCompiler, LlvmAotCompiler,
+    LlvmJitCompiler,
 };
 use bolide_parser::{parse_source_with_diagnostics, ParseDiagnostic, Program};
 use miette::{LabeledSpan, MietteDiagnostic, NamedSource, Report};
@@ -164,6 +165,9 @@ enum Commands {
     Run {
         /// Source file path
         file: PathBuf,
+        /// Codegen backend: `cranelift` (default) or `llvm`
+        #[arg(long, default_value = "cranelift")]
+        backend: String,
     },
     /// Compile a Bolide source file to executable (AOT)
     Compile {
@@ -179,6 +183,9 @@ enum Commands {
         /// Also emit a C header (.h) declaring all `export fn` functions.
         #[arg(long)]
         header: bool,
+        /// Codegen backend: `cranelift` (default) or `llvm`
+        #[arg(long, default_value = "cranelift")]
+        backend: String,
     },
     /// Create a new Bolide project skeleton
     New {
@@ -217,16 +224,22 @@ fn main() -> miette::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Some(Commands::Run { file }) => {
-            run_file(&file)?;
+        Some(Commands::Run { file, backend }) => {
+            run_file(&file, &backend)?;
         }
         Some(Commands::Compile {
             file,
             output,
             lib,
             header,
+            backend,
         }) => {
             if lib {
+                if backend.to_ascii_lowercase() == "llvm" {
+                    return Err(miette::miette!(
+                        "LLVM backend does not support --lib yet; use --backend cranelift"
+                    ));
+                }
                 let out = output.unwrap_or_else(|| {
                     #[cfg(target_os = "windows")]
                     let ext = "lib";
@@ -237,7 +250,7 @@ fn main() -> miette::Result<()> {
                 compile_lib(&file, &out, header)?;
             } else {
                 let out = output.unwrap_or_else(|| file.with_extension("exe"));
-                compile_file(&file, &out, header)?;
+                compile_file(&file, &out, header, &backend)?;
             }
         }
         Some(Commands::New { name }) => {
@@ -697,29 +710,50 @@ fn expand_file(file: &PathBuf) -> miette::Result<()> {
     Ok(())
 }
 
-fn run_file(file: &PathBuf) -> miette::Result<()> {
-    println!("Running: {}", file.display());
+fn run_file(file: &PathBuf, backend: &str) -> miette::Result<()> {
+    println!("Running: {} (backend={})", file.display(), backend);
     let source =
         fs::read_to_string(file).map_err(|e| miette::miette!("Failed to read file: {}", e))?;
 
     let ast = parse_file_source(file, &source)?;
 
-    let mut compiler = JitCompiler::new();
-    // import 相对路径基于源文件所在目录解析
-    if let Some(parent) = file.parent() {
-        compiler.set_base_dir(&parent.to_string_lossy());
-    }
-    // 若存在项目 manifest，加载依赖映射注入编译器
-    if let Some(manifest) = load_dependency_manifest(file)? {
-        compiler.set_dependency_manifest(manifest);
-    }
-    let main_ptr = compiler
-        .compile(&ast)
-        .map_err(|e| compile_error_report(file, &source, e))?;
+    match backend.to_ascii_lowercase().as_str() {
+        "llvm" => {
+            let mut compiler = LlvmJitCompiler::new()
+                .map_err(|e| miette::miette!("LLVM backend init error: {}", e))?;
+            if let Some(parent) = file.parent() {
+                compiler.set_base_dir(&parent.to_string_lossy());
+            }
+            let result = compiler
+                .compile_and_run(&ast)
+                .map_err(|e| compile_error_report(file, &source, e))?;
+            println!("Result: {}", result);
+        }
+        "cranelift" | "clif" => {
+            let mut compiler = JitCompiler::new();
+            // import 相对路径基于源文件所在目录解析
+            if let Some(parent) = file.parent() {
+                compiler.set_base_dir(&parent.to_string_lossy());
+            }
+            // 若存在项目 manifest，加载依赖映射注入编译器
+            if let Some(manifest) = load_dependency_manifest(file)? {
+                compiler.set_dependency_manifest(manifest);
+            }
+            let main_ptr = compiler
+                .compile(&ast)
+                .map_err(|e| compile_error_report(file, &source, e))?;
 
-    let main_fn: fn() -> i64 = unsafe { std::mem::transmute(main_ptr) };
-    let result = main_fn();
-    println!("Result: {}", result);
+            let main_fn: fn() -> i64 = unsafe { std::mem::transmute(main_ptr) };
+            let result = main_fn();
+            println!("Result: {}", result);
+        }
+        other => {
+            return Err(miette::miette!(
+                "Unknown backend '{}'; use cranelift or llvm",
+                other
+            ));
+        }
+    }
     Ok(())
 }
 
@@ -739,8 +773,18 @@ fn write_header_if_present(result: &bolide_compiler::AotCompileResult, output: &
 }
 
 /// AOT 编译文件
-fn compile_file(file: &PathBuf, output: &PathBuf, header: bool) -> miette::Result<()> {
-    println!("Compiling: {} -> {}", file.display(), output.display());
+fn compile_file(
+    file: &PathBuf,
+    output: &PathBuf,
+    header: bool,
+    backend: &str,
+) -> miette::Result<()> {
+    println!(
+        "Compiling: {} -> {} (backend={})",
+        file.display(),
+        output.display(),
+        backend
+    );
 
     // 读取源文件
     let source =
@@ -749,45 +793,70 @@ fn compile_file(file: &PathBuf, output: &PathBuf, header: bool) -> miette::Resul
     // 解析
     let ast = parse_file_source(file, &source)?;
 
-    // AOT 编译
-    let mut compiler =
-        AotCompiler::new().map_err(|e| miette::miette!("Compiler init error: {}", e))?;
+    match backend.to_ascii_lowercase().as_str() {
+        "llvm" => {
+            let mut compiler = LlvmAotCompiler::new()
+                .map_err(|e| miette::miette!("LLVM backend init error: {}", e))?;
+            if let Some(parent) = file.parent() {
+                compiler.set_base_dir(&parent.to_string_lossy());
+            }
+            // Direct link path (clang + bolide_runtime)
+            compiler
+                .compile_and_link(&ast, output)
+                .map_err(|e| compile_error_report(file, &source, e))?;
+            if header {
+                eprintln!("Warning: LLVM backend ignores --header for now");
+            }
+            println!("Successfully compiled (LLVM): {}", output.display());
+        }
+        "cranelift" | "clif" => {
+            // AOT 编译（Cranelift — 原有路径，未改动）
+            let mut compiler =
+                AotCompiler::new().map_err(|e| miette::miette!("Compiler init error: {}", e))?;
 
-    // import 相对路径基于源文件所在目录解析
-    if let Some(parent) = file.parent() {
-        compiler.set_base_dir(&parent.to_string_lossy());
+            // import 相对路径基于源文件所在目录解析
+            if let Some(parent) = file.parent() {
+                compiler.set_base_dir(&parent.to_string_lossy());
+            }
+            if let Some(manifest) = load_dependency_manifest(file)? {
+                compiler.set_dependency_manifest(manifest);
+            }
+
+            let result = compiler
+                .compile(&ast)
+                .map_err(|e| compile_error_report(file, &source, e))?;
+
+            // 打印外部库信息
+            if !result.extern_libs.is_empty() {
+                println!("External libraries: {:?}", result.extern_libs);
+            }
+
+            if header {
+                write_header_if_present(&result, output);
+            }
+
+            // 写入目标文件
+            let obj_path = output.with_extension("o");
+            fs::write(&obj_path, &result.object_code)
+                .map_err(|e| miette::miette!("Failed to write object file: {}", e))?;
+
+            println!("Generated object file: {}", obj_path.display());
+
+            // 链接
+            link_executable(&obj_path, output, &result.extern_libs)?;
+
+            // 清理目标文件
+            let _ = fs::remove_file(&obj_path);
+
+            println!("Successfully compiled: {}", output.display());
+        }
+        other => {
+            return Err(miette::miette!(
+                "Unknown backend '{}'; use cranelift or llvm",
+                other
+            ));
+        }
     }
-    if let Some(manifest) = load_dependency_manifest(file)? {
-        compiler.set_dependency_manifest(manifest);
-    }
-
-    let result = compiler
-        .compile(&ast)
-        .map_err(|e| compile_error_report(file, &source, e))?;
-
-    // 打印外部库信息
-    if !result.extern_libs.is_empty() {
-        println!("External libraries: {:?}", result.extern_libs);
-    }
-
-    if header {
-        write_header_if_present(&result, output);
-    }
-
-    // 写入目标文件
-    let obj_path = output.with_extension("o");
-    fs::write(&obj_path, &result.object_code)
-        .map_err(|e| miette::miette!("Failed to write object file: {}", e))?;
-
-    println!("Generated object file: {}", obj_path.display());
-
-    // 链接
-    link_executable(&obj_path, output, &result.extern_libs)?;
-
-    // 清理目标文件
-    let _ = fs::remove_file(&obj_path);
-
-    println!("Successfully compiled: {}", output.display());
     Ok(())
 }
 

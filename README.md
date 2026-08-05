@@ -85,7 +85,7 @@ bolide.exe run your_program.bl
 将 Bolide 程序编译为独立的原生可执行文件：
 
 ```bash
-# 编译为可执行文件
+# 编译为可执行文件（默认 Cranelift 后端）
 bolide compile your_program.bl -o your_program
 
 # Windows 会生成 your_program.exe
@@ -99,6 +99,39 @@ AOT 编译的优势：
 - **无需运行时** - 生成的可执行文件可独立运行
 - **更快启动** - 跳过 JIT 编译阶段
 - **便于分发** - 单文件部署，无依赖
+
+#### 可选 LLVM 后端（与 Cranelift 并存）
+
+默认 **Cranelift**（JIT/AOT 完整能力）。另有独立 **LLVM** 后端，不改动现有路径：
+
+```bash
+# 需本机 clang（及 Windows 上 lld-link）；链接同一 bolide_runtime
+bolide run examples/hello.bl --backend llvm
+bolide compile examples/hello.bl -o hello_llvm.exe --backend llvm
+```
+
+**已覆盖（持续扩展）**：class 字段/方法/构造、运算符重载、enum/`Option`/`Result` + `match`、dict、`yield` 生成器、`for`/`next`、trait 脱糖方法、try/throw、模块 import、list/string、四个性能 bench。  
+**仍优先 Cranelift**：闭包捕获、async/spawn、完整 std/GUI/Web、部分复杂边界。Cranelift 路径零改动。
+
+#### 性能对照（AOT，best of 3）
+
+同一台 Windows 机器：`clang -O3 -march=native` 的 C 对照程序（`bench/*.c`） vs  
+`bolide compile --backend cranelift|llvm`。算法、参数、checksum 一致。
+
+| Benchmark | 参数 | C (ms) | Cranelift (ms) | LLVM (ms) | Clif / C | LLVM / C |
+|-----------|------|--------|----------------|-----------|----------|----------|
+| **fib** | 35 | 14 | 25 | **13** | 1.79× | **0.93×** |
+| **sieve** | 5×10⁶ | 71 | 78 | **68** | 1.10× | **0.96×** |
+| **mandelbrot** | 800²×256 | 67 | 88 | **62** | 1.31× | **0.93×** |
+| **nbody** | 500×80 | 30 | 75 | **41** | 2.50× | **1.37×** |
+| **几何平均** | — | — | — | — | **~1.59×** | **~1.03×** |
+
+解读（简要）：
+
+- **LLVM** 四例整体接近 C（几何平均约 **1.03×**）：标量路径常略快于 C；`list[i]` / `len` 已 **内联访存 + 边界检查**（与 Cranelift 同布局），不再每次走 runtime。
+- **Cranelift** 仍是默认完整后端；list 密集场景可接受，标量略逊 LLVM。
+- 四例 **checksum 与 C 对齐**（nbody 浮点末位可能有微小打印差）。
+- 复现见 `bench/README.md`。
 
 ### 源码级错误诊断
 

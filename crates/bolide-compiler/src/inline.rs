@@ -498,11 +498,70 @@ fn is_auto_inline_candidate(func: &FuncDef) -> bool {
     if !body_is_inlineable(&func.body) {
         return false;
     }
+    // spawn/await 依赖变量名在 spawn_func_map/task_func_map 中的原样查找；
+    // 自动内联的 alpha-rename 不会同步改写这些映射键，必须整体排除
+    if body_contains_spawn_or_await(&func.body) {
+        return false;
+    }
     // 仅允许「唯一 return 且在函数末尾」——避免 if/while 内 return 被改成赋值后继续执行
     if !returns_only_at_end(&func.body) {
         return false;
     }
     body_cost(&func.body) <= AUTO_INLINE_COST_LIMIT
+}
+
+fn body_contains_spawn_or_await(body: &[Statement]) -> bool {
+    body.iter().any(stmt_contains_spawn_or_await)
+}
+
+fn stmt_contains_spawn_or_await(stmt: &Statement) -> bool {
+    match stmt {
+        Statement::Expr(e) | Statement::Return(Some(e)) | Statement::Throw(e) => {
+            expr_contains_spawn_or_await(e)
+        }
+        Statement::VarDecl(d) => d
+            .value
+            .as_ref()
+            .map(expr_contains_spawn_or_await)
+            .unwrap_or(false),
+        Statement::Assign(a) => expr_contains_spawn_or_await(&a.value),
+        Statement::If(i) => {
+            expr_contains_spawn_or_await(&i.condition)
+                || body_contains_spawn_or_await(&i.then_body)
+                || i.elif_branches.iter().any(|(c, b)| {
+                    expr_contains_spawn_or_await(c) || body_contains_spawn_or_await(b)
+                })
+                || i.else_body
+                    .as_ref()
+                    .map(|b| body_contains_spawn_or_await(b))
+                    .unwrap_or(false)
+        }
+        Statement::While(w) => {
+            expr_contains_spawn_or_await(&w.condition) || body_contains_spawn_or_await(&w.body)
+        }
+        Statement::For(f) => {
+            expr_contains_spawn_or_await(&f.iter) || body_contains_spawn_or_await(&f.body)
+        }
+        _ => false,
+    }
+}
+
+fn expr_contains_spawn_or_await(expr: &Expr) -> bool {
+    match expr {
+        Expr::Spawn(_, _) | Expr::SpawnThread(_, _) | Expr::SpawnAll(_) | Expr::Await(_) => true,
+        Expr::Call(c, args) => {
+            expr_contains_spawn_or_await(c) || args.iter().any(expr_contains_spawn_or_await)
+        }
+        Expr::BinOp(l, _, r) => {
+            expr_contains_spawn_or_await(l) || expr_contains_spawn_or_await(r)
+        }
+        Expr::UnaryOp(_, o) | Expr::Member(o, _) => expr_contains_spawn_or_await(o),
+        Expr::Index(b, i) => expr_contains_spawn_or_await(b) || expr_contains_spawn_or_await(i),
+        Expr::List(items) | Expr::Tuple(items) => {
+            items.iter().any(expr_contains_spawn_or_await)
+        }
+        _ => false,
+    }
 }
 
 fn is_scalar_type(ty: &bolide_parser::Type) -> bool {
@@ -759,6 +818,18 @@ fn substitute_expr(expr: &Expr, subst: &HashMap<String, Expr>) -> Expr {
             let end = end.as_ref().map(|e| Box::new(substitute_expr(e, subst)));
             let step = step.as_ref().map(|e| Box::new(substitute_expr(e, subst)));
             Expr::Slice(base, start, end, step)
+        }
+        Expr::Await(inner) => Expr::Await(Box::new(substitute_expr(inner, subst))),
+        Expr::Spawn(name, args) => Expr::Spawn(
+            name.clone(),
+            args.iter().map(|a| substitute_expr(a, subst)).collect(),
+        ),
+        Expr::SpawnThread(name, args) => Expr::SpawnThread(
+            name.clone(),
+            args.iter().map(|a| substitute_expr(a, subst)).collect(),
+        ),
+        Expr::SpawnAll(exprs) => {
+            Expr::SpawnAll(exprs.iter().map(|e| substitute_expr(e, subst)).collect())
         }
         _ => expr.clone(),
     }

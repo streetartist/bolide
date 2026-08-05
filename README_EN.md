@@ -44,6 +44,22 @@
 
 > Full language reference (macros, decorators, generators, traits, std module table, Web/GUI) is maintained in Chinese: [README.md](./README.md). Package index: [std/README.md](./std/README.md). Microbenchmarks: [bench/README.md](./bench/README.md).
 
+### AOT backends & performance (vs C)
+
+Default backend is **Cranelift**. Optional **LLVM** (`--backend llvm`, requires `clang` / `lld-link`) coexists and does not replace Cranelift.
+
+Reference (Windows, best of 3, same algorithms/checksums as `bench/*.c` with `clang -O3 -march=native`):
+
+| Benchmark | Args | C | Cranelift | LLVM | Clif/C | LLVM/C |
+|-----------|------|---:|----------:|-----:|-------:|-------:|
+| fib | 35 | 14ms | 25ms | **13ms** | 1.79× | **0.93×** |
+| sieve | 5e6 | 71ms | 78ms | **68ms** | 1.10× | **0.96×** |
+| mandelbrot | 800²×256 | 67ms | 88ms | **62ms** | 1.31× | **0.93×** |
+| nbody | 500×80 | 30ms | 75ms | **41ms** | 2.50× | **1.37×** |
+| **geomean** | | | | | **~1.59×** | **~1.03×** |
+
+LLVM is near C overall (~1.03× geomean) with **inlined** `list[i]`/`len` (bounds-checked). Cranelift remains the default full backend. Details: [bench/README.md](./bench/README.md).
+
 ### Language highlights (0.14.x)
 
 ```bolide
