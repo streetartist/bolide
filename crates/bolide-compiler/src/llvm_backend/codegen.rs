@@ -4,8 +4,8 @@
 //! operator overload, try/throw, iterators) while Cranelift remains default.
 
 use bolide_parser::{
-    Assign, BinOp, Expr, ForStmt, FuncDef, Param, Pattern, Program, Statement, Type, UnaryOp,
-    VarDecl, WhileStmt,
+    Assign, BinOp, Expr, ForStmt, FuncDef, IfStmt, Param, Pattern, Program, Statement, Type,
+    UnaryOp, VarDecl, WhileStmt,
 };
 use std::collections::HashMap;
 use std::fmt::Write as _;
@@ -157,6 +157,45 @@ impl Codegen {
             ("bolide_closure_env_ptr", vec!["ptr"], "ptr"),
             ("bolide_closure_retain", vec!["ptr"], "void"),
             ("bolide_closure_release", vec!["ptr"], "void"),
+            // BigInt / Decimal / Bytes
+            ("bolide_bigint_debug_stats", vec![], "void"),
+            ("bolide_bigint_from_i64", vec!["i64"], "ptr"),
+            ("bolide_bigint_from_str", vec!["ptr", "i64"], "ptr"),
+            ("bolide_decimal_from_i64", vec!["i64"], "ptr"),
+            ("bolide_bytes_new", vec![], "ptr"),
+            ("bolide_tuple_debug_stats", vec![], "void"),
+            // Channel
+            ("bolide_channel_create", vec![], "ptr"),
+            ("bolide_channel_create_buffered", vec!["i64"], "ptr"),
+            ("bolide_channel_send", vec!["ptr", "i64"], "i64"),
+            ("bolide_channel_recv", vec!["ptr"], "i64"),
+            ("bolide_channel_close", vec!["ptr"], "void"),
+            // Input / env
+            ("bolide_input", vec![], "ptr"),
+            ("bolide_input_prompt", vec!["ptr"], "ptr"),
+            ("bolide_string_as_cstr", vec!["ptr"], "ptr"),
+            ("bolide_string_from_bigint", vec!["ptr"], "ptr"),
+            ("bolide_string_from_decimal", vec!["ptr"], "ptr"),
+            // List extras
+            ("bolide_list_clone", vec!["ptr"], "ptr"),
+            ("bolide_list_extend", vec!["ptr", "ptr"], "void"),
+            ("bolide_list_map", vec!["ptr", "ptr", "i64"], "ptr"),
+            ("bolide_list_filter", vec!["ptr", "ptr"], "ptr"),
+            // Dict extras
+            ("bolide_dict_extend", vec!["ptr", "ptr"], "void"),
+            // Math extras
+            ("bolide_math_abs_i64", vec!["i64"], "i64"),
+            ("bolide_math_round", vec!["double"], "double"),
+            ("bolide_math_trunc", vec!["double"], "double"),
+            ("bolide_math_exp", vec!["double"], "double"),
+            ("bolide_math_ln", vec!["double"], "double"),
+            ("bolide_math_tan", vec!["double"], "double"),
+            ("bolide_math_min_i64", vec!["i64", "i64"], "i64"),
+            ("bolide_math_max_i64", vec!["i64", "i64"], "i64"),
+            ("bolide_math_min_f64", vec!["double", "double"], "double"),
+            ("bolide_math_max_f64", vec!["double", "double"], "double"),
+            ("bolide_math_clamp_i64", vec!["i64", "i64", "i64"], "i64"),
+            ("bolide_math_clamp_f64", vec!["double", "double", "double"], "double"),
         ] {
             funcs.insert(n.into(), (ps, r));
         }
@@ -289,6 +328,39 @@ declare ptr @bolide_closure_fn_ptr(ptr)
 declare ptr @bolide_closure_env_ptr(ptr)
 declare void @bolide_closure_retain(ptr)
 declare void @bolide_closure_release(ptr)
+declare void @bolide_bigint_debug_stats()
+declare ptr @bolide_bigint_from_i64(i64)
+declare ptr @bolide_bigint_from_str(ptr, i64)
+declare ptr @bolide_decimal_from_i64(i64)
+declare ptr @bolide_bytes_new()
+declare void @bolide_tuple_debug_stats()
+declare ptr @bolide_channel_create()
+declare ptr @bolide_channel_create_buffered(i64)
+declare i64 @bolide_channel_send(ptr, i64)
+declare i64 @bolide_channel_recv(ptr)
+declare void @bolide_channel_close(ptr)
+declare ptr @bolide_input()
+declare ptr @bolide_input_prompt(ptr)
+declare ptr @bolide_string_as_cstr(ptr)
+declare ptr @bolide_string_from_bigint(ptr)
+declare ptr @bolide_string_from_decimal(ptr)
+declare ptr @bolide_list_clone(ptr)
+declare void @bolide_list_extend(ptr, ptr)
+declare ptr @bolide_list_map(ptr, ptr, i64)
+declare ptr @bolide_list_filter(ptr, ptr)
+declare void @bolide_dict_extend(ptr, ptr)
+declare i64 @bolide_math_abs_i64(i64)
+declare double @bolide_math_round(double)
+declare double @bolide_math_trunc(double)
+declare double @bolide_math_exp(double)
+declare double @bolide_math_ln(double)
+declare double @bolide_math_tan(double)
+declare i64 @bolide_math_min_i64(i64, i64)
+declare i64 @bolide_math_max_i64(i64, i64)
+declare double @bolide_math_min_f64(double, double)
+declare double @bolide_math_max_f64(double, double)
+declare i64 @bolide_math_clamp_i64(i64, i64, i64)
+declare double @bolide_math_clamp_f64(double, double, double)
 
 "#,
         );
@@ -312,7 +384,8 @@ declare void @bolide_closure_release(ptr)
             if !seen.insert(ext.name.clone()) {
                 continue;
             }
-            // skip ones we already hard-coded above
+            // skip ones we already hard-coded above (avoid invalid redefinition when
+            // the std module declares them with a slightly different C signature)
             if [
                 "bolide_string_format",
                 "bolide_string_to_int",
@@ -333,6 +406,40 @@ declare void @bolide_closure_release(ptr)
                 "bolide_math_abs_f64",
                 "bolide_math_floor",
                 "bolide_math_ceil",
+                // hardcoded declares added for direct runtime calls
+                "bolide_bigint_debug_stats",
+                "bolide_bigint_from_i64",
+                "bolide_bigint_from_str",
+                "bolide_decimal_from_i64",
+                "bolide_bytes_new",
+                "bolide_tuple_debug_stats",
+                "bolide_channel_create",
+                "bolide_channel_create_buffered",
+                "bolide_channel_send",
+                "bolide_channel_recv",
+                "bolide_channel_close",
+                "bolide_input",
+                "bolide_input_prompt",
+                "bolide_string_as_cstr",
+                "bolide_string_from_bigint",
+                "bolide_string_from_decimal",
+                "bolide_list_clone",
+                "bolide_list_extend",
+                "bolide_list_map",
+                "bolide_list_filter",
+                "bolide_dict_extend",
+                "bolide_math_abs_i64",
+                "bolide_math_round",
+                "bolide_math_trunc",
+                "bolide_math_exp",
+                "bolide_math_ln",
+                "bolide_math_tan",
+                "bolide_math_min_i64",
+                "bolide_math_max_i64",
+                "bolide_math_min_f64",
+                "bolide_math_max_f64",
+                "bolide_math_clamp_i64",
+                "bolide_math_clamp_f64",
             ]
             .contains(&ext.name.as_str())
             {
@@ -444,6 +551,25 @@ declare void @bolide_closure_release(ptr)
                         Expr::String(_) => ValKind::Str,
                         Expr::Bool(_) => ValKind::Bool,
                         Expr::Int(_) => ValKind::Int,
+                        Expr::Closure { .. } => ValKind::Closure,
+                        Expr::Call(callee, _) => {
+                            // function-returning call (e.g. `let f = make_adder(5)`)
+                            // → the global holds a closure object, not an int
+                            if let Expr::Ident(name) = callee.as_ref() {
+                                if self
+                                    .func_ret_kind
+                                    .get(name)
+                                    .map(|k| matches!(k, ValKind::Closure))
+                                    .unwrap_or(false)
+                                {
+                                    ValKind::Closure
+                                } else {
+                                    kind
+                                }
+                            } else {
+                                kind
+                            }
+                        }
                         _ => kind,
                     };
                 }
@@ -1317,6 +1443,8 @@ declare void @bolide_closure_release(ptr)
             .cloned()
             .ok_or("for-dict missing key variable")?;
         let val_var = vars.get(1).cloned();
+        let saved_key = self.save_var_binding(&key_var);
+        let saved_val = val_var.as_deref().map(|v| self.save_var_binding(v));
         let (dict, _) = self.emit_expr(iter)?;
         // keys list
         let keys = self.fresh();
@@ -1392,6 +1520,10 @@ declare void @bolide_closure_release(ptr)
             if self.emit_stmt(s)? {
                 self.loop_stack.pop();
                 let _ = writeln!(self.body, "{}:", end_l);
+                self.restore_var_binding(&key_var, saved_key);
+                if let Some(v) = val_var.as_deref() {
+                    self.restore_var_binding(v, saved_val.clone().unwrap());
+                }
                 return Ok(());
             }
         }
@@ -1405,6 +1537,10 @@ declare void @bolide_closure_release(ptr)
         let _ = writeln!(self.body, "  br label %{}", head);
         let _ = writeln!(self.body, "{}:", end_l);
         self.loop_stack.pop();
+        self.restore_var_binding(&key_var, saved_key);
+        if let Some(v) = val_var.as_deref() {
+            self.restore_var_binding(v, saved_val.clone().unwrap());
+        }
         Ok(())
     }
 
@@ -1416,6 +1552,7 @@ declare void @bolide_closure_release(ptr)
         class_name: &str,
         body: &[Statement],
     ) -> Result<(), String> {
+        let saved_var = self.save_var_binding(var);
         let (it, _) = self.emit_expr(iter)?;
         let it_slot = self.fresh_local("__it");
         let _ = writeln!(self.body, "  {} = alloca ptr, align 8", it_slot);
@@ -1512,6 +1649,7 @@ declare void @bolide_closure_release(ptr)
             if self.emit_stmt(s)? {
                 self.loop_stack.pop();
                 let _ = writeln!(self.body, "{}:", end_l);
+                self.restore_var_binding(var, saved_var);
                 return Ok(());
             }
         }
@@ -1520,6 +1658,7 @@ declare void @bolide_closure_release(ptr)
         let _ = writeln!(self.body, "  br label %{}", head);
         let _ = writeln!(self.body, "{}:", end_l);
         self.loop_stack.pop();
+        self.restore_var_binding(var, saved_var);
         let _ = next_full;
         Ok(())
     }
@@ -1536,6 +1675,7 @@ declare void @bolide_closure_release(ptr)
             _ => return Err("range expects 1 or 2 arguments".into()),
         };
         // var i = start; while i < end { body; i = i + 1 }
+        let saved_var = self.save_var_binding(var);
         let slot = self.fresh_local(var);
         let _ = writeln!(self.body, "  {} = alloca i64, align 8", slot);
         let (sv, sty) = self.emit_expr(&start_e)?;
@@ -1577,6 +1717,7 @@ declare void @bolide_closure_release(ptr)
             if self.emit_stmt(s)? {
                 self.loop_stack.pop();
                 let _ = writeln!(self.body, "{}:", end_l);
+                self.restore_var_binding(var, saved_var);
                 return Ok(());
             }
         }
@@ -1590,6 +1731,7 @@ declare void @bolide_closure_release(ptr)
         let _ = writeln!(self.body, "  br label %{}", head);
         let _ = writeln!(self.body, "{}:", end_l);
         self.loop_stack.pop();
+        self.restore_var_binding(var, saved_var);
         Ok(())
     }
 
@@ -1599,6 +1741,7 @@ declare void @bolide_closure_release(ptr)
         iter: &Expr,
         body: &[Statement],
     ) -> Result<(), String> {
+        let saved_var = self.save_var_binding(var);
         let (list, _) = self.emit_expr(iter)?;
         let (tag, elem_kind) = match self.infer_kind(iter) {
             ValKind::List(t) => (t, list_tag_to_kind(t)),
@@ -1655,6 +1798,7 @@ declare void @bolide_closure_release(ptr)
             if self.emit_stmt(s)? {
                 self.loop_stack.pop();
                 let _ = writeln!(self.body, "{}:", end_l);
+                self.restore_var_binding(var, saved_var);
                 return Ok(());
             }
         }
@@ -1668,6 +1812,7 @@ declare void @bolide_closure_release(ptr)
         let _ = writeln!(self.body, "  br label %{}", head);
         let _ = writeln!(self.body, "{}:", end_l);
         self.loop_stack.pop();
+        self.restore_var_binding(var, saved_var);
         Ok(())
     }
 
@@ -1879,11 +2024,115 @@ declare void @bolide_closure_release(ptr)
                 let _ = writeln!(self.body, "{}:", end_l);
                 Ok((out, "ptr"))
             }
+            Expr::ListComprehension {
+                expr,
+                vars,
+                iter,
+                filter,
+            } => self.emit_list_comprehension(expr, vars, iter, filter),
             other => Err(format!(
                 "LLVM backend: unsupported expression {:?}",
                 std::mem::discriminant(other)
             )),
         }
+    }
+
+    /// `[expr for var in iter if cond]` → 合成 for 循环，复用 emit_for 的迭代逻辑
+    /// （与 Cranelift 的 compile_list_comprehension 一致）。
+    fn emit_list_comprehension(
+        &mut self,
+        expr: &Expr,
+        vars: &[String],
+        iter: &Expr,
+        filter: &Option<Box<Expr>>,
+    ) -> Result<(String, &'static str), String> {
+        if vars.len() != 1 {
+            return Err(
+                "LLVM: list comprehension with multiple loop variables not supported yet".into(),
+            );
+        }
+        // 结果列表存入合成局部变量，`push` 走正常 list 方法路径。
+        // 元素类型从推导式表达式推断（决定 list tag 与 push 打包方式）。
+        // 推导式表达式会引用循环变量，须先临时绑定其元素类型（同 Cranelift
+        // compile_list_comprehension 的做法），否则 `s + "!"` 被误判为 Int。
+        let loop_var_kind = match self.infer_kind(iter) {
+            ValKind::List(t) => list_tag_to_kind(t),
+            ValKind::ListObj(n) => ValKind::Object(n),
+            _ => ValKind::Int,
+        };
+        let saved_var_kind = self.local_kind.get(&vars[0]).cloned();
+        self.local_kind
+            .insert(vars[0].clone(), loop_var_kind.clone());
+        let elem_kind = self.infer_kind(expr);
+        match saved_var_kind {
+            Some(k) => {
+                self.local_kind.insert(vars[0].clone(), k);
+            }
+            None => {
+                self.local_kind.remove(&vars[0]);
+            }
+        }
+        let elem_tag: u8 = match &elem_kind {
+            ValKind::Float => 1,
+            ValKind::Bool => 2,
+            ValKind::Str => 3,
+            ValKind::Object(_) | ValKind::Adt(_) | ValKind::Dict | ValKind::Ptr => 4,
+            _ => 0,
+        };
+        let result_list_kind = match &elem_kind {
+            ValKind::Object(n) => ValKind::ListObj(n.clone()),
+            ValKind::Adt(n) => ValKind::ListObj(n.clone()),
+            _ => ValKind::List(elem_tag),
+        };
+        let result_name = format!("__lc_{}", self.tmp);
+        let result_slot = self.fresh_local(&result_name);
+        let _ = writeln!(self.body, "  {} = alloca ptr, align 8", result_slot);
+        let new_l = self.fresh();
+        let _ = writeln!(
+            self.body,
+            "  {} = call ptr @bolide_list_new(i8 {})",
+            new_l, elem_tag
+        );
+        let _ = writeln!(self.body, "  store ptr {}, ptr {}, align 8", new_l, result_slot);
+        self.locals
+            .insert(result_name.clone(), (result_slot.clone(), "ptr"));
+        self.local_kind
+            .insert(result_name.clone(), result_list_kind);
+        self.mutable.insert(result_name.clone(), true);
+
+        // result.push(expr)
+        let push_expr = Expr::Call(
+            Box::new(Expr::Member(
+                Box::new(Expr::Ident(result_name.clone())),
+                "push".into(),
+            )),
+            vec![expr.clone()],
+        );
+        let body = if let Some(f) = filter {
+            vec![Statement::If(IfStmt {
+                condition: (**f).clone(),
+                then_body: vec![Statement::Expr(push_expr)],
+                elif_branches: vec![],
+                else_body: None,
+            })]
+        } else {
+            vec![Statement::Expr(push_expr)]
+        };
+
+        let for_stmt = ForStmt {
+            vars: vars.to_vec(),
+            iter: (*iter).clone(),
+            body,
+        };
+        self.emit_for(&for_stmt)?;
+
+        let d = self.fresh();
+        let _ = writeln!(
+            self.body,
+            "  {} = load ptr, ptr {}, align 8",
+            d, result_slot
+        );
+        Ok((d, "ptr"))
     }
 
     fn emit_member_load(
@@ -3178,6 +3427,73 @@ declare void @bolide_closure_release(ptr)
             if name == "range" {
                 return Err("range only valid in for-loops".into());
             }
+            if name == "bigint_debug_stats" && args.is_empty() {
+                let _ = writeln!(self.body, "  call void @bolide_bigint_debug_stats()");
+                return Ok(("0".into(), "i64"));
+            }
+            if name == "tuple_debug_stats" && args.is_empty() {
+                let _ = writeln!(self.body, "  call void @bolide_tuple_debug_stats()");
+                return Ok(("0".into(), "i64"));
+            }
+            if name == "bytes" && args.is_empty() {
+                let d = self.fresh();
+                let _ = writeln!(self.body, "  {} = call ptr @bolide_bytes_new()", d);
+                return Ok((d, "ptr"));
+            }
+            if name == "channel" {
+                if args.is_empty() {
+                    let d = self.fresh();
+                    let _ = writeln!(self.body, "  {} = call ptr @bolide_channel_create()", d);
+                    return Ok((d, "ptr"));
+                } else if args.len() == 1 {
+                    // channel(capacity)
+                    let (v, ty) = self.emit_expr(&args[0])?;
+                    let v = self.cast_to(v, ty, "i64")?;
+                    let d = self.fresh();
+                    let _ = writeln!(
+                        self.body,
+                        "  {} = call ptr @bolide_channel_create_buffered(i64 {})",
+                        d, v
+                    );
+                    return Ok((d, "ptr"));
+                }
+                return Err("channel expects 0 or 1 arguments".into());
+            }
+            if name == "input" && args.is_empty() {
+                let d = self.fresh();
+                let _ = writeln!(self.body, "  {} = call ptr @bolide_input()", d);
+                return Ok((d, "ptr"));
+            }
+            if name == "bigint" && args.len() == 1 {
+                let (v, ty) = self.emit_expr(&args[0])?;
+                if ty == "ptr" {
+                    // bigint("123") — string → bigint via string_from_bigint? No: parse digits.
+                    return Err("LLVM: bigint(string) not supported yet".into());
+                }
+                let v = self.cast_to(v, ty, "i64")?;
+                let d = self.fresh();
+                let _ = writeln!(
+                    self.body,
+                    "  {} = call ptr @bolide_bigint_from_i64(i64 {})",
+                    d, v
+                );
+                return Ok((d, "ptr"));
+            }
+            if name == "decimal" && args.len() == 1 {
+                let (v, ty) = self.emit_expr(&args[0])?;
+                if ty == "double" {
+                    // decimal(float) unsupported for now
+                    return Err("LLVM: decimal(float) not supported yet".into());
+                }
+                let v = self.cast_to(v, ty, "i64")?;
+                let d = self.fresh();
+                let _ = writeln!(
+                    self.body,
+                    "  {} = call ptr @bolide_decimal_from_i64(i64 {})",
+                    d, v
+                );
+                return Ok((d, "ptr"));
+            }
             // Class constructor
             if self.classes.contains_key(name) {
                 return self.emit_named_call(name, args);
@@ -3263,7 +3579,7 @@ declare void @bolide_closure_release(ptr)
                     );
                     return Ok((d, "ptr"));
                 }
-                "trim" => {
+                "trim" | "strip" => {
                     let d = self.fresh();
                     let _ = writeln!(
                         self.body,
@@ -3283,7 +3599,7 @@ declare void @bolide_closure_release(ptr)
                     );
                     return Ok((d, "ptr"));
                 }
-                "find" if args.len() == 1 => {
+                "find" | "index_of" if args.len() == 1 => {
                     let (a, aty) = self.emit_expr(&args[0])?;
                     let a = self.cast_to(a, aty, "ptr")?;
                     let d = self.fresh();
@@ -3294,7 +3610,7 @@ declare void @bolide_closure_release(ptr)
                     );
                     return Ok((d, "i64"));
                 }
-                "contains" if args.len() == 1 => {
+                "contains" | "includes" if args.len() == 1 => {
                     let (a, aty) = self.emit_expr(&args[0])?;
                     let a = self.cast_to(a, aty, "ptr")?;
                     let d = self.fresh();
@@ -4002,6 +4318,14 @@ declare void @bolide_closure_release(ptr)
             }
             Expr::Closure { .. } => ValKind::Closure,
             Expr::Dict(_) => ValKind::Dict,
+            Expr::ListComprehension { expr, .. } => match self.infer_kind(expr) {
+                ValKind::Float => ValKind::List(1),
+                ValKind::Bool => ValKind::List(2),
+                ValKind::Str => ValKind::List(3),
+                ValKind::Object(n) => ValKind::ListObj(n),
+                ValKind::Adt(n) => ValKind::ListObj(n),
+                _ => ValKind::List(0),
+            },
             Expr::Ident(n) => self
                 .local_kind
                 .get(n)
@@ -4166,6 +4490,51 @@ declare void @bolide_closure_release(ptr)
         let n = self.tmp;
         self.tmp += 1;
         format!("%t{}", n)
+    }
+
+    /// 保存变量当前的 local/kind/mutable 绑定（用于 for 循环变量在循环后恢复作用域）。
+    fn save_var_binding(
+        &self,
+        name: &str,
+    ) -> (Option<(String, &'static str)>, Option<ValKind>, Option<bool>) {
+        (
+            self.locals.get(name).cloned(),
+            self.local_kind.get(name).cloned(),
+            self.mutable.get(name).cloned(),
+        )
+    }
+
+    /// 恢复 save_var_binding 保存的绑定；无则移除（循环变量不泄漏到外层）。
+    fn restore_var_binding(
+        &mut self,
+        name: &str,
+        saved: (Option<(String, &'static str)>, Option<ValKind>, Option<bool>),
+    ) {
+        let (l, k, m) = saved;
+        match l {
+            Some(v) => {
+                self.locals.insert(name.to_string(), v);
+            }
+            None => {
+                self.locals.remove(name);
+            }
+        }
+        match k {
+            Some(v) => {
+                self.local_kind.insert(name.to_string(), v);
+            }
+            None => {
+                self.local_kind.remove(name);
+            }
+        }
+        match m {
+            Some(v) => {
+                self.mutable.insert(name.to_string(), v);
+            }
+            None => {
+                self.mutable.remove(name);
+            }
+        }
     }
 
     fn fresh_local(&mut self, name: &str) -> String {
