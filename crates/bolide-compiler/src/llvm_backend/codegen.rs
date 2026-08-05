@@ -692,7 +692,19 @@ declare void @bolide_print_dynamic(ptr)
             if let Statement::VarDecl(d) = stmt {
                 if let Some(ref v) = d.value {
                     if let Some((ty, _)) = self.global_vars.get(&d.name).cloned() {
-                        let (val, vty) = self.emit_expr(v)?;
+                        let (val, vty) = if let (Some(Type::List(inner)), Expr::List(items)) =
+                            (&d.ty, v)
+                        {
+                            let tag = match kind_of_type(&Some(Type::List(inner.clone()))) {
+                                ValKind::List(t) => t,
+                                ValKind::ListObj(_) => 4,
+                                ValKind::NestedList(_) => 6,
+                                _ => 0,
+                            };
+                            (self.emit_list_lit_tagged(items, tag)?.0, "ptr")
+                        } else {
+                            self.emit_expr(v)?
+                        };
                         let val = self.cast_to(val, vty, ty)?;
                         let g = llvm_func_name(&d.name);
                         let _ = writeln!(
@@ -1493,7 +1505,20 @@ declare void @bolide_print_dynamic(ptr)
         let slot = self.fresh_local(&d.name);
         let _ = writeln!(self.body, "  {} = alloca {}, align 8", slot, ty);
         if let Some(ref v) = d.value {
-            let (val, vty) = self.emit_expr(v)?;
+            // `let/var x: list<dict<..>> = [...]` — use the declared element tag so
+            // e.g. an empty `[]` is a dict-tagged list and pushed dicts are read
+            // back as dicts.
+            let (val, vty) = if let (Some(Type::List(inner)), Expr::List(items)) = (&d.ty, v) {
+                let tag = match kind_of_type(&Some(Type::List(inner.clone()))) {
+                    ValKind::List(t) => t,
+                    ValKind::ListObj(_) => 4,
+                    ValKind::NestedList(_) => 6,
+                    _ => 0,
+                };
+                (self.emit_list_lit_tagged(items, tag)?.0, "ptr")
+            } else {
+                self.emit_expr(v)?
+            };
             let val = self.cast_to(val, vty, ty)?;
             let _ = writeln!(self.body, "  store {} {}, ptr {}, align 8", ty, val, slot);
         } else {
@@ -1550,7 +1575,9 @@ declare void @bolide_print_dynamic(ptr)
                 match base_kind {
                     ValKind::Dict => {
                         let key = self.pack_as_i64(ix, ixty)?;
-                        let packed = self.pack_as_i64(val, vty)?;
+                        let k = self.infer_kind(&a.value);
+                        let dyn_ = self.wrap_as_dynamic(val, vty, &k)?;
+                        let packed = self.pack_as_i64(dyn_, "ptr")?;
                         let _ = writeln!(
                             self.body,
                             "  call void @bolide_dict_set(ptr {}, i64 {}, i64 {})",
@@ -2687,6 +2714,17 @@ declare void @bolide_print_dynamic(ptr)
                 _ => 0,
             }
         };
+        self.emit_list_lit_tagged(items, tag)
+    }
+
+    /// Create a list literal with an explicit element tag (used when the declared
+    /// type fixes the element kind, e.g. `var x: list<dict<..>> = []` must be a
+    /// dict-tagged list so pushed dicts are read back as dicts, not ints).
+    fn emit_list_lit_tagged(
+        &mut self,
+        items: &[Expr],
+        tag: u8,
+    ) -> Result<(String, &'static str), String> {
         let list = self.fresh();
         let _ = writeln!(
             self.body,
@@ -3973,6 +4011,42 @@ declare void @bolide_print_dynamic(ptr)
         Ok(tname)
     }
 
+    /// Wrap an already-emitted value into a BolideDynamic, returning a ptr.
+    /// `kind` is the value's inferred ValKind; `ty` is its LLVM type.
+    fn wrap_as_dynamic(&mut self, v: String, ty: &str, kind: &ValKind) -> Result<String, String> {
+        let d = self.fresh();
+        let from_fn = match ty {
+            "double" => "bolide_dynamic_from_float",
+            "ptr" => match kind {
+                ValKind::Dict => "bolide_dynamic_from_dict",
+                ValKind::List(_) | ValKind::ListObj(_) | ValKind::NestedList(_) => {
+                    "bolide_dynamic_from_list"
+                }
+                _ => "bolide_dynamic_from_string",
+            },
+            _ => {
+                if matches!(kind, ValKind::Bool) {
+                    "bolide_dynamic_from_bool"
+                } else {
+                    "bolide_dynamic_from_int"
+                }
+            }
+        };
+        let arg = if ty == "ptr" {
+            v
+        } else if ty == "double" {
+            v
+        } else {
+            self.cast_to(v, ty, "i64")?
+        };
+        let _ = writeln!(
+            self.body,
+            "  {} = call ptr @{}({})",
+            d, from_fn, if ty == "ptr" { format!("ptr {}", arg) } else if ty == "double" { format!("double {}", arg) } else { format!("i64 {}", arg) }
+        );
+        Ok(d)
+    }
+
     /// Map a possibly module-qualified class name (`gui.Ui`, `@gui_Ui`) to the
     /// class name actually registered by `collect_classes` (`Ui`), trying the
     /// raw name, the module-prefixed name, and the short name.
@@ -4225,7 +4299,9 @@ declare void @bolide_print_dynamic(ptr)
                     let (k, kty) = self.emit_expr(&args[0])?;
                     let (v, vty) = self.emit_expr(&args[1])?;
                     let key = self.pack_as_i64(k, kty)?;
-                    let val = self.pack_as_i64(v, vty)?;
+                    let k2 = self.infer_kind(&args[1]);
+                    let dyn_ = self.wrap_as_dynamic(v, vty, &k2)?;
+                    let val = self.pack_as_i64(dyn_, "ptr")?;
                     let _ = writeln!(
                         self.body,
                         "  call void @bolide_dict_set(ptr {}, i64 {}, i64 {})",
@@ -4781,40 +4857,44 @@ declare void @bolide_print_dynamic(ptr)
                 }
             }
             let (v, ty) = self.emit_expr(a)?;
-            // `*dynamic` param: wrap the arg into a BolideDynamic
+            // `*dynamic` param: wrap the arg into a BolideDynamic. Pick the wrapper
+            // from the EMITTED type (`ty`) rather than infer_kind, since a `dynamic`-
+            // typed value forwarded here is a pointer even though infer_kind may
+            // call it Int.
             if self
                 .extern_dynamic
                 .get(&resolved)
                 .map(|flags| flags.get(i) == Some(&true))
                 .unwrap_or(false)
             {
-                let d = self.fresh();
-                let from_fn = match self.infer_kind(a) {
-                    ValKind::Str => "bolide_dynamic_from_string",
-                    ValKind::Float => "bolide_dynamic_from_float",
-                    ValKind::Bool => "bolide_dynamic_from_bool",
-                    ValKind::Dict => "bolide_dynamic_from_dict",
-                    ValKind::List(_) | ValKind::ListObj(_) | ValKind::NestedList(_) => {
-                        "bolide_dynamic_from_list"
-                    }
-                    _ => {
-                        let v = self.cast_to(v, ty, "i64")?;
-                        let _ = writeln!(
-                            self.body,
-                            "  {} = call ptr @bolide_dynamic_from_int(i64 {})",
-                            d, v
-                        );
-                        let _ = write!(arg_s, "ptr {}", d);
-                        continue;
-                    }
-                };
-                let v = self.cast_to(v, ty, "ptr")?;
-                let _ = writeln!(
-                    self.body,
-                    "  {} = call ptr @{}(ptr {})",
-                    d, from_fn, v
-                );
-                let _ = write!(arg_s, "ptr {}", d);
+                let k = self.infer_kind(a);
+                if matches!(k, ValKind::Dynamic) {
+                    let v = self.cast_to(v, ty, "ptr")?;
+                    let _ = write!(arg_s, "ptr {}", v);
+                } else {
+                    let dyn_ = self.wrap_as_dynamic(v, ty, &k)?;
+                    let _ = write!(arg_s, "ptr {}", dyn_);
+                }
+                continue;
+            }
+            // user-function `dynamic` param: wrap the arg so the callee sees a
+            // BolideDynamic (e.g. `where_eq(..., value: dynamic)` receives `true`
+            // as a bool dynamic rather than raw `1`).
+            let param_is_dynamic = self
+                .func_params
+                .get(&resolved)
+                .and_then(|params| params.get(i))
+                .map(|p| matches!(p.ty, Type::Dynamic))
+                .unwrap_or(false);
+            if param_is_dynamic {
+                let k = self.infer_kind(a);
+                if matches!(k, ValKind::Dynamic) {
+                    let v = self.cast_to(v, ty, "ptr")?;
+                    let _ = write!(arg_s, "ptr {}", v);
+                } else {
+                    let dyn_ = self.wrap_as_dynamic(v, ty, &k)?;
+                    let _ = write!(arg_s, "ptr {}", dyn_);
+                }
                 continue;
             }
             // `*c_char` param: convert a Bolide str (ptr) to a C string pointer
@@ -5186,12 +5266,16 @@ declare void @bolide_print_dynamic(ptr)
                         return ValKind::Int;
                     }
                     if let ValKind::Object(ref cn) = self.infer_kind(base) {
-                        let full = method_full_name(cn, method);
-                        if let Some(k) = self.func_ret_kind.get(&full) {
-                            return k.clone();
-                        }
-                        if let Some(md) = self.classes.get(cn).and_then(|c| c.methods.get(method)) {
-                            return kind_of_type(&md.return_type);
+                        if let Some(resolved) = self.resolve_class_name(cn) {
+                            let full = method_full_name(&resolved, method);
+                            if let Some(k) = self.func_ret_kind.get(&full) {
+                                return k.clone();
+                            }
+                            if let Some(md) =
+                                self.classes.get(&resolved).and_then(|c| c.methods.get(method))
+                            {
+                                return kind_of_type(&md.return_type);
+                            }
                         }
                     }
                     let _ = args;
@@ -5313,10 +5397,12 @@ fn kind_of_type(ty: &Option<Type>) -> ValKind {
             Type::Adt(n, _) => ValKind::ListObj(n.clone()),
             // list<list<T>> — carry the inner list kind so grid[y][x] resolves
             Type::List(_) => ValKind::NestedList(Box::new(kind_of_list_inner(inner))),
-            Type::Dict(_, _) | Type::Func | Type::FuncSig(_, _) => ValKind::List(4),
+            Type::Dict(_, _) => ValKind::List(8),
+            Type::Func | Type::FuncSig(_, _) => ValKind::List(4),
             _ => ValKind::List(0),
         },
         Some(Type::Dict(_, _)) => ValKind::Dict,
+        Some(Type::Dynamic) => ValKind::Dynamic,
         Some(Type::Custom(n)) | Some(Type::Dyn(n)) => ValKind::Object(n.clone()),
         Some(Type::Adt(n, _)) => ValKind::Adt(n.clone()),
         Some(Type::Func) | Some(Type::FuncSig(_, _)) => ValKind::Closure,
@@ -5509,6 +5595,7 @@ fn list_tag_to_kind(tag: u8) -> ValKind {
         2 => ValKind::Bool,
         3 => ValKind::Str,
         4 => ValKind::Ptr,
+        8 => ValKind::Dict,
         _ => ValKind::Int,
     }
 }
