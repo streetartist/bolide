@@ -98,8 +98,6 @@ struct Codegen {
     current_env_slot: Option<String>,
     /// module-level globals: name → (llvm ty, kind, optional const init expr already lowered)
     global_vars: HashMap<String, (&'static str, ValKind)>,
-    /// global initializers to run in main: (name, Expr)
-    global_inits: Vec<(String, Expr)>,
 }
 
 impl Codegen {
@@ -190,7 +188,6 @@ impl Codegen {
             current_captures: HashMap::new(),
             current_env_slot: None,
             global_vars: HashMap::new(),
-            global_inits: Vec::new(),
         }
     }
 
@@ -215,6 +212,7 @@ declare ptr @bolide_string_new(ptr)
 declare i64 @bolide_string_len(ptr)
 declare ptr @bolide_string_from_int(i64)
 declare ptr @bolide_string_from_float(double)
+declare ptr @bolide_string_from_bool(i64)
 declare ptr @bolide_string_concat(ptr, ptr)
 declare ptr @bolide_list_new(i8)
 declare ptr @bolide_list_with_capacity(i8, i64)
@@ -451,9 +449,6 @@ declare void @bolide_closure_release(ptr)
                 }
                 let ty = kind_to_llvm(&kind);
                 self.global_vars.insert(d.name.clone(), (ty, kind));
-                if let Some(ref v) = d.value {
-                    self.global_inits.push((d.name.clone(), v.clone()));
-                }
             }
         }
 
@@ -494,19 +489,6 @@ declare void @bolide_closure_release(ptr)
         self.body = String::new();
         let _ = writeln!(self.body, "define i64 @bolide_main() {{");
         let _ = writeln!(self.body, "entry:");
-        // initialize globals
-        for (name, expr) in self.global_inits.clone() {
-            if let Some((ty, _)) = self.global_vars.get(&name).cloned() {
-                let (v, vty) = self.emit_expr(&expr)?;
-                let v = self.cast_to(v, vty, ty)?;
-                let gname = llvm_func_name(&name);
-                let _ = writeln!(
-                    self.body,
-                    "  store {} {}, ptr @{}, align 8",
-                    ty, v, gname
-                );
-            }
-        }
         for stmt in &program.statements {
             if matches!(
                 stmt,
@@ -524,8 +506,24 @@ declare void @bolide_closure_release(ptr)
             ) {
                 continue;
             }
-            // top-level var/let already emitted as globals + initializers above
-            if matches!(stmt, Statement::VarDecl(_)) {
+            // Top-level let/var: the global is declared zeroed above (so other
+            // functions can read it), but its initializer STORE must run at this
+            // source position. Hoisting every initializer to the top of main
+            // reordered side-effecting inits (e.g. `let _r = run_heavy()` printed
+            // before the banner). Mirrors Cranelift's in-place `compile_var_assign`.
+            if let Statement::VarDecl(d) = stmt {
+                if let Some(ref v) = d.value {
+                    if let Some((ty, _)) = self.global_vars.get(&d.name).cloned() {
+                        let (val, vty) = self.emit_expr(v)?;
+                        let val = self.cast_to(val, vty, ty)?;
+                        let g = llvm_func_name(&d.name);
+                        let _ = writeln!(
+                            self.body,
+                            "  store {} {}, ptr @{}, align 8",
+                            ty, val, g
+                        );
+                    }
+                }
                 continue;
             }
             self.emit_stmt(stmt)?;
@@ -2800,6 +2798,16 @@ declare void @bolide_closure_release(ptr)
                 );
                 Ok(d)
             }
+            ValKind::Bool => {
+                let v = self.cast_to(v, ty, "i64")?;
+                let d = self.fresh();
+                let _ = writeln!(
+                    self.body,
+                    "  {} = call ptr @bolide_string_from_bool(i64 {})",
+                    d, v
+                );
+                Ok(d)
+            }
             _ => {
                 if ty == "ptr" {
                     return Ok(v);
@@ -3141,7 +3149,15 @@ declare void @bolide_closure_release(ptr)
             if name == "str" && args.len() == 1 {
                 let (v, ty) = self.emit_expr(&args[0])?;
                 let d = self.fresh();
-                if ty == "double" {
+                if matches!(self.infer_kind(&args[0]), ValKind::Bool) {
+                    // bools are stored as i64 0/1 in LLVM; convert to "true"/"false"
+                    let v = self.cast_to(v, ty, "i64")?;
+                    let _ = writeln!(
+                        self.body,
+                        "  {} = call ptr @bolide_string_from_bool(i64 {})",
+                        d, v
+                    );
+                } else if ty == "double" {
                     let _ = writeln!(
                         self.body,
                         "  {} = call ptr @bolide_string_from_float(double {})",

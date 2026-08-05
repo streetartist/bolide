@@ -54,7 +54,19 @@ fn find_runtime_lib() -> Result<PathBuf, String> {
     #[cfg(not(target_os = "windows"))]
     let names = ["libbolide_runtime.a"];
 
+    // Same priority as the Cranelift path (CLI find_runtime_lib): the exe's own
+    // directory and its parent/deps first, then BOLIDE_HOME, then the CWD tree
+    // as a fallback. Searching the CWD first meant a bolide.exe copied elsewhere
+    // failed to find the runtime next to itself.
     let mut roots = Vec::new();
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            roots.push(dir.to_path_buf());
+            roots.push(dir.join(".."));
+            roots.push(dir.join("deps"));
+            roots.push(dir.join("..").join("deps"));
+        }
+    }
     if let Ok(home) = std::env::var("BOLIDE_HOME") {
         let home = PathBuf::from(home);
         roots.push(home.join("target").join("release"));
@@ -68,12 +80,6 @@ fn find_runtime_lib() -> Result<PathBuf, String> {
             if !p.pop() {
                 break;
             }
-        }
-    }
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            roots.push(dir.to_path_buf());
-            roots.push(dir.join("deps"));
         }
     }
 
@@ -235,6 +241,11 @@ pub fn compile_and_link_exe(ir: &str, output_exe: &Path) -> Result<(), String> {
 }
 
 /// Compile to a temp exe, run it, return process exit code as i64.
+///
+/// Runs the child with inherited stdio so its output streams to the terminal
+/// incrementally — same observable behavior as the in-process Cranelift JIT.
+/// (`.output()` would capture everything into memory and only flush after the
+/// process exits, making LLVM output appear batched.)
 pub fn compile_run_temp(ir: &str) -> Result<i64, String> {
     let exe = std::env::temp_dir().join(format!(
         "bolide_llvm_jit_{}.{}",
@@ -242,16 +253,12 @@ pub fn compile_run_temp(ir: &str) -> Result<i64, String> {
         if cfg!(windows) { "exe" } else { "bin" }
     ));
     compile_and_link_exe(ir, &exe)?;
-    let output = Command::new(&exe)
-        .output()
+    let status = Command::new(&exe)
+        .stdout(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit())
+        .status()
         .map_err(|e| format!("failed to run LLVM JIT binary: {}", e))?;
-    if !output.stdout.is_empty() {
-        let _ = std::io::Write::write_all(&mut std::io::stdout(), &output.stdout);
-    }
-    if !output.stderr.is_empty() {
-        let _ = std::io::Write::write_all(&mut std::io::stderr(), &output.stderr);
-    }
-    let code = output.status.code().unwrap_or(-1) as i64;
+    let code = status.code().unwrap_or(-1) as i64;
     let _ = std::fs::remove_file(&exe);
     Ok(code)
 }

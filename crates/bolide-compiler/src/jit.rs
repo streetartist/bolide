@@ -6834,9 +6834,17 @@ impl JitCompiler {
                 }
             }
 
-            // FuncSig/Func 参数统一按闭包对象 ABI（裸函数在调用点会 wrap 成闭包）。
-            // 这样捕获到内层闭包后调用才正确。
-            if matches!(param_ty, BolideType::FuncSig(_, _) | BolideType::Func) {
+            // FuncSig/Func 参数：仅当调用点扫描发现该参数会接收闭包对象时才按闭包
+            // 对象 ABI 处理，否则当作裸函数指针（与 AOT 一致）。无条件按闭包对象
+            // ABI 会把 closure 对象原样转发给 extern 的 func(*c_void) 参数，运行时
+            // 按裸指针调用导致崩溃（如 web 路由回调）。
+            if matches!(param_ty, BolideType::FuncSig(_, _) | BolideType::Func)
+                && compile_ctx
+                    .funcsig_closure_param_indices
+                    .get(&func.name)
+                    .map(|indices| indices.contains(&i))
+                    .unwrap_or(false)
+            {
                 compile_ctx.closure_param_vars.insert(param.name.clone());
             }
 
@@ -15373,8 +15381,18 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                         let actual_ty = self.normalize_bolide_type(&self.infer_expr_type(expr));
                         let mut val =
                             self.prepare_value_for_storage(raw_val, &actual_ty, &param.ty)?;
-                        // 传给 FuncSig 参数时，裸函数一律 wrap 成闭包对象
+                        // 传给 FuncSig 参数时，仅当被调方按闭包对象 ABI 接收（扫描已
+                        // 标记）才把裸函数 wrap 成闭包对象；否则保持裸函数指针（与 AOT
+                        // 一致）。无条件 wrap 会把 closure 对象转发给 extern 的
+                        // func(*c_void) 参数，运行时按裸指针调用导致崩溃（web 回调）。
+                        let param_index = target_index + param_offset;
+                        let callee_expects_closure = self
+                            .funcsig_closure_param_indices
+                            .get(call_name)
+                            .map(|indices| indices.contains(&param_index))
+                            .unwrap_or(false);
                         if matches!(param.ty, BolideType::FuncSig(_, _) | BolideType::Func)
+                            && callee_expects_closure
                             && matches!(self.funcsig_expr_source(expr), FuncSigReturnSource::Raw)
                         {
                             if let BolideType::FuncSig(param_types, ret_type) = &param.ty {
