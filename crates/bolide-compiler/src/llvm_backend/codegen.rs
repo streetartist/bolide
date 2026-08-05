@@ -32,6 +32,7 @@ pub fn emit_llvm_ir(prepared: &PreparedProgram) -> Result<String, String> {
             .insert(ext.name.clone(), ext.cstr_params.clone());
         cg.extern_dynamic
             .insert(ext.name.clone(), ext.dynamic_params.clone());
+        cg.extern_names.insert(ext.name.clone());
         cg.extern_decls.push(ext.clone());
     }
     cg.emit_program(&prepared.program)?;
@@ -61,6 +62,8 @@ enum ValKind {
     RawFunc,
     /// a BolideDynamic value (dict values, `dynamic` vars) — conversions must unwrap
     Dynamic,
+    /// a BolideBigInt heap object (ptr)
+    BigInt,
     Ptr,
 }
 
@@ -90,11 +93,14 @@ struct Codegen {
     extern_cstr: HashMap<String, Vec<bool>>,
     /// extern name → per-param flag: is a `*dynamic` (wrap into a BolideDynamic)
     extern_dynamic: HashMap<String, Vec<bool>>,
+    /// extern functions (runtime / native libs) — called by their raw C symbol
+    extern_names: HashSet<String>,
     /// callback closure globals (`@__cb_N`) emitted in the module globals section
     cb_globals: Vec<String>,
     /// function/method name → params (for FuncSig param classification)
     func_params: HashMap<String, Vec<Param>>,
-    /// function name → indices of FuncSig params that receive closure objects
+    /// variable names holding a spawn handle (await → thread_join)
+    spawn_vars: HashSet<String>,
     /// (everything else is a raw function pointer, matching Cranelift)
     funcsig_closure_params: HashMap<String, HashSet<usize>>,
     strings: Vec<String>,
@@ -237,6 +243,34 @@ impl Codegen {
             ("bolide_dynamic_to_int", vec!["ptr"], "i64"),
             ("bolide_dynamic_to_float", vec!["ptr"], "double"),
             ("bolide_print_dynamic", vec!["ptr"], "void"),
+            // BigInt
+            ("bolide_print_bigint", vec!["ptr"], "void"),
+            ("bolide_bigint_add", vec!["ptr", "ptr"], "ptr"),
+            ("bolide_bigint_sub", vec!["ptr", "ptr"], "ptr"),
+            ("bolide_bigint_mul", vec!["ptr", "ptr"], "ptr"),
+            ("bolide_bigint_div", vec!["ptr", "ptr"], "ptr"),
+            ("bolide_bigint_rem", vec!["ptr", "ptr"], "ptr"),
+            ("bolide_bigint_neg", vec!["ptr"], "ptr"),
+            ("bolide_bigint_eq", vec!["ptr", "ptr"], "i64"),
+            ("bolide_bigint_ne", vec!["ptr", "ptr"], "i64"),
+            ("bolide_bigint_lt", vec!["ptr", "ptr"], "i64"),
+            ("bolide_bigint_le", vec!["ptr", "ptr"], "i64"),
+            ("bolide_bigint_gt", vec!["ptr", "ptr"], "i64"),
+            ("bolide_bigint_ge", vec!["ptr", "ptr"], "i64"),
+            // Thread spawn / coroutine await
+            ("bolide_thread_spawn_int", vec!["ptr"], "ptr"),
+            ("bolide_thread_spawn_int_with_env", vec!["ptr", "ptr"], "ptr"),
+            ("bolide_thread_spawn_float", vec!["ptr"], "ptr"),
+            ("bolide_thread_spawn_float_with_env", vec!["ptr", "ptr"], "ptr"),
+            ("bolide_thread_spawn_ptr", vec!["ptr"], "ptr"),
+            ("bolide_thread_spawn_ptr_with_env", vec!["ptr", "ptr"], "ptr"),
+            ("bolide_coroutine_await_int", vec!["ptr"], "i64"),
+            ("bolide_coroutine_await_float", vec!["ptr"], "double"),
+            ("bolide_coroutine_await_ptr", vec!["ptr"], "ptr"),
+            ("bolide_thread_join_int", vec!["ptr"], "i64"),
+            ("bolide_thread_join_float", vec!["ptr"], "double"),
+            ("bolide_thread_join_ptr", vec!["ptr"], "ptr"),
+            ("bolide_thread_handle_free", vec!["ptr"], "void"),
         ] {
             funcs.insert(n.into(), (ps, r));
         }
@@ -250,9 +284,11 @@ impl Codegen {
             extern_funcptr_sigs: HashMap::new(),
             extern_cstr: HashMap::new(),
             extern_dynamic: HashMap::new(),
+            extern_names: HashSet::new(),
             cb_globals: Vec::new(),
             func_params: HashMap::new(),
             funcsig_closure_params: HashMap::new(),
+            spawn_vars: HashSet::new(),
             strings: Vec::new(),
             body: String::new(),
             tmp: 0,
@@ -419,6 +455,32 @@ declare ptr @bolide_dynamic_to_string(ptr)
 declare i64 @bolide_dynamic_to_int(ptr)
 declare double @bolide_dynamic_to_float(ptr)
 declare void @bolide_print_dynamic(ptr)
+declare void @bolide_print_bigint(ptr)
+declare ptr @bolide_thread_spawn_int(ptr)
+declare ptr @bolide_thread_spawn_int_with_env(ptr, ptr)
+declare ptr @bolide_thread_spawn_float(ptr)
+declare ptr @bolide_thread_spawn_float_with_env(ptr, ptr)
+declare ptr @bolide_thread_spawn_ptr(ptr)
+declare ptr @bolide_thread_spawn_ptr_with_env(ptr, ptr)
+declare i64 @bolide_coroutine_await_int(ptr)
+declare double @bolide_coroutine_await_float(ptr)
+declare ptr @bolide_coroutine_await_ptr(ptr)
+declare i64 @bolide_thread_join_int(ptr)
+declare double @bolide_thread_join_float(ptr)
+declare ptr @bolide_thread_join_ptr(ptr)
+declare void @bolide_thread_handle_free(ptr)
+declare ptr @bolide_bigint_add(ptr, ptr)
+declare ptr @bolide_bigint_sub(ptr, ptr)
+declare ptr @bolide_bigint_mul(ptr, ptr)
+declare ptr @bolide_bigint_div(ptr, ptr)
+declare ptr @bolide_bigint_rem(ptr, ptr)
+declare ptr @bolide_bigint_neg(ptr)
+declare i64 @bolide_bigint_eq(ptr, ptr)
+declare i64 @bolide_bigint_ne(ptr, ptr)
+declare i64 @bolide_bigint_lt(ptr, ptr)
+declare i64 @bolide_bigint_le(ptr, ptr)
+declare i64 @bolide_bigint_gt(ptr, ptr)
+declare i64 @bolide_bigint_ge(ptr, ptr)
 
 "#,
         );
@@ -691,6 +753,9 @@ declare void @bolide_print_dynamic(ptr)
             // before the banner). Mirrors Cranelift's in-place `compile_var_assign`.
             if let Statement::VarDecl(d) = stmt {
                 if let Some(ref v) = d.value {
+                    if matches!(v, Expr::Spawn(_, _) | Expr::SpawnThread(_, _)) {
+                        self.spawn_vars.insert(d.name.clone());
+                    }
                     if let Some((ty, _)) = self.global_vars.get(&d.name).cloned() {
                         let (val, vty) = if let (Some(Type::List(inner)), Expr::List(items)) =
                             (&d.ty, v)
@@ -1149,6 +1214,190 @@ declare void @bolide_print_dynamic(ptr)
         self.emit_function(&m2)
     }
 
+    /// `spawn fn(args)` / `spawn thread fn(args)` → thread handle (ptr).
+    fn emit_spawn(
+        &mut self,
+        name: &str,
+        args: &[Expr],
+        force_thread: bool,
+    ) -> Result<(String, &'static str), String> {
+        let (_, ret) = self.funcs.get(name).cloned().ok_or_else(|| {
+            format!("LLVM backend: cannot spawn unknown function '{}'", name)
+        })?;
+        let suffix = match ret {
+            "double" => "float",
+            "ptr" => "ptr",
+            _ => "int",
+        };
+        let _ = force_thread;
+        let cal = llvm_func_name(name);
+
+        if args.is_empty() {
+            let d = self.fresh();
+            let _ = writeln!(
+                self.body,
+                "  {} = call ptr @bolide_thread_spawn_{}(ptr @{})",
+                d, suffix, cal
+            );
+            return Ok((d, "ptr"));
+        }
+
+        // Build env buffer + a bare trampoline `__spawn_tramp_N(env)` that unpacks
+        // the args and calls the target.
+        let n = self.tmp;
+        self.tmp += 1;
+        let tname = format!("__spawn_tramp_{}", n);
+        let size = args.len() * 8;
+        let env = self.fresh();
+        let _ = writeln!(self.body, "  {} = call ptr @bolide_alloc(i64 {})", env, size);
+        let params = self.func_params.get(name).cloned().unwrap_or_default();
+        for (i, a) in args.iter().enumerate() {
+            let (v, ty) = self.emit_expr(a)?;
+            let arg_ty = params
+                .get(i)
+                .map(|p| llvm_type_of(&Some(p.ty.clone())))
+                .unwrap_or("i64");
+            let packed = match arg_ty {
+                "double" => {
+                    let v = self.cast_to(v, ty, "double")?;
+                    let b = self.fresh();
+                    let _ = writeln!(self.body, "  {} = bitcast double {} to i64", b, v);
+                    b
+                }
+                "ptr" => self.cast_to(v, ty, "i64")?,
+                _ => self.cast_to(v, ty, "i64")?,
+            };
+            let gep = self.fresh();
+            let _ = writeln!(
+                self.body,
+                "  {} = getelementptr i8, ptr {}, i64 {}",
+                gep, env, i * 8
+            );
+            let _ = writeln!(self.body, "  store i64 {}, ptr {}, align 8", packed, gep);
+        }
+
+        // trampoline: define <ret> @__spawn_tramp_N(ptr %env)
+        let mut def = String::new();
+        let _ = writeln!(def, "define {} @{}(ptr %env) {{", ret, tname);
+        let _ = writeln!(def, "entry:");
+        let mut arg_s = String::new();
+        for (i, a) in args.iter().enumerate() {
+            let arg_ty = params
+                .get(i)
+                .map(|p| llvm_type_of(&Some(p.ty.clone())))
+                .unwrap_or("i64");
+            if i > 0 {
+                arg_s.push_str(", ");
+            }
+            let gep = self.fresh();
+            let _ = writeln!(
+                def,
+                "  {} = getelementptr i8, ptr %env, i64 {}",
+                gep,
+                i * 8
+            );
+            let raw = self.fresh();
+            let _ = writeln!(def, "  {} = load i64, ptr {}, align 8", raw, gep);
+            let _ = a;
+            let v = match arg_ty {
+                "double" => {
+                    let d2 = self.fresh();
+                    let _ = writeln!(def, "  {} = bitcast i64 {} to double", d2, raw);
+                    d2
+                }
+                "ptr" => {
+                    let d2 = self.fresh();
+                    let _ = writeln!(def, "  {} = inttoptr i64 {} to ptr", d2, raw);
+                    d2
+                }
+                _ => raw,
+            };
+            let _ = write!(arg_s, "{} {}", arg_ty, v);
+        }
+        if ret == "void" {
+            let _ = writeln!(def, "  call void @{}({})", cal, arg_s);
+            let _ = writeln!(def, "  ret void");
+        } else {
+            let r = self.fresh();
+            let _ = writeln!(def, "  {} = call {} @{}({})", r, ret, cal, arg_s);
+            let _ = writeln!(def, "  ret {} {}", ret, r);
+        }
+        let _ = writeln!(def, "}}\n");
+        self.trampoline_ir.push_str(&def);
+
+        let d = self.fresh();
+        let _ = writeln!(
+            self.body,
+            "  {} = call ptr @bolide_thread_spawn_{}_with_env(ptr @{}, ptr {})",
+            d, suffix, tname, env
+        );
+        Ok((d, "ptr"))
+    }
+
+    /// `await expr` → resolve the future/handle's result.
+    fn emit_await(&mut self, inner: &Expr) -> Result<(String, &'static str), String> {
+        // Determine if this is a spawn handle (thread_join) or a coroutine future.
+        let is_spawn = matches!(inner, Expr::Spawn(_, _) | Expr::SpawnThread(_, _))
+            || matches!(inner, Expr::Ident(n) if self.spawn_vars.contains(n));
+        let (future, fty) = self.emit_expr(inner)?;
+        let future = self.cast_to(future, fty, "ptr")?;
+
+        // Result kind: from the spawned function's return kind when known.
+        let ret_kind = match inner {
+            Expr::Spawn(name, _) | Expr::SpawnThread(name, _) => {
+                self.func_ret_kind.get(name).cloned()
+            }
+            Expr::Ident(n) => self
+                .global_vars
+                .get(n)
+                .map(|(_, k)| k.clone())
+                .or_else(|| self.local_kind.get(n).cloned()),
+            _ => None,
+        };
+        let is_float = matches!(ret_kind, Some(ValKind::Float));
+        let is_ptr = matches!(
+            ret_kind,
+            Some(
+                ValKind::Str
+                    | ValKind::Ptr
+                    | ValKind::BigInt
+                    | ValKind::Object(_)
+                    | ValKind::List(_)
+                    | ValKind::Dict
+            )
+        );
+
+        let d = self.fresh();
+        if is_spawn {
+            let suffix = if is_float {
+                "float"
+            } else if is_ptr {
+                "ptr"
+            } else {
+                "int"
+            };
+            let _ = writeln!(
+                self.body,
+                "  {} = call {} @bolide_thread_join_{}(ptr {})",
+                d,
+                if is_float { "double" } else if is_ptr { "ptr" } else { "i64" },
+                suffix,
+                future
+            );
+            Ok((
+                d,
+                if is_float { "double" } else if is_ptr { "ptr" } else { "i64" },
+            ))
+        } else {
+            let _ = writeln!(
+                self.body,
+                "  {} = call i64 @bolide_coroutine_await_int(ptr {})",
+                d, future
+            );
+            Ok((d, "i64"))
+        }
+    }
+
     /// Classify FuncSig params that receive closure objects (capturing lambdas);
     /// params not listed are treated as raw function pointers.
     fn collect_funcsig_closure_params(&mut self, program: &Program) {
@@ -1504,6 +1753,12 @@ declare void @bolide_print_dynamic(ptr)
         let ty = kind_to_llvm(&kind);
         let slot = self.fresh_local(&d.name);
         let _ = writeln!(self.body, "  {} = alloca {}, align 8", slot, ty);
+        // a local holding a spawn handle → await should use thread_join
+        if let Some(ref v) = d.value {
+            if matches!(v, Expr::Spawn(_, _) | Expr::SpawnThread(_, _)) {
+                self.spawn_vars.insert(d.name.clone());
+            }
+        }
         if let Some(ref v) = d.value {
             // `let/var x: list<dict<..>> = [...]` — use the declared element tag so
             // e.g. an empty `[]` is a dict-tagged list and pushed dicts are read
@@ -2177,10 +2432,24 @@ declare void @bolide_print_dynamic(ptr)
                 self.emit_list_lit(items)
             }
             Expr::BigInt(s) => {
-                // Fit into i64 when possible; otherwise error
-                s.parse::<i64>()
-                    .map(|n| (format!("{}", n), "i64"))
-                    .map_err(|_| format!("LLVM backend: BigInt '{}' too large for i64", s))
+                // BolideBigInt is a heap object (ptr). Small values via
+                // from_i64, large via from_str.
+                let d = self.fresh();
+                if let Ok(n) = s.parse::<i64>() {
+                    let _ = writeln!(
+                        self.body,
+                        "  {} = call ptr @bolide_bigint_from_i64(i64 {})",
+                        d, n
+                    );
+                } else {
+                    let c = self.emit_cstr_ptr(s);
+                    let _ = writeln!(
+                        self.body,
+                        "  {} = call ptr @bolide_bigint_from_str(ptr {}, i64 {})",
+                        d, c, s.len()
+                    );
+                }
+                Ok((d, "ptr"))
             }
             Expr::Decimal(s) => s
                 .parse::<f64>()
@@ -2349,6 +2618,23 @@ declare void @bolide_print_dynamic(ptr)
                 iter,
                 filter,
             } => self.emit_list_comprehension(expr, vars, iter, filter),
+            Expr::Spawn(name, args) => self.emit_spawn(name, args, false),
+            Expr::SpawnThread(name, args) => self.emit_spawn(name, args, true),
+            Expr::Await(inner) => self.emit_await(inner),
+            Expr::SpawnAll(items) => {
+                // spawn each and await the last (basic support)
+                let mut last = "null".to_string();
+                for it in items {
+                    if let Expr::Spawn(name, args) = it {
+                        let (h, _) = self.emit_spawn(name, args, false)?;
+                        last = h;
+                    } else {
+                        let (h, _) = self.emit_expr(it)?;
+                        last = h;
+                    }
+                }
+                Ok((last, "ptr"))
+            }
             other => Err(format!(
                 "LLVM backend: unsupported expression {:?}",
                 std::mem::discriminant(other)
@@ -2682,6 +2968,20 @@ declare void @bolide_print_dynamic(ptr)
             }
             _ => Ok((v, "i64")),
         }
+    }
+
+    /// Emit a C string constant (`@.str.N`) and return the char* pointer.
+    fn emit_cstr_ptr(&mut self, s: &str) -> String {
+        let id = self.strings.len();
+        self.strings.push(s.to_string());
+        let len = s.len() + 1;
+        let tmp = self.fresh();
+        let _ = writeln!(
+            self.body,
+            "  {} = getelementptr inbounds [{} x i8], ptr @.str.{}, i64 0, i64 0",
+            tmp, len, id
+        );
+        tmp
     }
 
     fn emit_string_lit(&mut self, s: &str) -> Result<(String, &'static str), String> {
@@ -3457,6 +3757,43 @@ declare void @bolide_print_dynamic(ptr)
         op: BinOp,
         r: &Expr,
     ) -> Result<(String, &'static str), String> {
+        // BigInt arithmetic / comparison → runtime bigint ops
+        if matches!(self.infer_kind(l), ValKind::BigInt)
+            || matches!(self.infer_kind(r), ValKind::BigInt)
+        {
+            let (lv, _) = self.emit_expr(l)?;
+            let (rv, _) = self.emit_expr(r)?;
+            let lv = self.cast_to(lv, "ptr", "ptr")?;
+            let rv = self.cast_to(rv, "ptr", "ptr")?;
+            let name = match op {
+                BinOp::Add => "bolide_bigint_add",
+                BinOp::Sub => "bolide_bigint_sub",
+                BinOp::Mul => "bolide_bigint_mul",
+                BinOp::Div => "bolide_bigint_div",
+                BinOp::Mod => "bolide_bigint_rem",
+                BinOp::Eq => "bolide_bigint_eq",
+                BinOp::Ne => "bolide_bigint_ne",
+                BinOp::Lt => "bolide_bigint_lt",
+                BinOp::Le => "bolide_bigint_le",
+                BinOp::Gt => "bolide_bigint_gt",
+                BinOp::Ge => "bolide_bigint_ge",
+                _ => {
+                    return Err("LLVM backend: unsupported bigint binop".into());
+                }
+            };
+            let d = self.fresh();
+            let ret = if matches!(op, BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge) {
+                "i64"
+            } else {
+                "ptr"
+            };
+            let _ = writeln!(
+                self.body,
+                "  {} = call {} @{}(ptr {}, ptr {})",
+                d, ret, name, lv, rv
+            );
+            return Ok((d, ret));
+        }
         // string + string → concat
         if matches!(op, BinOp::Add)
             && matches!(self.infer_kind(l), ValKind::Str)
@@ -3814,6 +4151,14 @@ declare void @bolide_print_dynamic(ptr)
                     let _ = writeln!(
                         self.body,
                         "  {} = call ptr @bolide_dynamic_to_string(ptr {})",
+                        d, v
+                    );
+                    return Ok((d, "ptr"));
+                }
+                if matches!(self.infer_kind(&args[0]), ValKind::BigInt) {
+                    let _ = writeln!(
+                        self.body,
+                        "  {} = call ptr @bolide_string_from_bigint(ptr {})",
                         d, v
                     );
                     return Ok((d, "ptr"));
@@ -4917,7 +5262,13 @@ declare void @bolide_print_dynamic(ptr)
             let v = self.cast_to(v, ty, param_tys[i])?;
             let _ = write!(arg_s, "{} {}", param_tys[i], v);
         }
-        let fname = llvm_func_name(&resolved);
+        // Externs (runtime/native libs) are called by their raw C symbol — never
+        // give them the `bolide_user_` namespace prefix (e.g. `extern fn abs(c_int)`).
+        let fname = if self.extern_names.contains(&resolved) {
+            resolved.clone()
+        } else {
+            llvm_func_name(&resolved)
+        };
         if ret == "void" {
             let _ = writeln!(self.body, "  call void @{}({})", fname, arg_s);
             Ok(("0".into(), "i64"))
@@ -4971,6 +5322,10 @@ declare void @bolide_print_dynamic(ptr)
                 ValKind::Dynamic => {
                     let v = self.cast_to(v, ty, "ptr")?;
                     let _ = writeln!(self.body, "  call void @bolide_print_dynamic(ptr {})", v);
+                }
+                ValKind::BigInt => {
+                    let v = self.cast_to(v, ty, "ptr")?;
+                    let _ = writeln!(self.body, "  call void @bolide_print_bigint(ptr {})", v);
                 }
                 _ => {
                     if ty == "double" {
@@ -5081,6 +5436,7 @@ declare void @bolide_print_dynamic(ptr)
             Expr::String(_) => ValKind::Str,
             Expr::Bool(_) => ValKind::Bool,
             Expr::Int(_) => ValKind::Int,
+            Expr::BigInt(_) => ValKind::BigInt,
             Expr::List(items) => {
                 if items.is_empty() {
                     ValKind::List(0)
@@ -5098,6 +5454,7 @@ declare void @bolide_print_dynamic(ptr)
             }
             Expr::Closure { .. } => ValKind::Closure,
             Expr::Dict(_) => ValKind::Dict,
+            Expr::Tuple(items) => self.infer_kind(&Expr::List(items.clone())),
             Expr::ListComprehension { expr, .. } => match self.infer_kind(expr) {
                 ValKind::Float => ValKind::List(1),
                 ValKind::Bool => ValKind::List(2),
@@ -5403,6 +5760,17 @@ fn kind_of_type(ty: &Option<Type>) -> ValKind {
         },
         Some(Type::Dict(_, _)) => ValKind::Dict,
         Some(Type::Dynamic) => ValKind::Dynamic,
+        Some(Type::Tuple(elems)) => {
+            // tuples are packed as lists in the LLVM backend
+            let tag = match elems.first() {
+                Some(Type::Float) | Some(Type::Decimal) => 1,
+                Some(Type::Bool) => 2,
+                Some(Type::Str) => 3,
+                _ => 0,
+            };
+            ValKind::List(tag)
+        }
+        Some(Type::BigInt) => ValKind::BigInt,
         Some(Type::Custom(n)) | Some(Type::Dyn(n)) => ValKind::Object(n.clone()),
         Some(Type::Adt(n, _)) => ValKind::Adt(n.clone()),
         Some(Type::Func) | Some(Type::FuncSig(_, _)) => ValKind::Closure,
@@ -5424,6 +5792,7 @@ fn kind_to_llvm(k: &ValKind) -> &'static str {
         | ValKind::Closure
         | ValKind::RawFunc
         | ValKind::Dynamic
+        | ValKind::BigInt
         | ValKind::Ptr => "ptr",
         ValKind::Int | ValKind::Bool => "i64",
     }

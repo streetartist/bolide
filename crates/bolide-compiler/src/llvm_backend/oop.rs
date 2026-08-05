@@ -172,6 +172,7 @@ pub fn type_llvm(ty: &Type) -> &'static str {
     match ty {
         Type::Float => "double",
         Type::Str
+        | Type::BigInt
         | Type::Bytes
         | Type::List(_)
         | Type::Dict(_, _)
