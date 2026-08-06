@@ -354,8 +354,7 @@ impl Codegen {
         #[cfg(target_os = "macos")]
         out.push_str("target triple = \"x86_64-apple-darwin\"\n\n");
 
-        out.push_str(
-            r#"declare void @bolide_print_int(i64)
+        let hardcoded = r#"declare void @bolide_print_int(i64)
 declare void @bolide_print_float(double)
 declare void @bolide_print_bool(i64)
 declare void @bolide_print_string(ptr)
@@ -526,95 +525,29 @@ declare i64 @bolide_bigint_le(ptr, ptr)
 declare i64 @bolide_bigint_gt(ptr, ptr)
 declare i64 @bolide_bigint_ge(ptr, ptr)
 
-"#,
-        );
-        // declare any other collected externs not already listed
-        for ext in &self.extern_decls {
-            let known = [
-                "bolide_print_int",
-                "bolide_string_format",
-                "bolide_env_args",
-                "bolide_time_monotonic_ms",
-                "bolide_math_sin",
-                "bolide_math_cos",
-                "bolide_math_sqrt",
-            ];
-            // always emit unique declare lines for all externs (duplicates ok for clang? no)
-            let _ = known;
-        }
+"#;
+        out.push_str(hardcoded);
+        // 从硬编码 declare 块里提取所有符号名，extern_decls 循环跳过它们，
+        // 避免 std 模块 extern 与硬编码 declare 重复定义（clang 拒绝 redefinition）。
+        // 这是系统性修复：不再手工维护会漂移的 skip 列表。
+        let hardcoded_names: std::collections::HashSet<String> = hardcoded
+            .lines()
+            .filter(|l| l.trim_start().starts_with("declare"))
+            .filter_map(|l| {
+                let l = l.trim();
+                let at = l.find('@')?;
+                let rest = &l[at + 1..];
+                let end = rest.find('(')?;
+                Some(rest[..end].to_string())
+            })
+            .collect();
         // emit declare for every extern sig (clang accepts redeclare if identical — skip dups by set)
         let mut seen = std::collections::HashSet::new();
         for ext in &self.extern_decls {
             if !seen.insert(ext.name.clone()) {
                 continue;
             }
-            // skip ones we already hard-coded above (avoid invalid redefinition when
-            // the std module declares them with a slightly different C signature)
-            if [
-                "bolide_string_format",
-                "bolide_string_to_int",
-                "bolide_string_to_float",
-                "bolide_string_from_int",
-                "bolide_string_from_float",
-                "bolide_string_concat",
-                "bolide_string_len",
-                "bolide_string_new",
-                "bolide_env_args",
-                "bolide_time_monotonic_ms",
-                "bolide_time_now_ms",
-                "bolide_time_now",
-                "bolide_math_sqrt",
-                "bolide_math_sin",
-                "bolide_math_cos",
-                "bolide_math_pow",
-                "bolide_math_abs_f64",
-                "bolide_math_floor",
-                "bolide_math_ceil",
-                // hardcoded declares added for direct runtime calls
-                "bolide_bigint_debug_stats",
-                "bolide_bigint_from_i64",
-                "bolide_bigint_from_str",
-                "bolide_decimal_from_i64",
-                "bolide_bytes_new",
-                "bolide_bytes_len",
-                "bolide_bytes_capacity",
-                "bolide_bytes_get",
-                "bolide_bytes_set",
-                "bolide_bytes_push",
-                "bolide_bytes_extend",
-                "bolide_bytes_clone",
-                "bolide_bytes_to_string_lossy",
-                "bolide_tuple_debug_stats",
-                "bolide_channel_create",
-                "bolide_channel_create_buffered",
-                "bolide_channel_send",
-                "bolide_channel_recv",
-                "bolide_channel_close",
-                "bolide_input",
-                "bolide_input_prompt",
-                "bolide_string_as_cstr",
-                "bolide_string_from_bigint",
-                "bolide_string_from_decimal",
-                "bolide_list_clone",
-                "bolide_list_extend",
-                "bolide_list_map",
-                "bolide_list_filter",
-                "bolide_dict_extend",
-                "bolide_math_abs_i64",
-                "bolide_math_round",
-                "bolide_math_trunc",
-                "bolide_math_exp",
-                "bolide_math_ln",
-                "bolide_math_tan",
-                "bolide_math_min_i64",
-                "bolide_math_max_i64",
-                "bolide_math_min_f64",
-                "bolide_math_max_f64",
-                "bolide_math_clamp_i64",
-                "bolide_math_clamp_f64",
-            ]
-            .contains(&ext.name.as_str())
-            {
+            if hardcoded_names.contains(&ext.name) {
                 continue;
             }
             let mut ps = String::new();
