@@ -119,7 +119,10 @@ fn type_suffix_code(ty: &Type) -> char {
         Type::Int | Type::BigInt => 'i',
         Type::Float | Type::Decimal => 'f',
         Type::Bool => 'b',
-        Type::Str | Type::Bytes => 's',
+        Type::Str => 's',
+        // bytes 与 str 必须区分，否则 fnv1a(str)/fnv1a(bytes) 重载名冲突，
+        // 重载解析会选错变体（bytes 被当 str 哈希）
+        Type::Bytes => 'y',
         _ => 'p',
     }
 }

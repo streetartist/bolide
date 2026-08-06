@@ -64,6 +64,8 @@ enum ValKind {
     Dynamic,
     /// a BolideBigInt heap object (ptr)
     BigInt,
+    /// a BolideBytes heap object (ptr) — distinct from Ptr so bytes methods dispatch
+    Bytes,
     Ptr,
 }
 
@@ -134,6 +136,14 @@ struct Codegen {
     current_env_slot: Option<String>,
     /// module-level globals: name → (llvm ty, kind, optional const init expr already lowered)
     global_vars: HashMap<String, (&'static str, ValKind)>,
+    /// parameter names that are `ref` params — their `locals[name]` holds the
+    /// caller's variable ADDRESS (ptr); reads deref, writes store through it.
+    ref_params: HashSet<String>,
+    /// ref param name → LLVM type of the pointed-to value (e.g. `ref x: bigint`
+    /// → "ptr", `ref x: int` → "i64", `ref x: float` → "double").
+    ref_param_val_ty: HashMap<String, &'static str>,
+    /// ref param name → addr slot (the alloca holding the caller's address)
+    ref_param_addr_slot: HashMap<String, String>,
 }
 
 impl Codegen {
@@ -199,6 +209,14 @@ impl Codegen {
             ("bolide_bigint_from_str", vec!["ptr", "i64"], "ptr"),
             ("bolide_decimal_from_i64", vec!["i64"], "ptr"),
             ("bolide_bytes_new", vec![], "ptr"),
+            ("bolide_bytes_len", vec!["ptr"], "i64"),
+            ("bolide_bytes_capacity", vec!["ptr"], "i64"),
+            ("bolide_bytes_get", vec!["ptr", "i64"], "i64"),
+            ("bolide_bytes_set", vec!["ptr", "i64", "i64"], "i64"),
+            ("bolide_bytes_push", vec!["ptr", "i64"], "void"),
+            ("bolide_bytes_extend", vec!["ptr", "ptr"], "void"),
+            ("bolide_bytes_clone", vec!["ptr"], "ptr"),
+            ("bolide_bytes_to_string_lossy", vec!["ptr"], "ptr"),
             ("bolide_tuple_debug_stats", vec![], "void"),
             // Channel
             ("bolide_channel_create", vec![], "ptr"),
@@ -311,6 +329,9 @@ impl Codegen {
             current_captures: HashMap::new(),
             current_env_slot: None,
             global_vars: HashMap::new(),
+            ref_params: HashSet::new(),
+            ref_param_val_ty: HashMap::new(),
+            ref_param_addr_slot: HashMap::new(),
         }
     }
 
@@ -383,7 +404,7 @@ declare i64 @bolide_string_starts_with(ptr, ptr)
 declare i64 @bolide_string_ends_with(ptr, ptr)
 declare i64 @bolide_string_count(ptr, ptr)
 declare ptr @bolide_string_split(ptr, ptr)
-declare ptr @bolide_string_slice(ptr, i64, i64)
+declare ptr @bolide_string_slice(ptr, i64, i64, i64, i64)
 declare i64 @bolide_string_eq(ptr, ptr)
 declare i64 @bolide_string_compare(ptr, ptr)
 declare ptr @object_alloc(i64)
@@ -417,6 +438,14 @@ declare ptr @bolide_bigint_from_i64(i64)
 declare ptr @bolide_bigint_from_str(ptr, i64)
 declare ptr @bolide_decimal_from_i64(i64)
 declare ptr @bolide_bytes_new()
+declare i64 @bolide_bytes_len(ptr)
+declare i64 @bolide_bytes_capacity(ptr)
+declare i64 @bolide_bytes_get(ptr, i64)
+declare i64 @bolide_bytes_set(ptr, i64, i64)
+declare void @bolide_bytes_push(ptr, i64)
+declare void @bolide_bytes_extend(ptr, ptr)
+declare ptr @bolide_bytes_clone(ptr)
+declare ptr @bolide_bytes_to_string_lossy(ptr)
 declare void @bolide_tuple_debug_stats()
 declare ptr @bolide_channel_create()
 declare ptr @bolide_channel_create_buffered(i64)
@@ -532,6 +561,14 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
                 "bolide_bigint_from_str",
                 "bolide_decimal_from_i64",
                 "bolide_bytes_new",
+                "bolide_bytes_len",
+                "bolide_bytes_capacity",
+                "bolide_bytes_get",
+                "bolide_bytes_set",
+                "bolide_bytes_push",
+                "bolide_bytes_extend",
+                "bolide_bytes_clone",
+                "bolide_bytes_to_string_lossy",
                 "bolide_tuple_debug_stats",
                 "bolide_channel_create",
                 "bolide_channel_create_buffered",
@@ -620,7 +657,13 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
                 let params: Vec<&'static str> = f
                     .params
                     .iter()
-                    .map(|p| llvm_type_of(&Some(p.ty.clone())))
+                    .map(|p| {
+                        if p.mode == bolide_parser::ParamMode::Ref {
+                            "ptr"
+                        } else {
+                            llvm_type_of(&Some(p.ty.clone()))
+                        }
+                    })
                     .collect();
                 let ret = llvm_type_of(&f.return_type);
                 self.funcs.insert(f.name.clone(), (params, ret));
@@ -648,7 +691,11 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
                     mparams.push("ptr");
                 }
                 for p in &mdef.params {
-                    mparams.push(llvm_type_of(&Some(p.ty.clone())));
+                    if p.mode == bolide_parser::ParamMode::Ref {
+                        mparams.push("ptr");
+                    } else {
+                        mparams.push(llvm_type_of(&Some(p.ty.clone())));
+                    }
                 }
                 let ret = llvm_type_of(&mdef.return_type);
                 self.funcs.insert(full.clone(), (mparams, ret));
@@ -1589,6 +1636,11 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
         self.mutable.clear();
         self.loop_stack.clear();
         self.catch_stack.clear();
+        // ref 参数表是「当前函数」的局部状态：槽名只在当前函数里有效，
+        // 不清除会让上个函数的 addr 槽泄漏进下个函数（use of undefined value）。
+        self.ref_params.clear();
+        self.ref_param_val_ty.clear();
+        self.ref_param_addr_slot.clear();
         let ret = llvm_type_of(&f.return_type);
         self.current_ret_ty = ret;
         self.current_ret_kind = kind_of_type(&f.return_type);
@@ -1598,7 +1650,12 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
             if i > 0 {
                 params_s.push_str(", ");
             }
-            let ty = llvm_type_of(&Some(p.ty.clone()));
+            // ref 参数：签名上是「指向调用方变量的指针」，被调方原地读写。
+            let ty = if p.mode == bolide_parser::ParamMode::Ref {
+                "ptr"
+            } else {
+                llvm_type_of(&Some(p.ty.clone()))
+            };
             let _ = write!(params_s, "{} %arg_{}", ty, i);
         }
         let fname = llvm_func_name(&f.name);
@@ -1606,6 +1663,27 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
         let _ = writeln!(self.body, "entry:");
 
         for (i, p) in f.params.iter().enumerate() {
+            if p.mode == bolide_parser::ParamMode::Ref {
+                // ref：`%arg_i` 是调用方变量的地址。存进 addr 槽；读/写都经它解引用。
+                let addr_slot = self.fresh_local(&p.name);
+                let _ = writeln!(self.body, "  {} = alloca ptr, align 8", addr_slot);
+                let _ = writeln!(
+                    self.body,
+                    "  store ptr %arg_{}, ptr {}, align 8",
+                    i, addr_slot
+                );
+                self.locals
+                    .insert(p.name.clone(), (addr_slot.clone(), "ptr"));
+                self.local_kind
+                    .insert(p.name.clone(), kind_of_type(&Some(p.ty.clone())));
+                self.mutable.insert(p.name.clone(), true);
+                self.ref_params.insert(p.name.clone());
+                self.ref_param_val_ty
+                    .insert(p.name.clone(), llvm_type_of(&Some(p.ty.clone())));
+                self.ref_param_addr_slot
+                    .insert(p.name.clone(), addr_slot);
+                continue;
+            }
             let ty = llvm_type_of(&Some(p.ty.clone()));
             let mut kind = kind_of_type(&Some(p.ty.clone()));
             // FuncSig/Func params are raw function pointers (bare address) UNLESS
@@ -1802,6 +1880,27 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
     fn emit_assign(&mut self, a: &Assign) -> Result<(), String> {
         match &a.target {
             Expr::Ident(name) => {
+                // ref 参数赋值：经调用方变量的地址原地写回（无局部副本）
+                if self.ref_params.contains(name) {
+                    let addr_slot = self.ref_param_addr_slot.get(name).cloned().unwrap();
+                    let val_ty = self.ref_param_val_ty.get(name).copied().unwrap_or("i64");
+                    let (val, vty) = self.emit_expr(&a.value)?;
+                    let val = self.cast_to(val, vty, val_ty)?;
+                    let addr = self.fresh();
+                    let _ = writeln!(
+                        self.body,
+                        "  {} = load ptr, ptr {}, align 8",
+                        addr, addr_slot
+                    );
+                    let _ = writeln!(
+                        self.body,
+                        "  store {} {}, ptr {}, align 8",
+                        val_ty, val, addr
+                    );
+                    self.local_kind
+                        .insert(name.clone(), self.infer_kind(&a.value));
+                    return Ok(());
+                }
                 if let Some((slot, ty)) = self.locals.get(name).cloned() {
                     if self.mutable.get(name) == Some(&false) {
                         return Err(format!(
@@ -2272,12 +2371,19 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
         args: &[Expr],
         body: &[Statement],
     ) -> Result<(), String> {
-        let (start_e, end_e) = match args.len() {
-            1 => (Expr::Int(0), args[0].clone()),
-            2 => (args[0].clone(), args[1].clone()),
-            _ => return Err("range expects 1 or 2 arguments".into()),
+        let (start_e, end_e, step_e) = match args.len() {
+            1 => (Expr::Int(0), args[0].clone(), Expr::Int(1)),
+            2 => (args[0].clone(), args[1].clone(), Expr::Int(1)),
+            3 => (args[0].clone(), args[1].clone(), args[2].clone()),
+            _ => return Err("range expects 1, 2, or 3 arguments".into()),
         };
-        // var i = start; while i < end { body; i = i + 1 }
+        // 常量步长为 0 → 死循环，编译期拒绝（与 JIT 一致）
+        if let Expr::Int(0) = &step_e {
+            return Err("range() step cannot be 0".into());
+        }
+        // 步长符号只在编译期常量时确定（对齐 JIT is_negative_step）；非零负数 → 降序
+        let is_neg = matches!(&step_e, Expr::Int(n) if *n < 0);
+        // var i = start; while (i < end | i > end) { body; i = i + step }
         // Whole loop-body scope is snapshot/restored (JIT enter_scope/leave_scope):
         // the loop var + any `let` inside the body don't leak out of the loop.
         let saved = self.snapshot_scopes();
@@ -2297,6 +2403,12 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
         let _ = writeln!(self.body, "  {} = alloca i64, align 8", end_slot);
         let _ = writeln!(self.body, "  store i64 {}, ptr {}, align 8", endv, end_slot);
 
+        let (stepv, stty) = self.emit_expr(&step_e)?;
+        let stepv = self.cast_to(stepv, stty, "i64")?;
+        let step_slot = self.fresh_local("__range_step");
+        let _ = writeln!(self.body, "  {} = alloca i64, align 8", step_slot);
+        let _ = writeln!(self.body, "  store i64 {}, ptr {}, align 8", stepv, step_slot);
+
         let head = self.fresh_label("for");
         let body_l = self.fresh_label("for_body");
         let cont = self.fresh_label("for_cont");
@@ -2310,7 +2422,13 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
         let ev = self.fresh();
         let _ = writeln!(self.body, "  {} = load i64, ptr {}, align 8", ev, end_slot);
         let cmp = self.fresh();
-        let _ = writeln!(self.body, "  {} = icmp slt i64 {}, {}", cmp, iv, ev);
+        if is_neg {
+            // 负步长：i > end
+            let _ = writeln!(self.body, "  {} = icmp sgt i64 {}, {}", cmp, iv, ev);
+        } else {
+            // 正步长：i < end
+            let _ = writeln!(self.body, "  {} = icmp slt i64 {}, {}", cmp, iv, ev);
+        }
         let _ = writeln!(
             self.body,
             "  br i1 {}, label %{}, label %{}",
@@ -2330,8 +2448,14 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
         let _ = writeln!(self.body, "{}:", cont);
         let iv2 = self.fresh();
         let _ = writeln!(self.body, "  {} = load i64, ptr {}, align 8", iv2, slot);
+        let st2 = self.fresh();
+        let _ = writeln!(
+            self.body,
+            "  {} = load i64, ptr {}, align 8",
+            st2, step_slot
+        );
         let iv3 = self.fresh();
-        let _ = writeln!(self.body, "  {} = add i64 {}, 1", iv3, iv2);
+        let _ = writeln!(self.body, "  {} = add i64 {}, {}", iv3, iv2, st2);
         let _ = writeln!(self.body, "  store i64 {}, ptr {}, align 8", iv3, slot);
         let _ = writeln!(self.body, "  br label %{}", head);
         let _ = writeln!(self.body, "{}:", end_l);
@@ -2429,6 +2553,24 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
             Expr::Bool(b) => Ok((if *b { "1".into() } else { "0".into() }, "i64")),
             Expr::String(s) => self.emit_string_lit(s),
             Expr::Ident(name) => {
+                // ref 参数：locals[name] 存的是调用方变量的地址（ptr 槽），先取地址再解引用取值
+                if self.ref_params.contains(name) {
+                    let addr_slot = self.ref_param_addr_slot.get(name).cloned().unwrap();
+                    let val_ty = self.ref_param_val_ty.get(name).copied().unwrap_or("i64");
+                    let addr = self.fresh();
+                    let _ = writeln!(
+                        self.body,
+                        "  {} = load ptr, ptr {}, align 8",
+                        addr, addr_slot
+                    );
+                    let val = self.fresh();
+                    let _ = writeln!(
+                        self.body,
+                        "  {} = load {}, ptr {}, align 8",
+                        val, val_ty, addr
+                    );
+                    return Ok((val, val_ty));
+                }
                 if let Some((slot, ty)) = self.locals.get(name).cloned() {
                     let r = self.fresh();
                     let _ = writeln!(self.body, "  {} = load {}, ptr {}, align 8", r, ty, slot);
@@ -3132,6 +3274,16 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
             );
             return Ok((d, "ptr"));
         }
+        if matches!(base_kind, ValKind::Bytes) {
+            let ix = self.cast_to(ix, ixty, "i64")?;
+            let d = self.fresh();
+            let _ = writeln!(
+                self.body,
+                "  {} = call i64 @bolide_bytes_get(ptr {}, i64 {})",
+                d, base_v, ix
+            );
+            return Ok((d, "i64"));
+        }
         let ix = self.cast_to(ix, ixty, "i64")?;
         let tag = match base_kind {
             ValKind::List(t) => t,
@@ -3417,6 +3569,8 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
         self.catch_stack.push(catch_l.clone());
         let _ = writeln!(self.body, "  br label %{}", try_l);
         let _ = writeln!(self.body, "{}:", try_l);
+        // try 块是独立作用域：块内 `let` 遮蔽不得泄漏到 catch/finally/之后
+        let saved_try = self.snapshot_scopes();
         let mut try_term = false;
         for s in &t.try_body {
             if try_term {
@@ -3424,14 +3578,16 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
             }
             try_term = self.emit_stmt(s)?;
         }
+        self.restore_scopes(saved_try);
         if !try_term {
             let _ = writeln!(self.body, "  br label %{}", end_l);
         }
         self.catch_stack.pop();
 
         let _ = writeln!(self.body, "{}:", catch_l);
-        // bind first catch clause variable
+        // bind first catch clause variable (catch 也是独立作用域)
         if let Some(cc) = t.catch_clauses.first() {
+            let saved_catch = self.snapshot_scopes();
             let ex = self.fresh();
             let _ = writeln!(self.body, "  {} = call ptr @bolide_exception_get()", ex);
             let slot = self.fresh_local(&cc.var);
@@ -3448,6 +3604,7 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
                 }
                 term = self.emit_stmt(s)?;
             }
+            self.restore_scopes(saved_catch);
             if !term {
                 let _ = writeln!(self.body, "  br label %{}", end_l);
             }
@@ -3461,9 +3618,11 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
             // re-route end to finally first — patch by inserting finally before end
             let _ = writeln!(self.body, "  br label %{}", fin_l);
             let _ = writeln!(self.body, "{}:", fin_l);
+            let saved_fin = self.snapshot_scopes();
             for s in fin {
                 let _ = self.emit_stmt(s)?;
             }
+            self.restore_scopes(saved_fin);
             let _ = writeln!(self.body, "  br label %{}", end_l);
         }
 
@@ -4101,11 +4260,58 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
         out
     }
 
+    /// Compute, per raw call arg, the parameter index it targets (named args by
+    /// name, positional args in order). Keeps SOURCE order so the callee
+    /// evaluates args in source order while binding each to the right parameter.
+    /// Mirrors the Cranelift backend's `normalize_args_for_params`.
+    fn arg_target_indices(
+        params: &[Param],
+        raw_args: &[Expr],
+        call_name: &str,
+    ) -> Result<Vec<usize>, String> {
+        let mut used = vec![false; params.len()];
+        let mut next_pos = 0usize;
+        let mut out = Vec::with_capacity(raw_args.len());
+        for a in raw_args {
+            match a {
+                Expr::NamedArg(name, _) => {
+                    let i = params
+                        .iter()
+                        .position(|p| !p.is_variadic && !p.is_kw_variadic && p.name == *name)
+                        .ok_or_else(|| {
+                            format!("{} has no parameter named '{}'", call_name, name)
+                        })?;
+                    if used[i] {
+                        return Err(format!(
+                            "{} got multiple values for argument '{}'",
+                            call_name, name
+                        ));
+                    }
+                    used[i] = true;
+                    out.push(i);
+                }
+                _ => {
+                    while next_pos < params.len() && used[next_pos] {
+                        next_pos += 1;
+                    }
+                    let i = next_pos.min(params.len());
+                    if i < params.len() {
+                        used[i] = true;
+                        next_pos += 1;
+                    }
+                    out.push(i);
+                }
+            }
+        }
+        Ok(out)
+    }
+
     fn emit_call(
         &mut self,
         callee: &Expr,
         args: &[Expr],
     ) -> Result<(String, &'static str), String> {
+        let raw_args = args.to_vec();
         let args = Self::flatten_args(args);
         let args = args.as_slice();
         if let Expr::Ident(name) = callee {
@@ -4306,18 +4512,18 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
             }
             // Class constructor
             if self.classes.contains_key(name) {
-                return self.emit_named_call(name, args);
+                return self.emit_named_call(name, &raw_args);
             }
             // free function
             if self.funcs.contains_key(name) {
-                return self.emit_named_call(name, args);
+                return self.emit_named_call(name, &raw_args);
             }
             // maybe closure in local under different path
             if self.locals.contains_key(name) {
                 let (clo, _) = self.emit_expr(callee)?;
                 return self.emit_closure_call(&clo, args, "i64");
             }
-            return self.emit_named_call(name, args);
+            return self.emit_named_call(name, &raw_args);
         }
         // obj.method(args) or Enum.Variant(args) or module.fn(args)
         if let Expr::Member(base, method) = callee {
@@ -4333,11 +4539,11 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
                     ];
                     for fname in &candidates {
                         if self.funcs.contains_key(fname) {
-                            return self.emit_named_call(fname, args);
+                            return self.emit_named_call(fname, &raw_args);
                         }
                     }
                     // still try primary mangled name for better error
-                    return self.emit_named_call(&candidates[0], args);
+                    return self.emit_named_call(&candidates[0], &raw_args);
                 }
             }
             return self.emit_method_call(base, method, args);
@@ -4611,9 +4817,10 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
                     let a = self.cast_to(a, at, "i64")?;
                     let b = self.cast_to(b, bt, "i64")?;
                     let d = self.fresh();
+                    // 运行时签名 (ptr, start, end, step, flags)；step=1, flags=both
                     let _ = writeln!(
                         self.body,
-                        "  {} = call ptr @bolide_string_slice(ptr {}, i64 {}, i64 {})",
+                        "  {} = call ptr @bolide_string_slice(ptr {}, i64 {}, i64 {}, i64 1, i64 3)",
                         d, obj, a, b
                     );
                     return Ok((d, "ptr"));
@@ -4640,6 +4847,100 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
                     return Ok((d, "i64"));
                 }
                 _ => {}
+            }
+        }
+        // Bytes methods (dispatch before generic ptr/list fallback)
+        if matches!(base_kind, ValKind::Bytes) {
+            match method {
+                "len" | "length" | "size" => {
+                    if !args.is_empty() {
+                        return Err(format!("bytes.{} expects 0 arguments", method));
+                    }
+                    let d = self.fresh();
+                    let _ = writeln!(
+                        self.body,
+                        "  {} = call i64 @bolide_bytes_len(ptr {})",
+                        d, obj
+                    );
+                    return Ok((d, "i64"));
+                }
+                "capacity" => {
+                    let d = self.fresh();
+                    let _ = writeln!(
+                        self.body,
+                        "  {} = call i64 @bolide_bytes_capacity(ptr {})",
+                        d, obj
+                    );
+                    return Ok((d, "i64"));
+                }
+                "get" if args.len() == 1 => {
+                    let (ix, ixty) = self.emit_expr(&args[0])?;
+                    let ix = self.cast_to(ix, ixty, "i64")?;
+                    let d = self.fresh();
+                    let _ = writeln!(
+                        self.body,
+                        "  {} = call i64 @bolide_bytes_get(ptr {}, i64 {})",
+                        d, obj, ix
+                    );
+                    return Ok((d, "i64"));
+                }
+                "set" if args.len() == 2 => {
+                    let (ix, ixty) = self.emit_expr(&args[0])?;
+                    let (v, vty) = self.emit_expr(&args[1])?;
+                    let ix = self.cast_to(ix, ixty, "i64")?;
+                    let v = self.cast_to(v, vty, "i64")?;
+                    let d = self.fresh();
+                    let _ = writeln!(
+                        self.body,
+                        "  {} = call i64 @bolide_bytes_set(ptr {}, i64 {}, i64 {})",
+                        d, obj, ix, v
+                    );
+                    return Ok((d, "i64"));
+                }
+                "push" | "append" if args.len() == 1 => {
+                    let (v, vty) = self.emit_expr(&args[0])?;
+                    let v = self.cast_to(v, vty, "i64")?;
+                    let _ = writeln!(
+                        self.body,
+                        "  call void @bolide_bytes_push(ptr {}, i64 {})",
+                        obj, v
+                    );
+                    return Ok(("0".into(), "i64"));
+                }
+                "extend" if args.len() == 1 => {
+                    let (o, oty) = self.emit_expr(&args[0])?;
+                    let o = self.cast_to(o, oty, "ptr")?;
+                    let _ = writeln!(
+                        self.body,
+                        "  call void @bolide_bytes_extend(ptr {}, ptr {})",
+                        obj, o
+                    );
+                    return Ok(("0".into(), "i64"));
+                }
+                "copy" | "clone" => {
+                    let d = self.fresh();
+                    let _ = writeln!(
+                        self.body,
+                        "  {} = call ptr @bolide_bytes_clone(ptr {})",
+                        d, obj
+                    );
+                    return Ok((d, "ptr"));
+                }
+                "to_string_lossy" | "to_string" => {
+                    let d = self.fresh();
+                    let _ = writeln!(
+                        self.body,
+                        "  {} = call ptr @bolide_bytes_to_string_lossy(ptr {})",
+                        d, obj
+                    );
+                    return Ok((d, "ptr"));
+                }
+                _ => {
+                    return Err(format!(
+                        "LLVM backend: unknown Bytes method '{}'",
+                        method
+                    ))
+                }
             }
         }
         // Dict methods first (avoid list-layout loads on dict ptrs)
@@ -5184,31 +5485,38 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
                 name
             )
         })?;
-        if args.len() != param_tys.len() {
+        // 命名参数：算出每个实参的目标参数位（保持源码求值顺序，绑定到正确参数位）
+        let (flat_args, target_indices) = if let Some(params) = self.func_params.get(&resolved) {
+            let indices = Self::arg_target_indices(params, args, &resolved)?;
+            (Self::flatten_args(args), indices)
+        } else {
+            (Self::flatten_args(args), (0..args.len()).collect())
+        };
+        if flat_args.len() != param_tys.len() {
             return Err(format!(
                 "function '{}' expects {} args, got {}",
                 resolved,
                 param_tys.len(),
-                args.len()
+                flat_args.len()
             ));
         }
-        let mut arg_s = String::new();
+        // 每个参数位预先算好的调用参数字符串（"i64 %v" / "ptr @g"）；按源码顺序求值填入，
+        // 最后按参数顺序拼装 call。这样命名参数既绑定正确，又保持源码求值顺序。
+        let mut prepared: Vec<Option<String>> = vec![None; param_tys.len()];
         let funcptr_flags = self.extern_funcptr.get(&resolved).cloned();
-        for (i, a) in args.iter().enumerate() {
-            if i > 0 {
-                arg_s.push_str(", ");
-            }
+        for (src_idx, a) in flat_args.iter().enumerate() {
+            let ti = target_indices[src_idx];
             // func(...) callback param on an extern: the runtime invokes it as a raw
             // `extern "C" fn(...)`, so a bare function name must be passed as its
             // address — NOT wrapped into a closure object (which the runtime would
             // call as a bare pointer and crash, e.g. gui.run(root), web handlers).
-            if funcptr_flags.as_ref().map(|f| f.get(i)).flatten() == Some(&true) {
+            if funcptr_flags.as_ref().map(|f| f.get(ti)).flatten() == Some(&true) {
                 if let Expr::Ident(fname) = a {
                     // only bare top-level functions have a stable symbol; local
                     // closures fall through to the closure-object path
                     if self.funcs.contains_key(fname) && !self.locals.contains_key(fname) {
                         let link = llvm_func_name(fname);
-                        let _ = write!(arg_s, "ptr @{}", link);
+                        prepared[ti] = Some(format!("ptr @{}", link));
                         continue;
                     }
                 }
@@ -5220,7 +5528,7 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
                 // every route dispatch to the same closure).
                 let (v, ty) = self.emit_expr(a)?;
                 let v = self.cast_to(v, ty, "ptr")?;
-                let _ = write!(arg_s, "ptr {}", v);
+                prepared[ti] = Some(format!("ptr {}", v));
                 continue;
             }
             // raw FuncSig param (bare function pointer, not closure-expecting):
@@ -5229,22 +5537,60 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
             let is_raw_funcsig = self
                 .func_params
                 .get(&resolved)
-                .and_then(|params| params.get(i))
+                .and_then(|params| params.get(ti))
                 .map(|p| matches!(p.ty, Type::Func | Type::FuncSig(_, _)))
                 .unwrap_or(false)
                 && !self
                     .funcsig_closure_params
                     .get(&resolved)
-                    .map(|s| s.contains(&i))
+                    .map(|s| s.contains(&ti))
                     .unwrap_or(false);
             if is_raw_funcsig {
                 if let Expr::Ident(fname) = a {
                     if self.funcs.contains_key(fname) && !self.locals.contains_key(fname) {
                         let link = llvm_func_name(fname);
-                        let _ = write!(arg_s, "ptr @{}", link);
+                        prepared[ti] = Some(format!("ptr @{}", link));
                         continue;
                     }
                 }
+            }
+            // ref 参数：传递调用方变量的地址（局部 alloca 槽 / 全局符号 / 上层 ref 地址），
+            // 被调方经指针原地读写，返回即写回。
+            let param_is_ref = self
+                .func_params
+                .get(&resolved)
+                .and_then(|params| params.get(ti))
+                .map(|p| p.mode == bolide_parser::ParamMode::Ref)
+                .unwrap_or(false);
+            if param_is_ref {
+                if let Expr::Ident(vname) = a {
+                    if self.ref_params.contains(vname) {
+                        // 转发 ref 参数：取出其持有的地址
+                        let addr_slot = self.ref_param_addr_slot.get(vname).cloned().unwrap();
+                        let addr = self.fresh();
+                        let _ = writeln!(
+                            self.body,
+                            "  {} = load ptr, ptr {}, align 8",
+                            addr, addr_slot
+                        );
+                        prepared[ti] = Some(format!("ptr {}", addr));
+                        continue;
+                    }
+                    if let Some((slot, _)) = self.locals.get(vname).cloned() {
+                        // 局部变量：alloca 的地址就是指针
+                        prepared[ti] = Some(format!("ptr {}", slot));
+                        continue;
+                    }
+                    if self.global_vars.contains_key(vname) {
+                        let g = llvm_func_name(vname);
+                        prepared[ti] = Some(format!("ptr @{}", g));
+                        continue;
+                    }
+                }
+                return Err(format!(
+                    "ref parameter must be a variable, got {:?}",
+                    a
+                ));
             }
             let (v, ty) = self.emit_expr(a)?;
             // `*dynamic` param: wrap the arg into a BolideDynamic. Pick the wrapper
@@ -5254,16 +5600,16 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
             if self
                 .extern_dynamic
                 .get(&resolved)
-                .map(|flags| flags.get(i) == Some(&true))
+                .map(|flags| flags.get(ti) == Some(&true))
                 .unwrap_or(false)
             {
                 let k = self.infer_kind(a);
                 if matches!(k, ValKind::Dynamic) {
                     let v = self.cast_to(v, ty, "ptr")?;
-                    let _ = write!(arg_s, "ptr {}", v);
+                    prepared[ti] = Some(format!("ptr {}", v));
                 } else {
                     let dyn_ = self.wrap_as_dynamic(v, ty, &k)?;
-                    let _ = write!(arg_s, "ptr {}", dyn_);
+                    prepared[ti] = Some(format!("ptr {}", dyn_));
                 }
                 continue;
             }
@@ -5273,17 +5619,17 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
             let param_is_dynamic = self
                 .func_params
                 .get(&resolved)
-                .and_then(|params| params.get(i))
+                .and_then(|params| params.get(ti))
                 .map(|p| matches!(p.ty, Type::Dynamic))
                 .unwrap_or(false);
             if param_is_dynamic {
                 let k = self.infer_kind(a);
                 if matches!(k, ValKind::Dynamic) {
                     let v = self.cast_to(v, ty, "ptr")?;
-                    let _ = write!(arg_s, "ptr {}", v);
+                    prepared[ti] = Some(format!("ptr {}", v));
                 } else {
                     let dyn_ = self.wrap_as_dynamic(v, ty, &k)?;
-                    let _ = write!(arg_s, "ptr {}", dyn_);
+                    prepared[ti] = Some(format!("ptr {}", dyn_));
                 }
                 continue;
             }
@@ -5291,7 +5637,7 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
             if self
                 .extern_cstr
                 .get(&resolved)
-                .map(|flags| flags.get(i) == Some(&true))
+                .map(|flags| flags.get(ti) == Some(&true))
                 .unwrap_or(false)
             {
                 let v = self.cast_to(v, ty, "ptr")?;
@@ -5301,11 +5647,19 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
                     "  {} = call ptr @bolide_string_as_cstr(ptr {})",
                     d, v
                 );
-                let _ = write!(arg_s, "ptr {}", d);
+                prepared[ti] = Some(format!("ptr {}", d));
                 continue;
             }
-            let v = self.cast_to(v, ty, param_tys[i])?;
-            let _ = write!(arg_s, "{} {}", param_tys[i], v);
+            let v = self.cast_to(v, ty, param_tys[ti])?;
+            prepared[ti] = Some(format!("{} {}", param_tys[ti], v));
+        }
+        // 按参数顺序拼装调用参数（跳过未填充的槽）
+        let mut arg_s = String::new();
+        for slot in prepared.iter().flatten() {
+            if !arg_s.is_empty() {
+                arg_s.push_str(", ");
+            }
+            arg_s.push_str(slot);
         }
         // Externs (runtime/native libs) are called by their raw C symbol — never
         // give them the `bolide_user_` namespace prefix (e.g. `extern fn abs(c_int)`).
@@ -5439,7 +5793,14 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
         let arg_kinds: Vec<ValKind> = args.iter().map(|a| self.infer_kind(a)).collect();
         let mut best: Option<(usize, &String)> = None;
         for cand in candidates {
-            let Some((params, _ret)) = self.funcs.get(cand) else {
+            // 用实际 Bolide 参数类型评分（LLVM 类型都是 ptr/i64，str 与 bytes 无法区分）
+            let Some(params) = self.func_params.get(cand).cloned() else {
+                // 没有元数据：退化为按 LLVM 参数类型个数匹配
+                if let Some((ptys, _)) = self.funcs.get(cand) {
+                    if ptys.len() == arg_kinds.len() {
+                        best.get_or_insert((0, cand));
+                    }
+                }
                 continue;
             };
             if params.len() != arg_kinds.len() {
@@ -5448,31 +5809,33 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
             let score = params
                 .iter()
                 .zip(arg_kinds.iter())
-                .filter(|(p, k)| {
-                    matches!(
-                        (**p, k),
-                        ("double", ValKind::Float)
-                            | ("i64", ValKind::Int)
-                            | ("i64", ValKind::Bool)
-                            | (
-                                "ptr",
-                                ValKind::Str
-                                    | ValKind::Object(_)
-                                    | ValKind::Adt(_)
-                                    | ValKind::Dict
-                                    | ValKind::Closure
-                                    | ValKind::Ptr
-                                    | ValKind::List(_)
-                                    | ValKind::ListObj(_)
-                            )
-                    )
-                })
+                .filter(|(p, k)| Self::param_matches_kind(&p.ty, k))
                 .count();
             if best.map(|(s, _)| score > s).unwrap_or(true) {
                 best = Some((score, cand));
             }
         }
         best.map(|(_, name)| name.clone())
+    }
+
+    /// 判断实参 ValKind 是否与形参 Bolide Type 匹配（重载解析用）。
+    fn param_matches_kind(ty: &Type, k: &ValKind) -> bool {
+        match (ty, k) {
+            (Type::Int, ValKind::Int) | (Type::BigInt, ValKind::BigInt) => true,
+            (Type::Float, ValKind::Float) | (Type::Decimal, ValKind::Float) => true,
+            (Type::Bool, ValKind::Bool) => true,
+            (Type::Str, ValKind::Str) => true,
+            (Type::Bytes, ValKind::Bytes) => true,
+            (Type::Custom(n), ValKind::Object(on)) => n == on,
+            (Type::List(_), ValKind::List(_) | ValKind::ListObj(_) | ValKind::NestedList(_)) => true,
+            (Type::Dict(_, _), ValKind::Dict) => true,
+            (Type::Dynamic, ValKind::Dynamic) => true,
+            // 指针型形参接受任何对象/容器/闭包
+            (Type::Str, ValKind::Object(_))
+            | (Type::Bytes, ValKind::Object(_))
+            | (Type::Ptr, _) => true,
+            _ => false,
+        }
     }
 
     fn infer_kind(&self, expr: &Expr) -> ValKind {
@@ -5581,8 +5944,11 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
                     if n == "int" {
                         return ValKind::Int;
                     }
-                    if n == "channel" || n == "bytes" {
+                    if n == "channel" {
                         return ValKind::Ptr;
+                    }
+                    if n == "bytes" {
+                        return ValKind::Bytes;
                     }
                     if n == "bolide_env_args" {
                         return ValKind::List(3);
@@ -5774,7 +6140,7 @@ fn kind_of_type(ty: &Option<Type>) -> ValKind {
         Some(Type::Custom(n)) | Some(Type::Dyn(n)) => ValKind::Object(n.clone()),
         Some(Type::Adt(n, _)) => ValKind::Adt(n.clone()),
         Some(Type::Func) | Some(Type::FuncSig(_, _)) => ValKind::Closure,
-        Some(Type::Bytes) => ValKind::Ptr,
+        Some(Type::Bytes) => ValKind::Bytes,
         _ => ValKind::Int,
     }
 }
@@ -5793,6 +6159,7 @@ fn kind_to_llvm(k: &ValKind) -> &'static str {
         | ValKind::RawFunc
         | ValKind::Dynamic
         | ValKind::BigInt
+        | ValKind::Bytes
         | ValKind::Ptr => "ptr",
         ValKind::Int | ValKind::Bool => "i64",
     }
