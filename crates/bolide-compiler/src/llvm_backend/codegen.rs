@@ -144,6 +144,8 @@ struct Codegen {
     ref_param_val_ty: HashMap<String, &'static str>,
     /// ref param name → addr slot (the alloca holding the caller's address)
     ref_param_addr_slot: HashMap<String, String>,
+    /// names of `async fn` — calls route to coroutine spawn (not direct call)
+    async_funcs: HashSet<String>,
 }
 
 impl Codegen {
@@ -285,6 +287,12 @@ impl Codegen {
             ("bolide_coroutine_await_int", vec!["ptr"], "i64"),
             ("bolide_coroutine_await_float", vec!["ptr"], "double"),
             ("bolide_coroutine_await_ptr", vec!["ptr"], "ptr"),
+            ("bolide_coroutine_spawn_int", vec!["ptr"], "ptr"),
+            ("bolide_coroutine_spawn_float", vec!["ptr"], "ptr"),
+            ("bolide_coroutine_spawn_ptr", vec!["ptr"], "ptr"),
+            ("bolide_coroutine_spawn_int_with_env", vec!["ptr", "ptr"], "ptr"),
+            ("bolide_coroutine_spawn_float_with_env", vec!["ptr", "ptr"], "ptr"),
+            ("bolide_coroutine_spawn_ptr_with_env", vec!["ptr", "ptr"], "ptr"),
             ("bolide_thread_join_int", vec!["ptr"], "i64"),
             ("bolide_thread_join_float", vec!["ptr"], "double"),
             ("bolide_thread_join_ptr", vec!["ptr"], "ptr"),
@@ -332,6 +340,7 @@ impl Codegen {
             ref_params: HashSet::new(),
             ref_param_val_ty: HashMap::new(),
             ref_param_addr_slot: HashMap::new(),
+            async_funcs: HashSet::new(),
         }
     }
 
@@ -494,6 +503,12 @@ declare ptr @bolide_thread_spawn_ptr_with_env(ptr, ptr)
 declare i64 @bolide_coroutine_await_int(ptr)
 declare double @bolide_coroutine_await_float(ptr)
 declare ptr @bolide_coroutine_await_ptr(ptr)
+declare ptr @bolide_coroutine_spawn_int(ptr)
+declare ptr @bolide_coroutine_spawn_float(ptr)
+declare ptr @bolide_coroutine_spawn_ptr(ptr)
+declare ptr @bolide_coroutine_spawn_int_with_env(ptr, ptr)
+declare ptr @bolide_coroutine_spawn_float_with_env(ptr, ptr)
+declare ptr @bolide_coroutine_spawn_ptr_with_env(ptr, ptr)
 declare i64 @bolide_thread_join_int(ptr)
 declare double @bolide_thread_join_float(ptr)
 declare ptr @bolide_thread_join_ptr(ptr)
@@ -669,6 +684,9 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
                 self.funcs.insert(f.name.clone(), (params, ret));
                 self.func_ret_kind
                     .insert(f.name.clone(), kind_of_type(&f.return_type));
+                if f.is_async {
+                    self.async_funcs.insert(f.name.clone());
+                }
             }
         }
 
@@ -1376,6 +1394,123 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
         let _ = writeln!(
             self.body,
             "  {} = call ptr @bolide_thread_spawn_{}_with_env(ptr @{}, ptr {})",
+            d, suffix, tname, env
+        );
+        Ok((d, "ptr"))
+    }
+
+    /// `async_fn(args)` → 协程 spawn，返回 Future 指针（供 await 等待）。
+    /// 与 emit_spawn 结构相同，但用 `bolide_coroutine_spawn_*` 而非线程 spawn。
+    fn emit_coroutine_spawn(
+        &mut self,
+        name: &str,
+        args: &[Expr],
+    ) -> Result<(String, &'static str), String> {
+        let (_, ret) = self.funcs.get(name).cloned().ok_or_else(|| {
+            format!("LLVM backend: cannot spawn unknown async function '{}'", name)
+        })?;
+        let suffix = match ret {
+            "double" => "float",
+            "ptr" => "ptr",
+            _ => "int",
+        };
+        let cal = llvm_func_name(name);
+
+        if args.is_empty() {
+            let d = self.fresh();
+            let _ = writeln!(
+                self.body,
+                "  {} = call ptr @bolide_coroutine_spawn_{}(ptr @{})",
+                d, suffix, cal
+            );
+            return Ok((d, "ptr"));
+        }
+
+        // 有参数：env 缓冲区 + 裸 trampoline `__coro_tramp_N(env)` 解包参数调用目标
+        let n = self.tmp;
+        self.tmp += 1;
+        let tname = format!("__coro_tramp_{}", n);
+        let size = args.len() * 8;
+        let env = self.fresh();
+        let _ = writeln!(self.body, "  {} = call ptr @bolide_alloc(i64 {})", env, size);
+        let params = self.func_params.get(name).cloned().unwrap_or_default();
+        for (i, a) in args.iter().enumerate() {
+            let (v, ty) = self.emit_expr(a)?;
+            let arg_ty = params
+                .get(i)
+                .map(|p| llvm_type_of(&Some(p.ty.clone())))
+                .unwrap_or("i64");
+            let packed = match arg_ty {
+                "double" => {
+                    let v = self.cast_to(v, ty, "double")?;
+                    let b = self.fresh();
+                    let _ = writeln!(self.body, "  {} = bitcast double {} to i64", b, v);
+                    b
+                }
+                "ptr" => self.cast_to(v, ty, "i64")?,
+                _ => self.cast_to(v, ty, "i64")?,
+            };
+            let gep = self.fresh();
+            let _ = writeln!(
+                self.body,
+                "  {} = getelementptr i8, ptr {}, i64 {}",
+                gep, env, i * 8
+            );
+            let _ = writeln!(self.body, "  store i64 {}, ptr {}, align 8", packed, gep);
+        }
+
+        // trampoline: define <ret> @__coro_tramp_N(ptr %env)
+        let mut def = String::new();
+        let _ = writeln!(def, "define {} @{}(ptr %env) {{", ret, tname);
+        let _ = writeln!(def, "entry:");
+        let mut arg_s = String::new();
+        for (i, a) in args.iter().enumerate() {
+            let arg_ty = params
+                .get(i)
+                .map(|p| llvm_type_of(&Some(p.ty.clone())))
+                .unwrap_or("i64");
+            if i > 0 {
+                arg_s.push_str(", ");
+            }
+            let gep = self.fresh();
+            let _ = writeln!(
+                def,
+                "  {} = getelementptr i8, ptr %env, i64 {}",
+                gep, i * 8
+            );
+            let raw = self.fresh();
+            let _ = writeln!(def, "  {} = load i64, ptr {}, align 8", raw, gep);
+            let _ = a;
+            let v = match arg_ty {
+                "double" => {
+                    let d2 = self.fresh();
+                    let _ = writeln!(def, "  {} = bitcast i64 {} to double", d2, raw);
+                    d2
+                }
+                "ptr" => {
+                    let d2 = self.fresh();
+                    let _ = writeln!(def, "  {} = inttoptr i64 {} to ptr", d2, raw);
+                    d2
+                }
+                _ => raw,
+            };
+            let _ = write!(arg_s, "{} {}", arg_ty, v);
+        }
+        if ret == "void" {
+            let _ = writeln!(def, "  call void @{}({})", cal, arg_s);
+            let _ = writeln!(def, "  ret void");
+        } else {
+            let r = self.fresh();
+            let _ = writeln!(def, "  {} = call {} @{}({})", r, ret, cal, arg_s);
+            let _ = writeln!(def, "  ret {} {}", ret, r);
+        }
+        let _ = writeln!(def, "}}\n");
+        self.trampoline_ir.push_str(&def);
+
+        let d = self.fresh();
+        let _ = writeln!(
+            self.body,
+            "  {} = call ptr @bolide_coroutine_spawn_{}_with_env(ptr @{}, ptr {})",
             d, suffix, tname, env
         );
         Ok((d, "ptr"))
@@ -4509,6 +4644,10 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
                     d, v
                 );
                 return Ok((d, "ptr"));
+            }
+            // async 函数调用 → 协程 spawn（返回 Future 指针，供 await）
+            if self.async_funcs.contains(name) {
+                return self.emit_coroutine_spawn(name, &raw_args);
             }
             // Class constructor
             if self.classes.contains_key(name) {
