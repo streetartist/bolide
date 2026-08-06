@@ -1,0 +1,166 @@
+===================================
+tests (LLVM vs JIT): PASS=123 FAIL=163 / 286
+-----------------------------------
+[COMPILE ] channel_test.bl  C:\Users\wenji\AppData\Local\Temp\bolide_llvm_31408.ll:439:44: error: '%t64' defined with type 'i64' but expected 'ptr'
+[COMPILE ] fib_calculator.bl  Error: bolide::compile
+[COMPILE ] hello.bl  Error: bolide::compile
+[COMPILE ] repro_gui_dashboard_save.bl  Error: bolide::compile
+[COMPILE ] repro_leak_aot.bl  Error: bolide::compile
+[COMPILE ] repro_list_concat_nested.bl  C:\Users\wenji\AppData\Local\Temp\bolide_llvm_29252.ll:489:24: error: '%t101' defined with type 'ptr' but expected 'i64'
+[COMPILE ] test_assign.bl  Error: bolide::compile
+[COMPILE ] test_await_infer.bl  C:\Users\wenji\AppData\Local\Temp\bolide_llvm_37124.ll:495:41: error: '%t76' defined with type 'i64' but expected 'ptr'
+[COMPILE ] test_borrow_checks_ok.bl  Error: bolide::compile
+[COMPILE ] test_builtin_bool_returns.bl  C:\Users\wenji\AppData\Local\Temp\bolide_llvm_25420.ll:685:45: error: '%t238' defined with type 'i64' but expected 'ptr'
+[COMPILE ] test_bytes.bl  Error: bolide::compile
+[COMPILE ] test_class_bigint.bl  Error: bolide::compile
+[COMPILE ] test_class_mem.bl  Error: bolide::compile
+[COMPILE ] test_closure_rc.bl  Error: bolide::compile
+[COMPILE ] test_decorator_with.bl  Error: bolide::compile
+[COMPILE ] test_dynamic_dict.bl  Error: bolide::compile
+[COMPILE ] test_for.bl  Error: bolide::compile
+[COMPILE ] test_from_question.bl  Error: bolide::compile
+[COMPILE ] test_if_sci.bl  Error: bolide::parse
+[COMPILE ] test_inline_value.bl  Error: bolide::compile
+[COMPILE ] test_input.bl  Error: bolide::compile
+[COMPILE ] test_leak_full.bl  Error: bolide::compile
+[COMPILE ] test_list_python.bl  Error: bolide::compile
+[COMPILE ] test_named_defaults_variadic.bl  Error: bolide::compile
+[COMPILE ] test_nested_loop.bl  Error: bolide::compile
+[COMPILE ] test_result_exception_sugar.bl  Error: bolide::compile
+[COMPILE ] test_select.bl  C:\Users\wenji\AppData\Local\Temp\bolide_llvm_35448.ll:438:44: error: '%t66' defined with type 'i64' but expected 'ptr'
+[COMPILE ] test_semantic_defaults_eval.bl  Error: bolide::compile
+[COMPILE ] test_semantic_dispatch_super.bl  Error: bolide::compile
+[COMPILE ] test_semantic_finally_controlflow.bl  Error: bolide::compile
+[COMPILE ] test_semantic_func_value_branch_flow.bl  Error: bolide::compile
+[COMPILE ] test_semantic_func_value_containers.bl  Error: bolide::compile
+[COMPILE ] test_semantic_func_value_named_defaults.bl  Error: bolide::compile
+[COMPILE ] test_semantic_indirect_named_eval.bl  Error: bolide::compile
+[COMPILE ] test_semantic_loop_exit_shadow.bl  Error: bolide::compile
+[COMPILE ] test_semantic_match_nested.bl  error: invalid LLVM IR input: Instruction does not dominate all uses!
+[COMPILE ] test_semantic_method_named_eval.bl  Error: bolide::compile
+[COMPILE ] test_semantic_method_variadic_eval_order.bl  Error: bolide::compile
+[COMPILE ] test_semantic_numeric_mixed.bl  Error: bolide::compile
+[COMPILE ] test_semantic_object_closure_state.bl  Error: bolide::compile
+[COMPILE ] test_semantic_scope_shadow.bl  Error: bolide::compile
+[COMPILE ] test_semantic_variadic_eval_order.bl  Error: bolide::compile
+[COMPILE ] test_sqlite_simple_param.bl  Error: bolide::compile
+[COMPILE ] test_sqlite.bl  Error: bolide::compile
+[COMPILE ] test_std_cache.bl  Error: bolide::compile
+[COMPILE ] test_std_cli_web.bl  Error: bolide::compile
+[COMPILE ] test_std_cli.bl  Error: bolide::compile
+[COMPILE ] test_std_config.bl  Error: bolide::compile
+[COMPILE ] test_std_core.bl  Error: bolide::compile
+[COMPILE ] test_std_crawler.bl  Error: bolide::compile
+[COMPILE ] test_std_csv.bl  Error: bolide::compile
+[COMPILE ] test_std_helpers.bl  Error: bolide::compile
+[COMPILE ] test_std_html.bl  Error: bolide::compile
+[COMPILE ] test_std_http.bl  Error: bolide::compile
+[COMPILE ] test_std_iter.bl  Error: bolide::compile
+[COMPILE ] test_std_math.bl  Error: bolide::compile
+[COMPILE ] test_std_more.bl  Error: bolide::compile
+[COMPILE ] test_std_path.bl  Error: bolide::compile
+[COMPILE ] test_std_sort.bl  C:\Users\wenji\AppData\Local\Temp\bolide_llvm_18440.ll:161:13: error: invalid redefinition of function 'bolide_string_compare'
+[COMPILE ] test_std_table.bl  Error: bolide::compile
+[COMPILE ] test_std_url.bl  Error: bolide::compile
+[COMPILE ] test_string_concat_aot_stress.bl  Error: bolide::compile
+[COMPILE ] test_thread_channel.bl  C:\Users\wenji\AppData\Local\Temp\bolide_llvm_38692.ll:513:45: error: '%t109' defined with type 'i64' but expected 'ptr'
+[COMPILE ] test_value_math.bl  Error: bolide::compile
+[COMPILE ] test_value_simple.bl  Error: bolide::compile
+[COMPILE ] test_value_type.bl  Error: bolide::compile
+[COMPILE ] test_vec3_std.bl  lld-link: error: undefined symbol: bolide_vec3_len
+[COMPILE ] test_weak_safety.bl  Error: bolide::compile
+[COMPILE ] test_web_client_error.bl  Compiling: D:\Project\bolide\tests\test_web_client_error.bl -> D:\Project\bolide\.cmp_llvm_19565c70e30a4672a6c67f68e7148823\test_web_client_error.bl.exe (backend=llvm)
+[COMPILE ] test_while_let.bl  C:\Users\wenji\AppData\Local\Temp\bolide_llvm_27336.ll:460:44: error: '%t75' defined with type 'i64' but expected 'ptr'
+[COMPILE ] types_test.bl  Error: bolide::compile
+[COMPILE ] while_test.bl  Error: bolide::compile
+[DIFF    ] gui_counter.bl  
+[DIFF    ] pool_test.bl  
+[DIFF    ] repro_aot_list_string_roundtrip.bl  
+[DIFF    ] repro_aot_string_index_concat.bl  
+[DIFF    ] test_adt_match.bl  
+[DIFF    ] test_aot_elif_calculator.bl  
+[DIFF    ] test_async_args.bl  
+[DIFF    ] test_async_select.bl  
+[DIFF    ] test_await_all.bl  
+[DIFF    ] test_await.bl  
+[DIFF    ] test_bytes_len.bl  
+[DIFF    ] test_comprehensive.bl  
+[DIFF    ] test_dict_typedump.bl  
+[DIFF    ] test_dict.bl  
+[DIFF    ] test_dynamic_bytes.bl  
+[DIFF    ] test_edge_cases.bl  
+[DIFF    ] test_edge_cases2.bl  
+[DIFF    ] test_func_memory.bl  
+[DIFF    ] test_func_memory2.bl  
+[DIFF    ] test_func_sig.bl  
+[DIFF    ] test_func_value_bugs.bl  
+[DIFF    ] test_generators.bl  
+[DIFF    ] test_generic_method.bl  
+[DIFF    ] test_generic_mono.bl  
+[DIFF    ] test_generic_value.bl  
+[DIFF    ] test_gui_min_run.bl  
+[DIFF    ] test_gui_probe.bl  
+[DIFF    ] test_leak2.bl  
+[DIFF    ] test_list_ops_manual.bl  
+[DIFF    ] test_list_simple.bl  
+[DIFF    ] test_list_step.bl  
+[DIFF    ] test_list_variants.bl  
+[DIFF    ] test_memory.bl  
+[DIFF    ] test_mixed_tuple.bl  
+[DIFF    ] test_nested_dict_print.bl  
+[DIFF    ] test_new_syntax.bl  
+[DIFF    ] test_overload_type_mangle.bl  
+[DIFF    ] test_owned_move.bl  
+[DIFF    ] test_owned_use.bl  
+[DIFF    ] test_param_modes.bl  
+[DIFF    ] test_rc.bl  
+[DIFF    ] test_ref_float.bl  
+[DIFF    ] test_ref_recurse.bl  
+[DIFF    ] test_ref_syntax.bl  
+[DIFF    ] test_select_simple.bl  
+[DIFF    ] test_select_timeout.bl  
+[DIFF    ] test_semantic_call_eval_order.bl  
+[DIFF    ] test_semantic_catch_shadow.bl  
+[DIFF    ] test_semantic_closure_escape_chain.bl  
+[DIFF    ] test_semantic_closure_mutation.bl  
+[DIFF    ] test_semantic_container_alias_slice.bl  
+[DIFF    ] test_semantic_cross_function_exception.bl  
+[DIFF    ] test_semantic_exception_hierarchy.bl  
+[DIFF    ] test_semantic_func_value_flow.bl  
+[DIFF    ] test_semantic_literal_assign_eval_order.bl  
+[DIFF    ] test_semantic_ref_named_eval.bl  
+[DIFF    ] test_semantic_rethrow_finally.bl  
+[DIFF    ] test_semantic_short_circuit.bl  
+[DIFF    ] test_semantic_stress_integration.bl  
+[DIFF    ] test_semantic_try_finally.bl  
+[DIFF    ] test_send_immutable.bl  
+[DIFF    ] test_simple_ref.bl  
+[DIFF    ] test_std_arena.bl  
+[DIFF    ] test_std_buffer.bl  
+[DIFF    ] test_std_bytes.bl  
+[DIFF    ] test_std_collections.bl  
+[DIFF    ] test_std_encoding.bl  
+[DIFF    ] test_std_hash.bl  
+[DIFF    ] test_std_json_parse.bl  
+[DIFF    ] test_std_json.bl  
+[DIFF    ] test_std_log.bl  
+[DIFF    ] test_std_process.bl  
+[DIFF    ] test_std_text.bl  
+[DIFF    ] test_std_uuid.bl  
+[DIFF    ] test_string_format.bl  
+[DIFF    ] test_swap_debug.bl  
+[DIFF    ] test_swap.bl  
+[DIFF    ] test_thread_bigint_mul.bl  
+[DIFF    ] test_throws_syntax.bl  
+[DIFF    ] test_tuple_memory.bl  
+[DIFF    ] test_tuple.bl  
+[DIFF    ] test_type_conversion.bl  
+[DIFF    ] test_web_session.bl  
+[DIFF    ] thread_return_test.bl  
+[RTIMEOUT] test_coroutine_debug.bl  
+[RTIMEOUT] test_coroutine_memory.bl  
+[RTIMEOUT] test_web_async_serve_mem.bl  
+[RTIMEOUT] test_web_e2e_server.bl  
+[RTIMEOUT] test_web_serve.bl  
+[RTIMEOUT] test_web_session_persist_server.bl  
+[RTIMEOUT] test_web_tls_server.bl  

@@ -15559,8 +15559,10 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
     fn compile_var_decl(&mut self, decl: &bolide_parser::VarDecl) -> Result<(), String> {
         // 全局变量：仅在最顶层入口函数中才写入全局数据槽。
         // 其他函数中的局部变量即使与全局变量同名，也是独立声明，不应写回全局。
+        // scope_depth == 0 保证：inline 展开后嵌套块（if/for）里 `let x` 与顶层全局
+        // x 同名时是块级遮蔽，而不是写回全局（对齐 JIT 修复）。
         let is_main = self.current_func == "__bolide_entry__" || self.current_func == "__main__";
-        if is_main && self.global_refs.contains_key(&decl.name) {
+        if is_main && self.scope_depth == 0 && self.global_refs.contains_key(&decl.name) {
             if let Some(ref value) = decl.value {
                 let target_ty = self.global_var_types.get(&decl.name).cloned();
                 if let Some(BolideType::Custom(vt_name)) = target_ty.clone() {

@@ -11935,9 +11935,14 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         }
 
         // 检查是否是全局变量
-        // 只有顶层代码（__main__）中的 let 才操作全局变量；
-        // 函数内的同名 let 声明新的局部变量（遮蔽全局）
-        if self.current_func_name == "__main__" && self.global_data_ids.contains_key(&decl.name) {
+        // 只有 __main__ 顶层的 let 才操作全局变量；函数内或 __main__ 嵌套作用域
+        // （if/for 块）里的同名 let 声明新的局部变量（遮蔽全局）。
+        // scope_depth == 0 保证：inline 展开把函数体拼进 __main__ 后，分支内
+        // `let x = ...` 与顶层全局 x 同名时是块级遮蔽，而不是写回全局。
+        if self.current_func_name == "__main__"
+            && self.scope_depth == 0
+            && self.global_data_ids.contains_key(&decl.name)
+        {
             self.spawn_func_map.remove(&decl.name);
             self.task_func_map.remove(&decl.name);
             self.force_thread_tasks.remove(&decl.name);

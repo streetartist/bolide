@@ -1891,6 +1891,29 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
         }
     }
 
+    fn snapshot_scopes(
+        &self,
+    ) -> (
+        HashMap<String, (String, &'static str)>,
+        HashMap<String, ValKind>,
+        HashMap<String, bool>,
+    ) {
+        (self.locals.clone(), self.local_kind.clone(), self.mutable.clone())
+    }
+
+    fn restore_scopes(
+        &mut self,
+        s: (
+            HashMap<String, (String, &'static str)>,
+            HashMap<String, ValKind>,
+            HashMap<String, bool>,
+        ),
+    ) {
+        self.locals = s.0;
+        self.local_kind = s.1;
+        self.mutable = s.2;
+    }
+
     fn emit_if(&mut self, i: &bolide_parser::IfStmt) -> Result<bool, String> {
         let (cond, cty) = self.emit_expr(&i.condition)?;
         let cond_i1 = self.to_i1(cond, cty)?;
@@ -1903,6 +1926,8 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
             cond_i1, then_l, else_l
         );
 
+        // Block scoping: branch-local `let` shadows must not leak out.
+        let saved = self.snapshot_scopes();
         let _ = writeln!(self.body, "{}:", then_l);
         let mut then_term = false;
         for s in &i.then_body {
@@ -1914,6 +1939,7 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
         if !then_term {
             let _ = writeln!(self.body, "  br label %{}", end_l);
         }
+        self.restore_scopes(saved);
 
         let _ = writeln!(self.body, "{}:", else_l);
         let mut else_term = false;
@@ -1928,12 +1954,14 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
             };
             else_term = self.emit_if(&nested)?;
         } else if let Some(ref eb) = i.else_body {
+            let saved2 = self.snapshot_scopes();
             for s in eb {
                 if else_term {
                     break;
                 }
                 else_term = self.emit_stmt(s)?;
             }
+            self.restore_scopes(saved2);
         }
         if !else_term {
             let _ = writeln!(self.body, "  br label %{}", end_l);
@@ -1961,18 +1989,23 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
             "  br i1 {}, label %{}, label %{}",
             cond_i1, body, end
         );
+        // Loop-body scoping (mirrors JIT enter_scope/leave_scope): a `let`
+        // declared inside the body shadows an outer binding only within the body.
+        let saved = self.snapshot_scopes();
         let _ = writeln!(self.body, "{}:", body);
         for s in &w.body {
             if self.emit_stmt(s)? {
                 self.loop_stack.pop();
                 // still need end label for break targets
                 let _ = writeln!(self.body, "{}:", end);
+                self.restore_scopes(saved);
                 return Ok(());
             }
         }
         let _ = writeln!(self.body, "  br label %{}", head);
         let _ = writeln!(self.body, "{}:", end);
         self.loop_stack.pop();
+        self.restore_scopes(saved);
         Ok(())
     }
 
@@ -2020,8 +2053,7 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
             .cloned()
             .ok_or("for-dict missing key variable")?;
         let val_var = vars.get(1).cloned();
-        let saved_key = self.save_var_binding(&key_var);
-        let saved_val = val_var.as_deref().map(|v| self.save_var_binding(v));
+        let saved = self.snapshot_scopes();
         let (dict, _) = self.emit_expr(iter)?;
         // keys list
         let keys = self.fresh();
@@ -2097,10 +2129,7 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
             if self.emit_stmt(s)? {
                 self.loop_stack.pop();
                 let _ = writeln!(self.body, "{}:", end_l);
-                self.restore_var_binding(&key_var, saved_key);
-                if let Some(v) = val_var.as_deref() {
-                    self.restore_var_binding(v, saved_val.clone().unwrap());
-                }
+                self.restore_scopes(saved);
                 return Ok(());
             }
         }
@@ -2114,10 +2143,7 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
         let _ = writeln!(self.body, "  br label %{}", head);
         let _ = writeln!(self.body, "{}:", end_l);
         self.loop_stack.pop();
-        self.restore_var_binding(&key_var, saved_key);
-        if let Some(v) = val_var.as_deref() {
-            self.restore_var_binding(v, saved_val.clone().unwrap());
-        }
+        self.restore_scopes(saved);
         Ok(())
     }
 
@@ -2129,7 +2155,7 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
         class_name: &str,
         body: &[Statement],
     ) -> Result<(), String> {
-        let saved_var = self.save_var_binding(var);
+        let saved = self.snapshot_scopes();
         let (it, _) = self.emit_expr(iter)?;
         let it_slot = self.fresh_local("__it");
         let _ = writeln!(self.body, "  {} = alloca ptr, align 8", it_slot);
@@ -2226,7 +2252,7 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
             if self.emit_stmt(s)? {
                 self.loop_stack.pop();
                 let _ = writeln!(self.body, "{}:", end_l);
-                self.restore_var_binding(var, saved_var);
+                self.restore_scopes(saved);
                 return Ok(());
             }
         }
@@ -2235,7 +2261,7 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
         let _ = writeln!(self.body, "  br label %{}", head);
         let _ = writeln!(self.body, "{}:", end_l);
         self.loop_stack.pop();
-        self.restore_var_binding(var, saved_var);
+        self.restore_scopes(saved);
         let _ = next_full;
         Ok(())
     }
@@ -2252,7 +2278,9 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
             _ => return Err("range expects 1 or 2 arguments".into()),
         };
         // var i = start; while i < end { body; i = i + 1 }
-        let saved_var = self.save_var_binding(var);
+        // Whole loop-body scope is snapshot/restored (JIT enter_scope/leave_scope):
+        // the loop var + any `let` inside the body don't leak out of the loop.
+        let saved = self.snapshot_scopes();
         let slot = self.fresh_local(var);
         let _ = writeln!(self.body, "  {} = alloca i64, align 8", slot);
         let (sv, sty) = self.emit_expr(&start_e)?;
@@ -2294,7 +2322,7 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
             if self.emit_stmt(s)? {
                 self.loop_stack.pop();
                 let _ = writeln!(self.body, "{}:", end_l);
-                self.restore_var_binding(var, saved_var);
+                self.restore_scopes(saved);
                 return Ok(());
             }
         }
@@ -2308,7 +2336,7 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
         let _ = writeln!(self.body, "  br label %{}", head);
         let _ = writeln!(self.body, "{}:", end_l);
         self.loop_stack.pop();
-        self.restore_var_binding(var, saved_var);
+        self.restore_scopes(saved);
         Ok(())
     }
 
@@ -2318,7 +2346,7 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
         iter: &Expr,
         body: &[Statement],
     ) -> Result<(), String> {
-        let saved_var = self.save_var_binding(var);
+        let saved = self.snapshot_scopes();
         let (list, _) = self.emit_expr(iter)?;
         let (tag, elem_kind) = match self.infer_kind(iter) {
             ValKind::List(t) => (t, list_tag_to_kind(t)),
@@ -2376,7 +2404,7 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
             if self.emit_stmt(s)? {
                 self.loop_stack.pop();
                 let _ = writeln!(self.body, "{}:", end_l);
-                self.restore_var_binding(var, saved_var);
+                self.restore_scopes(saved);
                 return Ok(());
             }
         }
@@ -2390,7 +2418,7 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
         let _ = writeln!(self.body, "  br label %{}", head);
         let _ = writeln!(self.body, "{}:", end_l);
         self.loop_stack.pop();
-        self.restore_var_binding(var, saved_var);
+        self.restore_scopes(saved);
         Ok(())
     }
 
@@ -5681,51 +5709,6 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
         let n = self.tmp;
         self.tmp += 1;
         format!("%t{}", n)
-    }
-
-    /// 保存变量当前的 local/kind/mutable 绑定（用于 for 循环变量在循环后恢复作用域）。
-    fn save_var_binding(
-        &self,
-        name: &str,
-    ) -> (Option<(String, &'static str)>, Option<ValKind>, Option<bool>) {
-        (
-            self.locals.get(name).cloned(),
-            self.local_kind.get(name).cloned(),
-            self.mutable.get(name).cloned(),
-        )
-    }
-
-    /// 恢复 save_var_binding 保存的绑定；无则移除（循环变量不泄漏到外层）。
-    fn restore_var_binding(
-        &mut self,
-        name: &str,
-        saved: (Option<(String, &'static str)>, Option<ValKind>, Option<bool>),
-    ) {
-        let (l, k, m) = saved;
-        match l {
-            Some(v) => {
-                self.locals.insert(name.to_string(), v);
-            }
-            None => {
-                self.locals.remove(name);
-            }
-        }
-        match k {
-            Some(v) => {
-                self.local_kind.insert(name.to_string(), v);
-            }
-            None => {
-                self.local_kind.remove(name);
-            }
-        }
-        match m {
-            Some(v) => {
-                self.mutable.insert(name.to_string(), v);
-            }
-            None => {
-                self.mutable.remove(name);
-            }
-        }
     }
 
     fn fresh_local(&mut self, name: &str) -> String {
