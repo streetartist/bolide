@@ -10745,14 +10745,19 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             _ => {}
         }
 
+        // async 判断必须用「未 mangle 的裸名」（对齐 JIT 修复）：async_funcs 只存裸名，
+        // resolve_overloaded_function_name 会把名字改成 `name__sig_<hash>`，用 mangle 后
+        // 的名字查 async_funcs 会漏判 → 异步函数被当普通函数直接调用，返回结果值而非
+        // Future 指针，await 拿到结果当指针 → 段错误。
+        let orig_func_name = name.to_string();
         let func_name = self
             .module_function_name(name)
             .unwrap_or_else(|| name.to_string());
         let func_name = self.resolve_overloaded_function_name(&func_name, args);
 
         // 检查是否是 async 函数调用
-        if self.async_funcs.contains(&func_name) {
-            return self.compile_async_call(&func_name, args);
+        if self.async_funcs.contains(&orig_func_name) {
+            return self.compile_async_call(&orig_func_name, args);
         }
 
         // 检查是否是 extern (FFI) 函数调用

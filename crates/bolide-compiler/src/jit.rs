@@ -15785,12 +15785,17 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             _ => {}
         }
 
+        // async 判断必须用「未 mangle 的裸名」：async_funcs 只存裸名，
+        // 而 resolve_overloaded_function_name 会把名字改成 `name__sig_<hash>`，
+        // 用 mangle 后的名字查 async_funcs 会漏判 → 异步函数被当普通函数直接调用
+        // （返回的是函数结果 42 而不是 Future 指针，await 拿到 42 当指针 → 段错误）。
+        let orig_func_name = func_name.clone();
         let func_name = self.module_function_name(&func_name).unwrap_or(func_name);
         let func_name = self.resolve_overloaded_function_name(&func_name, args);
 
-        // 检查是否是 async 函数
-        if self.async_funcs.contains(&func_name) {
-            return self.compile_async_call(&func_name, args);
+        // 检查是否是 async 函数（compile_async_call 内部各查找表都支持裸名）
+        if self.async_funcs.contains(&orig_func_name) {
+            return self.compile_async_call(&orig_func_name, args);
         }
 
         // 检查是否是 extern 函数
