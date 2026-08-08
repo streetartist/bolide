@@ -8,8 +8,8 @@
 //!   objects/executables or a temporary shared library for "JIT".
 //!
 //! Growing toward full language coverage (classes, ADTs/match, dict, generators,
-//! operator overload, try/throw, modules). Unsupported constructs return a clear
-//! error so users can fall back to `--backend cranelift`.
+//! channels/select, tuples, operator overload, try/throw, modules). Unsupported
+//! constructs return a clear error so users can fall back to `--backend cranelift`.
 
 mod codegen;
 mod frontend;

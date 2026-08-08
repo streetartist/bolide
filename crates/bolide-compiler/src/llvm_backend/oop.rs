@@ -1,7 +1,7 @@
 //! Class / ADT / operator metadata for the LLVM backend.
 //! Shared pure tables; IR emission stays in `codegen.rs`.
 
-use bolide_parser::{ClassDef, EnumDef, FuncDef, Type};
+use bolide_parser::{ClassDef, EnumDef, Expr, FuncDef, Type};
 use std::collections::HashMap;
 
 #[derive(Clone, Debug)]
@@ -9,6 +9,7 @@ pub struct FieldInfo {
     pub name: String,
     pub ty: Type,
     pub offset: usize,
+    pub default_value: Option<Expr>,
 }
 
 #[derive(Clone, Debug)]
@@ -38,6 +39,8 @@ pub struct AdtVariantInfo {
 #[derive(Clone, Debug)]
 pub struct AdtInfo {
     pub name: String,
+    /// Generic type parameter names (e.g. `["T", "E"]` for Result).
+    pub type_params: Vec<String>,
     pub variants: Vec<AdtVariantInfo>,
     pub size: usize,
 }
@@ -99,6 +102,7 @@ pub fn collect_classes(program: &bolide_parser::Program) -> Result<HashMap<Strin
                 name: f.name.clone(),
                 ty: f.ty.clone(),
                 offset,
+                default_value: f.default_value.clone(),
             });
             offset += 8;
         }
@@ -163,6 +167,7 @@ fn build_adt(def: &EnumDef) -> Result<AdtInfo, String> {
     }
     Ok(AdtInfo {
         name: def.name.clone(),
+        type_params: def.type_params.clone(),
         variants,
         size: 8 + max_fields * 8,
     })
@@ -203,4 +208,43 @@ pub fn field_offset(class: &ClassInfo, name: &str) -> Option<usize> {
 
 pub fn field_type<'a>(class: &'a ClassInfo, name: &str) -> Option<&'a Type> {
     class.fields.iter().find(|f| f.name == name).map(|f| &f.ty)
+}
+
+/// Register `value Vec3 { ... }` as a class-like layout so LLVM can construct
+/// and access fields (stack value types share the same field offsets).
+pub fn collect_value_types_as_classes(
+    program: &bolide_parser::Program,
+    classes: &mut HashMap<String, ClassInfo>,
+) {
+    let mut tag: i64 = 10_000;
+    for stmt in &program.statements {
+        if let bolide_parser::Statement::ValueDef(vd) = stmt {
+            if classes.contains_key(&vd.name) {
+                continue;
+            }
+            let mut fields = Vec::new();
+            let mut offset = 0usize;
+            for f in &vd.fields {
+                fields.push(FieldInfo {
+                    name: f.name.clone(),
+                    ty: f.ty.clone(),
+                    offset,
+                    default_value: None,
+                });
+                offset += 8;
+            }
+            classes.insert(
+                vd.name.clone(),
+                ClassInfo {
+                    name: vd.name.clone(),
+                    parent: None,
+                    fields,
+                    methods: HashMap::new(),
+                    size: offset,
+                    tag,
+                },
+            );
+            tag += 1;
+        }
+    }
 }

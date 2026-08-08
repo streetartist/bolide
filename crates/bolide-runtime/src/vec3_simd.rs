@@ -97,6 +97,7 @@ pub extern "C" fn bolide_vec3_dot(
 }
 
 /// Length: |v|
+#[no_mangle]
 pub extern "C" fn bolide_vec3_len(ax: f64, ay: f64, az: f64) -> f64 {
     #[cfg(target_arch = "x86_64")]
     unsafe {

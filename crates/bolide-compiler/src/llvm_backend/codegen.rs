@@ -12,8 +12,8 @@ use std::fmt::Write as _;
 
 use super::frontend::{ExternSig, PreparedProgram};
 use super::oop::{
-    collect_adts, collect_classes, field_offset, field_type, method_full_name, type_llvm, AdtInfo,
-    ClassInfo,
+    collect_adts, collect_classes, collect_value_types_as_classes, field_offset, field_type,
+    method_full_name, type_llvm, AdtInfo, ClassInfo,
 };
 use crate::closure_capture::free_variables;
 use crate::operator_overload::{binop_method, reflected_binop_method, unary_method};
@@ -55,7 +55,8 @@ enum ValKind {
     NestedList(Box<ValKind>),
     Dict,
     Object(String),
-    Adt(String),
+    /// ADT value; optional concrete type-args for generic enums (Result/Option).
+    Adt(String, Vec<Type>),
     /// bolide_closure object
     Closure,
     /// raw function pointer (bare ABI), e.g. a FuncSig param not receiving closures
@@ -66,6 +67,8 @@ enum ValKind {
     BigInt,
     /// a BolideBytes heap object (ptr) — distinct from Ptr so bytes methods dispatch
     Bytes,
+    /// bolide_tuple heap object (ptr) — print/index via tuple runtime
+    Tuple(Vec<ValKind>),
     Ptr,
 }
 
@@ -146,6 +149,10 @@ struct Codegen {
     ref_param_addr_slot: HashMap<String, String>,
     /// names of `async fn` — calls route to coroutine spawn (not direct call)
     async_funcs: HashSet<String>,
+    /// nesting depth of `pool(n) { ... }` — spawn/await use pool runtime when > 0
+    pool_depth: usize,
+    /// spawn handles that came from pool_spawn (await → pool_join)
+    pool_spawn_vars: HashSet<String>,
 }
 
 impl Codegen {
@@ -225,6 +232,8 @@ impl Codegen {
             ("bolide_channel_create_buffered", vec!["i64"], "ptr"),
             ("bolide_channel_send", vec!["ptr", "i64"], "i64"),
             ("bolide_channel_recv", vec!["ptr"], "i64"),
+            ("bolide_channel_try_recv", vec!["ptr", "ptr"], "i64"),
+            ("bolide_channel_select", vec!["ptr", "i64", "i64", "ptr"], "i64"),
             ("bolide_channel_close", vec!["ptr"], "void"),
             // Input / env
             ("bolide_input", vec![], "ptr"),
@@ -237,6 +246,13 @@ impl Codegen {
             ("bolide_list_extend", vec!["ptr", "ptr"], "void"),
             ("bolide_list_map", vec!["ptr", "ptr", "i64"], "ptr"),
             ("bolide_list_filter", vec!["ptr", "ptr"], "ptr"),
+            ("bolide_tuple_new", vec!["i64"], "ptr"),
+            ("bolide_tuple_new_typed", vec!["i64", "ptr"], "ptr"),
+            ("bolide_tuple_set", vec!["ptr", "i64", "i64"], "void"),
+            ("bolide_tuple_set_typed", vec!["ptr", "i64", "i64", "i8"], "void"),
+            ("bolide_tuple_get", vec!["ptr", "i64"], "i64"),
+            ("bolide_tuple_len", vec!["ptr"], "i64"),
+            ("bolide_print_tuple", vec!["ptr"], "void"),
             // Dict extras
             ("bolide_dict_extend", vec!["ptr", "ptr"], "void"),
             // Math extras
@@ -297,6 +313,27 @@ impl Codegen {
             ("bolide_thread_join_float", vec!["ptr"], "double"),
             ("bolide_thread_join_ptr", vec!["ptr"], "ptr"),
             ("bolide_thread_handle_free", vec!["ptr"], "void"),
+            // Thread pool
+            ("bolide_pool_create", vec!["i64"], "ptr"),
+            ("bolide_pool_enter", vec!["ptr"], "void"),
+            ("bolide_pool_exit", vec![], "void"),
+            ("bolide_pool_destroy", vec!["ptr"], "void"),
+            ("bolide_pool_is_active", vec![], "i64"),
+            ("bolide_pool_spawn_int", vec!["ptr"], "ptr"),
+            ("bolide_pool_spawn_float", vec!["ptr"], "ptr"),
+            ("bolide_pool_spawn_ptr", vec!["ptr"], "ptr"),
+            ("bolide_pool_spawn_int_with_env", vec!["ptr", "ptr"], "ptr"),
+            ("bolide_pool_spawn_float_with_env", vec!["ptr", "ptr"], "ptr"),
+            ("bolide_pool_spawn_ptr_with_env", vec!["ptr", "ptr"], "ptr"),
+            ("bolide_pool_join_int", vec!["ptr"], "i64"),
+            ("bolide_pool_join_float", vec!["ptr"], "double"),
+            ("bolide_pool_join_ptr", vec!["ptr"], "ptr"),
+            ("bolide_pool_handle_free", vec!["ptr"], "void"),
+            ("bolide_pool_select_wait_first", vec!["ptr", "i64"], "i64"),
+            // Weak refs
+            ("object_weak_retain", vec!["ptr"], "void"),
+            ("object_weak_release", vec!["ptr"], "void"),
+            ("object_weak_clone", vec!["ptr"], "ptr"),
         ] {
             funcs.insert(n.into(), (ps, r));
         }
@@ -341,6 +378,8 @@ impl Codegen {
             ref_param_val_ty: HashMap::new(),
             ref_param_addr_slot: HashMap::new(),
             async_funcs: HashSet::new(),
+            pool_depth: 0,
+            pool_spawn_vars: HashSet::new(),
         }
     }
 
@@ -459,6 +498,8 @@ declare ptr @bolide_channel_create()
 declare ptr @bolide_channel_create_buffered(i64)
 declare i64 @bolide_channel_send(ptr, i64)
 declare i64 @bolide_channel_recv(ptr)
+declare i64 @bolide_channel_try_recv(ptr, ptr)
+declare i64 @bolide_channel_select(ptr, i64, i64, ptr)
 declare void @bolide_channel_close(ptr)
 declare ptr @bolide_input()
 declare ptr @bolide_input_prompt(ptr)
@@ -467,6 +508,21 @@ declare ptr @bolide_string_from_bigint(ptr)
 declare ptr @bolide_string_from_decimal(ptr)
 declare ptr @bolide_list_clone(ptr)
 declare void @bolide_list_extend(ptr, ptr)
+declare ptr @bolide_tuple_new(i64)
+declare ptr @bolide_tuple_new_typed(i64, ptr)
+declare void @bolide_tuple_set(ptr, i64, i64)
+declare void @bolide_tuple_set_typed(ptr, i64, i64, i8)
+declare i64 @bolide_tuple_get(ptr, i64)
+declare i64 @bolide_tuple_len(ptr)
+declare void @bolide_print_tuple(ptr)
+declare void @bolide_print_tuple_start()
+declare void @bolide_print_tuple_separator()
+declare void @bolide_print_tuple_end_inline()
+declare void @bolide_print_int_inline(i64)
+declare void @bolide_print_float_inline(double)
+declare void @bolide_print_bool_inline(i64)
+declare void @bolide_print_string_inline(ptr)
+declare void @bolide_print_bigint_inline(ptr)
 declare ptr @bolide_list_map(ptr, ptr, i64)
 declare ptr @bolide_list_filter(ptr, ptr)
 declare void @bolide_dict_extend(ptr, ptr)
@@ -512,6 +568,25 @@ declare i64 @bolide_thread_join_int(ptr)
 declare double @bolide_thread_join_float(ptr)
 declare ptr @bolide_thread_join_ptr(ptr)
 declare void @bolide_thread_handle_free(ptr)
+declare ptr @bolide_pool_create(i64)
+declare void @bolide_pool_enter(ptr)
+declare void @bolide_pool_exit()
+declare void @bolide_pool_destroy(ptr)
+declare i64 @bolide_pool_is_active()
+declare ptr @bolide_pool_spawn_int(ptr)
+declare ptr @bolide_pool_spawn_float(ptr)
+declare ptr @bolide_pool_spawn_ptr(ptr)
+declare ptr @bolide_pool_spawn_int_with_env(ptr, ptr)
+declare ptr @bolide_pool_spawn_float_with_env(ptr, ptr)
+declare ptr @bolide_pool_spawn_ptr_with_env(ptr, ptr)
+declare i64 @bolide_pool_join_int(ptr)
+declare double @bolide_pool_join_float(ptr)
+declare ptr @bolide_pool_join_ptr(ptr)
+declare void @bolide_pool_handle_free(ptr)
+declare i64 @bolide_pool_select_wait_first(ptr, i64)
+declare void @object_weak_retain(ptr)
+declare void @object_weak_release(ptr)
+declare ptr @object_weak_clone(ptr)
 declare ptr @bolide_bigint_add(ptr, ptr)
 declare ptr @bolide_bigint_sub(ptr, ptr)
 declare ptr @bolide_bigint_mul(ptr, ptr)
@@ -597,6 +672,7 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
     fn emit_program(&mut self, program: &Program) -> Result<(), String> {
         self.needs_exc = program_needs_exceptions(program);
         self.classes = collect_classes(program)?;
+        collect_value_types_as_classes(program, &mut self.classes);
         self.adts = collect_adts(program)?;
 
         // Register free functions
@@ -625,11 +701,8 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
 
         // Register class constructors + methods
         for (cname, ci) in self.classes.clone() {
-            let mut params: Vec<&'static str> = ci
-                .fields
-                .iter()
-                .map(|f| type_llvm(&f.ty))
-                .collect();
+            // Full field arity; call sites with fewer args fill field defaults.
+            let params: Vec<&'static str> = ci.fields.iter().map(|f| type_llvm(&f.ty)).collect();
             self.funcs.insert(cname.clone(), (params, "ptr"));
             self.func_ret_kind
                 .insert(cname.clone(), ValKind::Object(cname.clone()));
@@ -753,6 +826,9 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
                 if let Some(ref v) = d.value {
                     if matches!(v, Expr::Spawn(_, _) | Expr::SpawnThread(_, _)) {
                         self.spawn_vars.insert(d.name.clone());
+                        if self.pool_depth > 0 && matches!(v, Expr::Spawn(_, _)) {
+                            self.pool_spawn_vars.insert(d.name.clone());
+                        }
                     }
                     if let Some((ty, _)) = self.global_vars.get(&d.name).cloned() {
                         let (val, vty) = if let (Some(Type::List(inner)), Expr::List(items)) =
@@ -1229,13 +1305,19 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
         };
         let _ = force_thread;
         let cal = llvm_func_name(name);
+        let use_pool = self.pool_depth > 0 && !force_thread;
+        let spawn_prefix = if use_pool {
+            "bolide_pool_spawn"
+        } else {
+            "bolide_thread_spawn"
+        };
 
         if args.is_empty() {
             let d = self.fresh();
             let _ = writeln!(
                 self.body,
-                "  {} = call ptr @bolide_thread_spawn_{}(ptr @{})",
-                d, suffix, cal
+                "  {} = call ptr @{}_{}(ptr @{})",
+                d, spawn_prefix, suffix, cal
             );
             return Ok((d, "ptr"));
         }
@@ -1326,8 +1408,8 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
         let d = self.fresh();
         let _ = writeln!(
             self.body,
-            "  {} = call ptr @bolide_thread_spawn_{}_with_env(ptr @{}, ptr {})",
-            d, suffix, tname, env
+            "  {} = call ptr @{}_{}_with_env(ptr @{}, ptr {})",
+            d, spawn_prefix, suffix, tname, env
         );
         Ok((d, "ptr"))
     }
@@ -1451,9 +1533,13 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
 
     /// `await expr` → resolve the future/handle's result.
     fn emit_await(&mut self, inner: &Expr) -> Result<(String, &'static str), String> {
-        // Determine if this is a spawn handle (thread_join) or a coroutine future.
+        // Determine if this is a spawn/pool handle (join) or a coroutine future.
+        let is_pool_handle = matches!(inner, Expr::Ident(n) if self.pool_spawn_vars.contains(n))
+            || (self.pool_depth > 0
+                && matches!(inner, Expr::Spawn(_, _) | Expr::Ident(_)));
         let is_spawn = matches!(inner, Expr::Spawn(_, _) | Expr::SpawnThread(_, _))
-            || matches!(inner, Expr::Ident(n) if self.spawn_vars.contains(n));
+            || matches!(inner, Expr::Ident(n) if self.spawn_vars.contains(n) || self.pool_spawn_vars.contains(n))
+            || is_pool_handle;
         let (future, fty) = self.emit_expr(inner)?;
         let future = self.cast_to(future, fty, "ptr")?;
 
@@ -1462,14 +1548,28 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
             Expr::Spawn(name, _) | Expr::SpawnThread(name, _) => {
                 self.func_ret_kind.get(name).cloned()
             }
-            Expr::Ident(n) => self
-                .global_vars
-                .get(n)
-                .map(|(_, k)| k.clone())
-                .or_else(|| self.local_kind.get(n).cloned()),
+            Expr::Ident(n) => {
+                // Handle vars are Ptr; payload type is usually int unless known.
+                let k = self
+                    .local_kind
+                    .get(n)
+                    .cloned()
+                    .or_else(|| self.global_vars.get(n).map(|(_, k)| k.clone()));
+                match k {
+                    Some(ValKind::Ptr) | Some(ValKind::Object(_)) | None => Some(ValKind::Int),
+                    other => other,
+                }
+            }
             _ => None,
         };
-        self.emit_await_value(&future, ret_kind, is_spawn)
+        // Temporarily force pool join when handle is a pool task
+        let saved_depth = self.pool_depth;
+        if is_pool_handle && self.pool_depth == 0 {
+            self.pool_depth = 1;
+        }
+        let res = self.emit_await_value(&future, ret_kind, is_spawn);
+        self.pool_depth = saved_depth;
+        res
     }
 
     /// Await an already-emitted handle/future value.
@@ -1489,6 +1589,9 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
                     | ValKind::Object(_)
                     | ValKind::List(_)
                     | ValKind::Dict
+                    | ValKind::Bytes
+                    | ValKind::Adt(_, _)
+                    | ValKind::Tuple(_)
             )
         );
         let d = self.fresh();
@@ -1500,20 +1603,58 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
             } else {
                 "int"
             };
-            let rty = if is_float { "double" } else if is_ptr { "ptr" } else { "i64" };
-            let _ = writeln!(
-                self.body,
-                "  {} = call {} @bolide_thread_join_{}(ptr {})",
-                d, rty, suffix, future
-            );
+            let rty = if is_float {
+                "double"
+            } else if is_ptr {
+                "ptr"
+            } else {
+                "i64"
+            };
+            // Prefer pool_join when inside a pool or the handle was created via pool_spawn
+            let use_pool = self.pool_depth > 0;
+            if use_pool {
+                let _ = writeln!(
+                    self.body,
+                    "  {} = call {} @bolide_pool_join_{}(ptr {})",
+                    d, rty, suffix, future
+                );
+                let _ = writeln!(
+                    self.body,
+                    "  call void @bolide_pool_handle_free(ptr {})",
+                    future
+                );
+            } else {
+                let _ = writeln!(
+                    self.body,
+                    "  {} = call {} @bolide_thread_join_{}(ptr {})",
+                    d, rty, suffix, future
+                );
+            }
             Ok((d, rty))
         } else {
-            let _ = writeln!(
-                self.body,
-                "  {} = call i64 @bolide_coroutine_await_int(ptr {})",
-                d, future
-            );
-            Ok((d, "i64"))
+            // coroutine / Future
+            if is_float {
+                let _ = writeln!(
+                    self.body,
+                    "  {} = call double @bolide_coroutine_await_float(ptr {})",
+                    d, future
+                );
+                Ok((d, "double"))
+            } else if is_ptr {
+                let _ = writeln!(
+                    self.body,
+                    "  {} = call ptr @bolide_coroutine_await_ptr(ptr {})",
+                    d, future
+                );
+                Ok((d, "ptr"))
+            } else {
+                let _ = writeln!(
+                    self.body,
+                    "  {} = call i64 @bolide_coroutine_await_int(ptr {})",
+                    d, future
+                );
+                Ok((d, "i64"))
+            }
         }
     }
 
@@ -1545,71 +1686,96 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
             }
         }
         // 2) scan call sites; a FuncSig param receives a closure if any call passes
-        //    a closure literal or a closure-returning expression to it
+        //    a closure literal or a closure-returning expression to it.
+        // Also track variables that hold closures (for `let w = tag_b(f); tag_a(w)`).
         let mut out: HashMap<String, HashSet<usize>> = HashMap::new();
-        for _ in 0..8 {
-            let before = out.clone();
+        let mut closure_vars: HashSet<String> = HashSet::new();
+        for _ in 0..12 {
+            let before_out = out.clone();
+            let before_vars = closure_vars.clone();
             for stmt in &program.statements {
                 match stmt {
                     Statement::FuncDef(f) => {
-                        self.scan_closure_usage(&f.body, &mut out);
+                        self.scan_closure_usage(&f.body, &mut out, &mut closure_vars);
                     }
                     Statement::ClassDef(c) => {
                         for m in &c.methods {
-                            self.scan_closure_usage(&m.body, &mut out);
+                            self.scan_closure_usage(&m.body, &mut out, &mut closure_vars);
                         }
                     }
                     Statement::VarDecl(d) => {
                         if let Some(v) = &d.value {
-                            self.scan_closure_usage_expr(v, &mut out);
+                            self.scan_closure_usage_expr(v, &mut out, &mut closure_vars);
+                            if self.expr_is_closure_with(v, &closure_vars) {
+                                closure_vars.insert(d.name.clone());
+                            }
                         }
                     }
-                    // top-level executable statements (the main body) too
                     other => {
-                        self.scan_closure_usage(std::slice::from_ref(other), &mut out);
+                        self.scan_closure_usage(
+                            std::slice::from_ref(other),
+                            &mut out,
+                            &mut closure_vars,
+                        );
                     }
                 }
             }
-            if out == before {
+            if out == before_out && closure_vars == before_vars {
                 break;
             }
         }
         self.funcsig_closure_params = out;
     }
 
-    fn scan_closure_usage(&mut self, stmts: &[Statement], out: &mut HashMap<String, HashSet<usize>>) {
+    fn scan_closure_usage(
+        &mut self,
+        stmts: &[Statement],
+        out: &mut HashMap<String, HashSet<usize>>,
+        closure_vars: &mut HashSet<String>,
+    ) {
         for s in stmts {
             match s {
-                Statement::Expr(e) => self.scan_closure_usage_expr(e, out),
-                Statement::Return(Some(e)) => self.scan_closure_usage_expr(e, out),
+                Statement::Expr(e) => self.scan_closure_usage_expr(e, out, closure_vars),
+                Statement::Return(Some(e)) => self.scan_closure_usage_expr(e, out, closure_vars),
                 Statement::VarDecl(d) => {
                     if let Some(v) = &d.value {
-                        self.scan_closure_usage_expr(v, out);
+                        self.scan_closure_usage_expr(v, out, closure_vars);
+                        if self.expr_is_closure_with(v, closure_vars) {
+                            closure_vars.insert(d.name.clone());
+                        }
                     }
                 }
                 Statement::Assign(a) => {
-                    self.scan_closure_usage_expr(&a.value, out);
+                    self.scan_closure_usage_expr(&a.value, out, closure_vars);
+                    if let Expr::Ident(n) = &a.target {
+                        if self.expr_is_closure_with(&a.value, closure_vars) {
+                            closure_vars.insert(n.clone());
+                        }
+                    }
                 }
                 Statement::If(i) => {
-                    self.scan_closure_usage(&i.then_body, out);
+                    self.scan_closure_usage(&i.then_body, out, closure_vars);
                     for (_, b) in &i.elif_branches {
-                        self.scan_closure_usage(b, out);
+                        self.scan_closure_usage(b, out, closure_vars);
                     }
                     if let Some(b) = &i.else_body {
-                        self.scan_closure_usage(b, out);
+                        self.scan_closure_usage(b, out, closure_vars);
                     }
                 }
-                Statement::While(w) => self.scan_closure_usage(&w.body, out),
-                Statement::For(f) => self.scan_closure_usage(&f.body, out),
+                Statement::While(w) => self.scan_closure_usage(&w.body, out, closure_vars),
+                Statement::For(f) => self.scan_closure_usage(&f.body, out, closure_vars),
                 Statement::Match(m) => {
                     for a in &m.arms {
-                        self.scan_closure_usage(&a.body, out);
+                        self.scan_closure_usage(&a.body, out, closure_vars);
                     }
                 }
                 Statement::Try(t) => {
-                    self.scan_closure_usage(&t.try_body, out);
+                    self.scan_closure_usage(&t.try_body, out, closure_vars);
                     for c in &t.catch_clauses {
-                        self.scan_closure_usage(&c.body, out);
+                        self.scan_closure_usage(&c.body, out, closure_vars);
+                    }
+                    if let Some(f) = &t.finally {
+                        self.scan_closure_usage(f, out, closure_vars);
                     }
                 }
                 _ => {}
@@ -1621,6 +1787,7 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
         &mut self,
         e: &Expr,
         out: &mut HashMap<String, HashSet<usize>>,
+        closure_vars: &mut HashSet<String>,
     ) {
         match e {
             Expr::Call(callee, args) => {
@@ -1629,7 +1796,7 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
                         for (i, arg) in args.iter().enumerate() {
                             if let Some(p) = params.get(i) {
                                 if matches!(p.ty, Type::Func | Type::FuncSig(_, _)) {
-                                    if self.expr_is_closure(arg) {
+                                    if self.expr_is_closure_with(arg, closure_vars) {
                                         out.entry(name.to_string())
                                             .or_default()
                                             .insert(i);
@@ -1640,40 +1807,40 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
                     }
                 }
                 for a in args {
-                    self.scan_closure_usage_expr(a, out);
+                    self.scan_closure_usage_expr(a, out, closure_vars);
                 }
-                self.scan_closure_usage_expr(callee, out);
+                self.scan_closure_usage_expr(callee, out, closure_vars);
             }
             Expr::Closure { body, .. } => {
-                self.scan_closure_usage(body, out);
+                self.scan_closure_usage(body, out, closure_vars);
             }
             Expr::List(items) | Expr::Tuple(items) => {
                 for it in items {
-                    self.scan_closure_usage_expr(it, out);
+                    self.scan_closure_usage_expr(it, out, closure_vars);
                 }
             }
             Expr::Dict(pairs) => {
                 for (k, v) in pairs {
-                    self.scan_closure_usage_expr(k, out);
-                    self.scan_closure_usage_expr(v, out);
+                    self.scan_closure_usage_expr(k, out, closure_vars);
+                    self.scan_closure_usage_expr(v, out, closure_vars);
                 }
             }
             Expr::BinOp(l, _, r) => {
-                self.scan_closure_usage_expr(l, out);
-                self.scan_closure_usage_expr(r, out);
+                self.scan_closure_usage_expr(l, out, closure_vars);
+                self.scan_closure_usage_expr(r, out, closure_vars);
             }
             Expr::UnaryOp(_, x)
             | Expr::Member(x, _)
             | Expr::Index(x, _)
             | Expr::Await(x)
             | Expr::Propagate(x)
-            | Expr::Raise(x) => self.scan_closure_usage_expr(x, out),
+            | Expr::Raise(x) => self.scan_closure_usage_expr(x, out, closure_vars),
             _ => {}
         }
     }
 
     /// Is an expression a closure object (lambda literal or a call returning a func)?
-    fn expr_is_closure(&self, e: &Expr) -> bool {
+    fn expr_is_closure_with(&self, e: &Expr, closure_vars: &HashSet<String>) -> bool {
         match e {
             Expr::Closure { .. } => true,
             Expr::Call(c, _) => {
@@ -1681,21 +1848,38 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
                     if let Some(k) = self.func_ret_kind.get(n) {
                         return matches!(k, ValKind::Closure);
                     }
+                    // return type Func/FuncSig from signature
+                    if let Some(params) = self.func_params.get(n) {
+                        let _ = params;
+                    }
+                    // Check registered ret kind via funcs table
+                    if let Some((_, ret)) = self.funcs.get(n) {
+                        // free functions that return ptr and name suggests decorator wrappers
+                        let _ = ret;
+                    }
                 }
                 false
             }
-            Expr::Ident(n) => self
-                .local_kind
-                .get(n)
-                .map(|k| matches!(k, ValKind::Closure))
-                .or_else(|| {
-                    self.global_vars
-                        .get(n)
-                        .map(|(_, k)| matches!(k, ValKind::Closure))
-                })
-                .unwrap_or(false),
+            Expr::Ident(n) => {
+                if closure_vars.contains(n) {
+                    return true;
+                }
+                self.local_kind
+                    .get(n)
+                    .map(|k| matches!(k, ValKind::Closure))
+                    .or_else(|| {
+                        self.global_vars
+                            .get(n)
+                            .map(|(_, k)| matches!(k, ValKind::Closure))
+                    })
+                    .unwrap_or(false)
+            }
             _ => false,
         }
+    }
+
+    fn expr_is_closure(&self, e: &Expr) -> bool {
+        self.expr_is_closure_with(e, &HashSet::new())
     }
 
     fn emit_function(&mut self, f: &FuncDef) -> Result<(), String> {
@@ -1841,7 +2025,13 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
                 Ok(true)
             }
             Statement::Return(Some(e)) => {
-                let (v, ty) = self.emit_expr(e)?;
+                let (mut v, mut ty) = self.emit_expr(e)?;
+                // Dict values are BolideDynamic; unwrap when returning as int/float/str.
+                if matches!(self.infer_kind(e), ValKind::Dynamic) {
+                    let (uv, uty) = self.unwrap_dynamic(v, ty, self.current_ret_ty)?;
+                    v = uv;
+                    ty = uty;
+                }
                 let v = self.cast_to(v, ty, self.current_ret_ty)?;
                 let _ = writeln!(self.body, "  ret {} {}", self.current_ret_ty, v);
                 Ok(true)
@@ -1879,17 +2069,365 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
                 Ok(true)
             }
             Statement::Try(t) => self.emit_try(t),
+            Statement::Select(s) => {
+                self.emit_select(s)?;
+                Ok(false)
+            }
+            Statement::Pool(p) => {
+                self.emit_pool(p)?;
+                Ok(false)
+            }
+            Statement::SpawnSelect(s) => {
+                self.emit_spawn_select(s)?;
+                Ok(false)
+            }
             Statement::ClassDef(_)
             | Statement::TraitDef(_)
             | Statement::TraitImpl(_)
             | Statement::With(_)
             | Statement::Yield(_)
-            | Statement::SpawnSelect(_)
-            | Statement::Pool(_)
-            | Statement::Select(_)
-            | Statement::AwaitScope(_) => Ok(false), // already desugared / definitions
+            | Statement::AwaitScope(_)
+            | Statement::ValueDef(_) => Ok(false), // already desugared / definitions
             _ => Ok(false),
         }
+    }
+
+    /// `pool(n) { ... }` — create/enter pool, run body, exit/destroy.
+    fn emit_pool(&mut self, p: &bolide_parser::PoolStmt) -> Result<(), String> {
+        let (sz, sty) = self.emit_expr(&p.size)?;
+        let sz = self.cast_to(sz, sty, "i64")?;
+        let pool = self.fresh();
+        let _ = writeln!(
+            self.body,
+            "  {} = call ptr @bolide_pool_create(i64 {})",
+            pool, sz
+        );
+        let _ = writeln!(self.body, "  call void @bolide_pool_enter(ptr {})", pool);
+        self.pool_depth += 1;
+        let saved = self.snapshot_scopes();
+        for s in &p.body {
+            if self.emit_stmt(s)? {
+                break;
+            }
+        }
+        self.restore_scopes(saved);
+        self.pool_depth = self.pool_depth.saturating_sub(1);
+        let _ = writeln!(self.body, "  call void @bolide_pool_exit()");
+        let _ = writeln!(self.body, "  call void @bolide_pool_destroy(ptr {})", pool);
+        Ok(())
+    }
+
+    /// `spawn select { r = f() => {..}, g() => {..} }` — race pool tasks.
+    fn emit_spawn_select(&mut self, s: &bolide_parser::SpawnSelectStmt) -> Result<(), String> {
+        use bolide_parser::SpawnSelectBranch;
+        if s.branches.is_empty() {
+            return Ok(());
+        }
+        // Ensure a pool exists for the race (create ephemeral pool if not in one)
+        let ephemeral = self.pool_depth == 0;
+        let eph_pool = if ephemeral {
+            let pool = self.fresh();
+            let n = s.branches.len().max(1) as i64;
+            let _ = writeln!(
+                self.body,
+                "  {} = call ptr @bolide_pool_create(i64 {})",
+                pool, n
+            );
+            let _ = writeln!(self.body, "  call void @bolide_pool_enter(ptr {})", pool);
+            self.pool_depth += 1;
+            Some(pool)
+        } else {
+            None
+        };
+
+        let mut handles: Vec<(String, Option<ValKind>)> = Vec::new();
+        for branch in &s.branches {
+            let expr = match branch {
+                SpawnSelectBranch::Bind { expr, .. } | SpawnSelectBranch::Expr { expr, .. } => expr,
+            };
+            let (name, args) = match expr {
+                Expr::Call(c, a) => match c.as_ref() {
+                    Expr::Ident(n) => (n.clone(), a.clone()),
+                    _ => return Err("spawn select: only bare function calls supported".into()),
+                },
+                Expr::Spawn(n, a) | Expr::SpawnThread(n, a) => (n.clone(), a.clone()),
+                Expr::Ident(n) => (n.clone(), vec![]),
+                _ => return Err("spawn select: expected function call".into()),
+            };
+            let (h, _) = self.emit_spawn(&name, &args, false)?;
+            let rk = self.func_ret_kind.get(&name).cloned();
+            handles.push((h, rk));
+        }
+
+        let n = handles.len();
+        let arr = self.fresh_local("__ss_hs");
+        let _ = writeln!(
+            self.body,
+            "  {} = alloca [{} x ptr], align 8",
+            arr, n
+        );
+        for (i, (h, _)) in handles.iter().enumerate() {
+            let gep = self.fresh();
+            let _ = writeln!(
+                self.body,
+                "  {} = getelementptr inbounds [{} x ptr], ptr {}, i64 0, i64 {}",
+                gep, n, arr, i
+            );
+            let _ = writeln!(self.body, "  store ptr {}, ptr {}, align 8", h, gep);
+        }
+        let winner = self.fresh();
+        let _ = writeln!(
+            self.body,
+            "  {} = call i64 @bolide_pool_select_wait_first(ptr {}, i64 {})",
+            winner, arr, n
+        );
+
+        let end_l = self.fresh_label("ss_end");
+        for (i, branch) in s.branches.iter().enumerate() {
+            let arm_l = self.fresh_label(&format!("ss_arm{}", i));
+            let next_l = self.fresh_label(&format!("ss_next{}", i));
+            let cmp = self.fresh();
+            let _ = writeln!(
+                self.body,
+                "  {} = icmp eq i64 {}, {}",
+                cmp, winner, i
+            );
+            let _ = writeln!(
+                self.body,
+                "  br i1 {}, label %{}, label %{}",
+                cmp, arm_l, next_l
+            );
+            let _ = writeln!(self.body, "{}:", arm_l);
+            let saved = self.snapshot_scopes();
+            // join winner (keep result)
+            let (h, rk) = &handles[i];
+            let (res, rty) = self.emit_await_value(h, rk.clone(), true)?;
+            if let SpawnSelectBranch::Bind { var, body, .. } = branch {
+                let slot = self.fresh_local(var);
+                let _ = writeln!(self.body, "  {} = alloca {}, align 8", slot, rty);
+                let _ = writeln!(
+                    self.body,
+                    "  store {} {}, ptr {}, align 8",
+                    rty, res, slot
+                );
+                self.locals.insert(var.clone(), (slot, rty));
+                self.local_kind
+                    .insert(var.clone(), rk.clone().unwrap_or(ValKind::Int));
+                self.mutable.insert(var.clone(), true);
+                for st in body {
+                    if self.emit_stmt(st)? {
+                        break;
+                    }
+                }
+            } else if let SpawnSelectBranch::Expr { body, .. } = branch {
+                let _ = res;
+                for st in body {
+                    if self.emit_stmt(st)? {
+                        break;
+                    }
+                }
+            }
+            // join losers (discard)
+            for (j, (hj, rkj)) in handles.iter().enumerate() {
+                if j != i {
+                    let _ = self.emit_await_value(hj, rkj.clone(), true)?;
+                }
+            }
+            self.restore_scopes(saved);
+            let _ = writeln!(self.body, "  br label %{}", end_l);
+            let _ = writeln!(self.body, "{}:", next_l);
+        }
+        let _ = writeln!(self.body, "  br label %{}", end_l);
+        let _ = writeln!(self.body, "{}:", end_l);
+
+        if let Some(pool) = eph_pool {
+            self.pool_depth = self.pool_depth.saturating_sub(1);
+            let _ = writeln!(self.body, "  call void @bolide_pool_exit()");
+            let _ = writeln!(self.body, "  call void @bolide_pool_destroy(ptr {})", pool);
+        }
+        Ok(())
+    }
+
+    /// `select { x = ch.recv() => {...}, default => {...}, timeout(ms) => {...} }`
+    fn emit_select(&mut self, s: &bolide_parser::SelectStmt) -> Result<(), String> {
+        use bolide_parser::SelectBranch;
+
+        let mut recv_branches: Vec<(&str, &str, &Vec<Statement>)> = Vec::new();
+        let mut timeout_branch: Option<(&Expr, &Vec<Statement>)> = None;
+        let mut default_branch: Option<&Vec<Statement>> = None;
+
+        for branch in &s.branches {
+            match branch {
+                SelectBranch::Recv { var, channel, body } => {
+                    recv_branches.push((var.as_str(), channel.as_str(), body));
+                }
+                SelectBranch::Timeout { duration, body } => {
+                    timeout_branch = Some((duration, body));
+                }
+                SelectBranch::Default { body } => {
+                    default_branch = Some(body);
+                }
+            }
+        }
+
+        // No recv arms: just run default if present
+        if recv_branches.is_empty() {
+            if let Some(body) = default_branch {
+                let saved = self.snapshot_scopes();
+                for stmt in body {
+                    let _ = self.emit_stmt(stmt)?;
+                }
+                self.restore_scopes(saved);
+            }
+            return Ok(());
+        }
+
+        let n = recv_branches.len();
+        // channels: [n x ptr]
+        let arr = self.fresh_local("__sel_chs");
+        let _ = writeln!(
+            self.body,
+            "  {} = alloca [{} x ptr], align 8",
+            arr, n
+        );
+        for (i, (_, ch_name, _)) in recv_branches.iter().enumerate() {
+            let (ch, cty) = self.emit_expr(&Expr::Ident((*ch_name).to_string()))?;
+            let ch = self.cast_to(ch, cty, "ptr")?;
+            let gep = self.fresh();
+            let _ = writeln!(
+                self.body,
+                "  {} = getelementptr inbounds [{} x ptr], ptr {}, i64 0, i64 {}",
+                gep, n, arr, i
+            );
+            let _ = writeln!(self.body, "  store ptr {}, ptr {}, align 8", ch, gep);
+        }
+
+        // value out slot
+        let val_slot = self.fresh_local("__sel_val");
+        let _ = writeln!(self.body, "  {} = alloca i64, align 8", val_slot);
+        let _ = writeln!(self.body, "  store i64 0, ptr {}, align 8", val_slot);
+
+        // timeout: -2 = default present, -1 = block forever, >=0 = ms
+        let timeout_v = if default_branch.is_some() {
+            "-2".to_string()
+        } else if let Some((dur, _)) = &timeout_branch {
+            let (v, ty) = self.emit_expr(dur)?;
+            self.cast_to(v, ty, "i64")?
+        } else {
+            "-1".to_string()
+        };
+
+        let idx = self.fresh();
+        let _ = writeln!(
+            self.body,
+            "  {} = call i64 @bolide_channel_select(ptr {}, i64 {}, i64 {}, ptr {})",
+            idx, arr, n, timeout_v, val_slot
+        );
+
+        let end_l = self.fresh_label("sel_end");
+        // Dispatch each recv arm
+        for (i, (var, _, body)) in recv_branches.iter().enumerate() {
+            let arm_l = self.fresh_label(&format!("sel_arm{}", i));
+            let next_l = self.fresh_label(&format!("sel_next{}", i));
+            let cmp = self.fresh();
+            let _ = writeln!(
+                self.body,
+                "  {} = icmp eq i64 {}, {}",
+                cmp, idx, i
+            );
+            let _ = writeln!(
+                self.body,
+                "  br i1 {}, label %{}, label %{}",
+                cmp, arm_l, next_l
+            );
+            let _ = writeln!(self.body, "{}:", arm_l);
+            let saved = self.snapshot_scopes();
+            // bind received value
+            let slot = self.fresh_local(var);
+            let _ = writeln!(self.body, "  {} = alloca i64, align 8", slot);
+            let raw = self.fresh();
+            let _ = writeln!(
+                self.body,
+                "  {} = load i64, ptr {}, align 8",
+                raw, val_slot
+            );
+            let _ = writeln!(self.body, "  store i64 {}, ptr {}, align 8", raw, slot);
+            self.locals
+                .insert((*var).to_string(), (slot, "i64"));
+            self.local_kind
+                .insert((*var).to_string(), ValKind::Int);
+            self.mutable.insert((*var).to_string(), true);
+            let mut term = false;
+            for stmt in *body {
+                if term {
+                    break;
+                }
+                term = self.emit_stmt(stmt)?;
+            }
+            self.restore_scopes(saved);
+            if !term {
+                let _ = writeln!(self.body, "  br label %{}", end_l);
+            }
+            let _ = writeln!(self.body, "{}:", next_l);
+        }
+
+        // timeout: selected_idx == -1
+        if let Some((_, body)) = timeout_branch {
+            let arm_l = self.fresh_label("sel_timeout");
+            let next_l = self.fresh_label("sel_timeout_next");
+            let cmp = self.fresh();
+            let _ = writeln!(self.body, "  {} = icmp eq i64 {}, -1", cmp, idx);
+            let _ = writeln!(
+                self.body,
+                "  br i1 {}, label %{}, label %{}",
+                cmp, arm_l, next_l
+            );
+            let _ = writeln!(self.body, "{}:", arm_l);
+            let saved = self.snapshot_scopes();
+            let mut term = false;
+            for stmt in body {
+                if term {
+                    break;
+                }
+                term = self.emit_stmt(stmt)?;
+            }
+            self.restore_scopes(saved);
+            if !term {
+                let _ = writeln!(self.body, "  br label %{}", end_l);
+            }
+            let _ = writeln!(self.body, "{}:", next_l);
+        }
+
+        // default: selected_idx == -2
+        if let Some(body) = default_branch {
+            let arm_l = self.fresh_label("sel_default");
+            let next_l = self.fresh_label("sel_default_next");
+            let cmp = self.fresh();
+            let _ = writeln!(self.body, "  {} = icmp eq i64 {}, -2", cmp, idx);
+            let _ = writeln!(
+                self.body,
+                "  br i1 {}, label %{}, label %{}",
+                cmp, arm_l, next_l
+            );
+            let _ = writeln!(self.body, "{}:", arm_l);
+            let saved = self.snapshot_scopes();
+            let mut term = false;
+            for stmt in body {
+                if term {
+                    break;
+                }
+                term = self.emit_stmt(stmt)?;
+            }
+            self.restore_scopes(saved);
+            if !term {
+                let _ = writeln!(self.body, "  br label %{}", end_l);
+            }
+            let _ = writeln!(self.body, "{}:", next_l);
+        }
+
+        let _ = writeln!(self.body, "  br label %{}", end_l);
+        let _ = writeln!(self.body, "{}:", end_l);
+        Ok(())
     }
 
     fn emit_var_decl(&mut self, d: &VarDecl) -> Result<(), String> {
@@ -1903,10 +2441,13 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
         let ty = kind_to_llvm(&kind);
         let slot = self.fresh_local(&d.name);
         let _ = writeln!(self.body, "  {} = alloca {}, align 8", slot, ty);
-        // a local holding a spawn handle → await should use thread_join
+        // a local holding a spawn handle → await should use join
         if let Some(ref v) = d.value {
             if matches!(v, Expr::Spawn(_, _) | Expr::SpawnThread(_, _)) {
                 self.spawn_vars.insert(d.name.clone());
+                if self.pool_depth > 0 && matches!(v, Expr::Spawn(_, _)) {
+                    self.pool_spawn_vars.insert(d.name.clone());
+                }
             }
         }
         if let Some(ref v) = d.value {
@@ -1921,6 +2462,12 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
                     _ => 0,
                 };
                 (self.emit_list_lit_tagged(items, tag)?.0, "ptr")
+            } else if let (Some(Type::Dict(k, vty_ann)), Expr::Dict(pairs)) = (&d.ty, v) {
+                (
+                    self.emit_dict_lit_tagged(pairs, Some(k.as_ref()), Some(vty_ann.as_ref()))?
+                        .0,
+                    "ptr",
+                )
             } else {
                 self.emit_expr(v)?
             };
@@ -1976,12 +2523,20 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
                             name
                         ));
                     }
-                    let (val, vty) = self.emit_expr(&a.value)?;
+                    let (mut val, mut vty) = self.emit_expr(&a.value)?;
+                    if matches!(self.infer_kind(&a.value), ValKind::Dynamic) {
+                        let (uv, uty) = self.unwrap_dynamic(val, vty, ty)?;
+                        val = uv;
+                        vty = uty;
+                    }
                     let val = self.cast_to(val, vty, ty)?;
                     let _ = writeln!(self.body, "  store {} {}, ptr {}, align 8", ty, val, slot);
-                    // update kind if RHS is list
+                    // Prefer declared slot kind for typed locals; keep Dynamic only if slot is ptr
+                    // without a stronger known kind.
                     let k = self.infer_kind(&a.value);
-                    self.local_kind.insert(name.clone(), k);
+                    if !matches!(k, ValKind::Dynamic) {
+                        self.local_kind.insert(name.clone(), k);
+                    }
                     return Ok(());
                 }
                 if let Some((ty, _)) = self.global_vars.get(name).cloned() {
@@ -2347,7 +2902,7 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
             } else {
                 elem_kind = kind_of_type(&m.return_type);
                 // if next returns ptr Option, keep Int as default for payload
-                if matches!(elem_kind, ValKind::Adt(_) | ValKind::Ptr) {
+                if matches!(elem_kind, ValKind::Adt(_, _) | ValKind::Ptr) {
                     elem_kind = ValKind::Int;
                 }
             }
@@ -2670,8 +3225,60 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
             Expr::Member(base, member) => self.emit_member_load(base, member),
             Expr::None => Ok(("null".into(), "ptr")),
             Expr::Tuple(items) => {
-                // simple: pack as list of mixed ints (limited)
-                self.emit_list_lit(items)
+                let n = items.len();
+                let tags = self.fresh_local("__tup_tags");
+                let _ = writeln!(
+                    self.body,
+                    "  {} = alloca [{} x i8], align 1",
+                    tags,
+                    n.max(1)
+                );
+                let mut packs: Vec<(String, u8)> = Vec::new();
+                for (i, it) in items.iter().enumerate() {
+                    let k = self.infer_kind(it);
+                    // ElementType: Int=0 Float=1 Bool=2 String=3 BigInt=4 Decimal=5
+                    // List=6 Ptr=7 Dict=8 Dynamic=9 Bytes=10 Closure=11 Object=12
+                    let tag: u8 = match k {
+                        ValKind::Float => 1,
+                        ValKind::Bool => 2,
+                        ValKind::Str => 3,
+                        ValKind::BigInt => 4,
+                        ValKind::List(_) | ValKind::ListObj(_) | ValKind::NestedList(_) => 6,
+                        ValKind::Ptr => 7,
+                        ValKind::Dict => 8,
+                        ValKind::Dynamic => 9,
+                        ValKind::Bytes => 10,
+                        ValKind::Closure => 11,
+                        ValKind::Object(_) | ValKind::Adt(_, _) | ValKind::Tuple(_) => 12,
+                        _ => 0,
+                    };
+                    let gep = self.fresh();
+                    let _ = writeln!(
+                        self.body,
+                        "  {} = getelementptr inbounds [{} x i8], ptr {}, i64 0, i64 {}",
+                        gep,
+                        n.max(1),
+                        tags,
+                        i
+                    );
+                    let _ = writeln!(self.body, "  store i8 {}, ptr {}, align 1", tag, gep);
+                    let (v, ty) = self.emit_expr(it)?;
+                    packs.push((self.pack_as_i64(v, ty)?, tag));
+                }
+                let d = self.fresh();
+                let _ = writeln!(
+                    self.body,
+                    "  {} = call ptr @bolide_tuple_new_typed(i64 {}, ptr {})",
+                    d, n, tags
+                );
+                for (i, (p, tag)) in packs.iter().enumerate() {
+                    let _ = writeln!(
+                        self.body,
+                        "  call void @bolide_tuple_set_typed(ptr {}, i64 {}, i64 {}, i8 {})",
+                        d, i, p, tag
+                    );
+                }
+                Ok((d, "ptr"))
             }
             Expr::BigInt(s) => {
                 // BolideBigInt is a heap object (ptr). Small values via
@@ -2743,7 +3350,7 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
                 Ok((raw, "i64"))
             }
             Expr::Raise(e) => {
-                // `expr!` — unwrap or throw
+                // `expr!` — unwrap Result/Option or throw Err/None payload
                 let (v, _) = self.emit_expr(e)?;
                 let tagp = self.fresh();
                 let _ = writeln!(
@@ -2754,6 +3361,7 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
                 let tag = self.fresh();
                 let _ = writeln!(self.body, "  {} = load i64, ptr {}, align 8", tag, tagp);
                 let bad = self.fresh();
+                // Result: Ok=0 Err=1; Option: Some=0 None=1
                 let _ = writeln!(self.body, "  {} = icmp ne i64 {}, 0", bad, tag);
                 let err_l = self.fresh_label("raise_err");
                 let ok_l = self.fresh_label("raise_ok");
@@ -2763,15 +3371,70 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
                     bad, err_l, ok_l
                 );
                 let _ = writeln!(self.body, "{}:", err_l);
+                // Payload at offset 8 is the Err/None value (often an Error object ptr)
+                let efp = self.fresh();
                 let _ = writeln!(
                     self.body,
-                    "  call void @bolide_exception_set(ptr {}, i64 0)",
-                    v
+                    "  {} = getelementptr i8, ptr {}, i64 8",
+                    efp, v
+                );
+                let epay = self.fresh();
+                let _ = writeln!(self.body, "  {} = load i64, ptr {}, align 8", epay, efp);
+                let eptr = self.fresh();
+                let _ = writeln!(
+                    self.body,
+                    "  {} = inttoptr i64 {} to ptr",
+                    eptr, epay
+                );
+                // Prefer throwing the Err payload; if null (Option.None), throw the ADT itself
+                let is_null = self.fresh();
+                let _ = writeln!(
+                    self.body,
+                    "  {} = icmp eq ptr {}, null",
+                    is_null, eptr
+                );
+                let use_payload = self.fresh_label("raise_pay");
+                let use_adt = self.fresh_label("raise_adt");
+                let do_throw = self.fresh_label("raise_do");
+                let thr = self.fresh_local("__thr");
+                let _ = writeln!(self.body, "  {} = alloca ptr, align 8", thr);
+                let _ = writeln!(
+                    self.body,
+                    "  br i1 {}, label %{}, label %{}",
+                    is_null, use_adt, use_payload
+                );
+                let _ = writeln!(self.body, "{}:", use_payload);
+                let _ = writeln!(self.body, "  store ptr {}, ptr {}, align 8", eptr, thr);
+                let _ = writeln!(self.body, "  br label %{}", do_throw);
+                let _ = writeln!(self.body, "{}:", use_adt);
+                let _ = writeln!(self.body, "  store ptr {}, ptr {}, align 8", v, thr);
+                let _ = writeln!(self.body, "  br label %{}", do_throw);
+                let _ = writeln!(self.body, "{}:", do_throw);
+                let thrv = self.fresh();
+                let _ = writeln!(
+                    self.body,
+                    "  {} = load ptr, ptr {}, align 8",
+                    thrv, thr
+                );
+                let etag = self.fresh();
+                let _ = writeln!(
+                    self.body,
+                    "  {} = call i64 @object_class_tag(ptr {})",
+                    etag, thrv
+                );
+                let _ = writeln!(
+                    self.body,
+                    "  call void @bolide_exception_set(ptr {}, i64 {})",
+                    thrv, etag
                 );
                 if let Some(catch_l) = self.catch_stack.last().cloned() {
                     let _ = writeln!(self.body, "  br label %{}", catch_l);
                 } else {
-                    let _ = writeln!(self.body, "  call void @bolide_throw_uncaught(ptr {})", v);
+                    let _ = writeln!(
+                        self.body,
+                        "  call void @bolide_throw_uncaught(ptr {})",
+                        thrv
+                    );
                     let _ = writeln!(self.body, "  unreachable");
                 }
                 let _ = writeln!(self.body, "{}:", ok_l);
@@ -2786,20 +3449,140 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
                 Ok((raw, "i64"))
             }
             Expr::ValueConstruct(name, fields) => {
-                // treat as class constructor by field order if class exists
+                // value types are registered as class-like layouts
                 if self.classes.contains_key(name) {
                     let ci = self.classes.get(name).unwrap().clone();
                     let mut args = Vec::new();
                     for f in &ci.fields {
                         if let Some((_, e)) = fields.iter().find(|(n, _)| n == &f.name) {
                             args.push(e.clone());
+                        } else if let Some(def) = &f.default_value {
+                            args.push(def.clone());
                         } else {
-                            args.push(Expr::Int(0));
+                            args.push(match type_llvm(&f.ty) {
+                                "double" => Expr::Float(0.0),
+                                "ptr" => Expr::None,
+                                _ => Expr::Int(0),
+                            });
                         }
                     }
                     return self.emit_named_call(name, &args);
                 }
                 Err(format!("LLVM: unknown value type '{}'", name))
+            }
+            Expr::TryExpr(body) => {
+                // `try { stmts; last_expr }` → Result.Ok(last) or Result.Err on throw
+                // Implement as try/catch that builds Result ADT.
+                let end_l = self.fresh_label("tryexpr_end");
+                let catch_l = self.fresh_label("tryexpr_catch");
+                let ok_l = self.fresh_label("tryexpr_ok");
+                let slot = self.fresh_local("__te_res");
+                let _ = writeln!(self.body, "  {} = alloca ptr, align 8", slot);
+                self.catch_stack.push(catch_l.clone());
+                let saved = self.snapshot_scopes();
+                let mut last_val: Option<(String, &'static str)> = None;
+                let mut term = false;
+                for (i, s) in body.iter().enumerate() {
+                    if term {
+                        break;
+                    }
+                    let is_last = i + 1 == body.len();
+                    if is_last {
+                        if let Statement::Expr(e) = s {
+                            last_val = Some(self.emit_expr(e)?);
+                            continue;
+                        }
+                    }
+                    term = self.emit_stmt(s)?;
+                }
+                self.catch_stack.pop();
+                // build Result.Ok
+                let ok_obj = self.fresh();
+                let _ = writeln!(
+                    self.body,
+                    "  {} = call ptr @object_alloc(i64 16)",
+                    ok_obj
+                );
+                let tp = self.fresh();
+                let _ = writeln!(
+                    self.body,
+                    "  {} = getelementptr i8, ptr {}, i64 0",
+                    tp, ok_obj
+                );
+                let _ = writeln!(self.body, "  store i64 0, ptr {}, align 8", tp); // Ok tag
+                if let Some((v, ty)) = last_val {
+                    let packed = self.pack_as_i64(v, ty)?;
+                    let fp = self.fresh();
+                    let _ = writeln!(
+                        self.body,
+                        "  {} = getelementptr i8, ptr {}, i64 8",
+                        fp, ok_obj
+                    );
+                    let _ = writeln!(self.body, "  store i64 {}, ptr {}, align 8", packed, fp);
+                }
+                let _ = writeln!(
+                    self.body,
+                    "  store ptr {}, ptr {}, align 8",
+                    ok_obj, slot
+                );
+                self.restore_scopes(saved);
+                if !term {
+                    let _ = writeln!(self.body, "  br label %{}", end_l);
+                } else {
+                    // terminated inside (return/throw handled)
+                    let _ = writeln!(self.body, "  br label %{}", end_l);
+                }
+                let _ = writeln!(self.body, "{}:", catch_l);
+                // Result.Err(exception object)
+                let err_obj = self.fresh();
+                let _ = writeln!(
+                    self.body,
+                    "  {} = call ptr @object_alloc(i64 16)",
+                    err_obj
+                );
+                let et = self.fresh();
+                let _ = writeln!(
+                    self.body,
+                    "  {} = getelementptr i8, ptr {}, i64 0",
+                    et, err_obj
+                );
+                let _ = writeln!(self.body, "  store i64 1, ptr {}, align 8", et); // Err tag
+                let exc = self.fresh();
+                let _ = writeln!(
+                    self.body,
+                    "  {} = call ptr @bolide_exception_get()",
+                    exc
+                );
+                let efp = self.fresh();
+                let _ = writeln!(
+                    self.body,
+                    "  {} = getelementptr i8, ptr {}, i64 8",
+                    efp, err_obj
+                );
+                // store exception ptr as i64
+                let ep = self.fresh();
+                let _ = writeln!(self.body, "  {} = ptrtoint ptr {} to i64", ep, exc);
+                let _ = writeln!(self.body, "  store i64 {}, ptr {}, align 8", ep, efp);
+                // clear pending
+                let _ = writeln!(
+                    self.body,
+                    "  call void @bolide_exception_set(ptr null, i64 0)"
+                );
+                let _ = writeln!(
+                    self.body,
+                    "  store ptr {}, ptr {}, align 8",
+                    err_obj, slot
+                );
+                let _ = writeln!(self.body, "  br label %{}", end_l);
+                let _ = writeln!(self.body, "{}:", end_l);
+                let out = self.fresh();
+                let _ = writeln!(
+                    self.body,
+                    "  {} = load ptr, ptr {}, align 8",
+                    out, slot
+                );
+                let _ = ok_l;
+                Ok((out, "ptr"))
             }
             Expr::Slice(base, start, end, _step) => {
                 // list/string slice via runtime if available — simplified list rebuild
@@ -2864,10 +3647,18 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
             Expr::SpawnThread(name, args) => self.emit_spawn(name, args, true),
             Expr::Await(inner) => self.emit_await(inner),
             Expr::SpawnAll(items) => {
-                // spawn each task, await all, collect results into a list
-                let list = self.fresh();
-                let _ = writeln!(self.body, "  {} = call ptr @bolide_list_new(i8 0)", list);
-                for it in items {
+                // spawn each task, await all, pack results into a typed tuple
+                // (matches Cranelift: `spawn all { a(), b() }` → `(Ta, Tb)`)
+                let n = items.len();
+                // type tags array: ElementType Int=0 for now (ints from tasks)
+                let tags = self.fresh_local("__sa_tags");
+                let _ = writeln!(
+                    self.body,
+                    "  {} = alloca [{} x i8], align 1",
+                    tags, n.max(1)
+                );
+                let mut packed_vals: Vec<(String, u8)> = Vec::new();
+                for (i, it) in items.iter().enumerate() {
                     let (name, args) = match it {
                         Expr::Call(callee, args) => match callee.as_ref() {
                             Expr::Ident(n) => (n.clone(), args.clone()),
@@ -2880,15 +3671,51 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
                     };
                     let (h, _) = self.emit_spawn(&name, &args, false)?;
                     let ret_kind = self.func_ret_kind.get(&name).cloned();
-                    let (res, rty) = self.emit_await_value(&h, ret_kind, true)?;
-                    let packed = self.pack_as_i64(res, rty)?;
+                    // ElementType: Int=0 Float=1 Bool=2 String=3 BigInt=4 Decimal=5
+                    // List=6 Ptr=7 Dict=8 Dynamic=9 Bytes=10 Closure=11 Object=12
+                    let tag: u8 = match &ret_kind {
+                        Some(ValKind::Float) => 1,
+                        Some(ValKind::Bool) => 2,
+                        Some(ValKind::Str) => 3,
+                        Some(ValKind::BigInt) => 4,
+                        Some(ValKind::List(_) | ValKind::ListObj(_) | ValKind::NestedList(_)) => 6,
+                        Some(ValKind::Dict) => 8,
+                        Some(ValKind::Dynamic) => 9,
+                        Some(ValKind::Bytes) => 10,
+                        Some(ValKind::Closure) => 11,
+                        Some(ValKind::Object(_) | ValKind::Adt(_, _) | ValKind::Tuple(_)) => 12,
+                        Some(ValKind::Ptr) => 7,
+                        _ => 0,
+                    };
+                    let tgep = self.fresh();
                     let _ = writeln!(
                         self.body,
-                        "  call void @bolide_list_push(ptr {}, i64 {})",
-                        list, packed
+                        "  {} = getelementptr inbounds [{} x i8], ptr {}, i64 0, i64 {}",
+                        tgep,
+                        n.max(1),
+                        tags,
+                        i
+                    );
+                    let _ = writeln!(self.body, "  store i8 {}, ptr {}, align 1", tag, tgep);
+                    let (res, rty) = self.emit_await_value(&h, ret_kind, true)?;
+                    let packed = self.pack_as_i64(res, rty)?;
+                    packed_vals.push((packed, tag));
+                }
+                let tup = self.fresh();
+                let _ = writeln!(
+                    self.body,
+                    "  {} = call ptr @bolide_tuple_new_typed(i64 {}, ptr {})",
+                    tup, n, tags
+                );
+                for (i, (packed, tag)) in packed_vals.iter().enumerate() {
+                    // set_typed preserves the element type tag (plain set overwrites to Int)
+                    let _ = writeln!(
+                        self.body,
+                        "  call void @bolide_tuple_set_typed(ptr {}, i64 {}, i64 {}, i8 {})",
+                        tup, i, packed, tag
                     );
                 }
-                Ok((list, "ptr"))
+                return Ok((tup, "ptr"));
             }
             other => Err(format!(
                 "LLVM backend: unsupported expression {:?}",
@@ -2936,12 +3763,12 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
             ValKind::Float => 1,
             ValKind::Bool => 2,
             ValKind::Str => 3,
-            ValKind::Object(_) | ValKind::Adt(_) | ValKind::Dict | ValKind::Ptr => 4,
+            ValKind::Object(_) | ValKind::Adt(_, _) | ValKind::Dict | ValKind::Ptr => 4,
             _ => 0,
         };
         let result_list_kind = match &elem_kind {
             ValKind::Object(n) => ValKind::ListObj(n.clone()),
-            ValKind::Adt(n) => ValKind::ListObj(n.clone()),
+            ValKind::Adt(n, _) => ValKind::ListObj(n.clone()),
             _ => ValKind::List(elem_tag),
         };
         let result_name = format!("__lc_{}", self.tmp);
@@ -3050,8 +3877,36 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
         }
     }
 
+    /// ElementType tag for dict keys/values: Int=0 Float=1 Bool=2 String=3 ...
+    fn elem_tag_of_type(ty: &Type) -> u8 {
+        match ty {
+            Type::Float | Type::Decimal => 1,
+            Type::Bool => 2,
+            Type::Str => 3,
+            Type::BigInt => 4,
+            Type::List(_) => 6,
+            Type::Dict(_, _) => 8,
+            Type::Dynamic => 9,
+            Type::Bytes => 10,
+            Type::Func | Type::FuncSig(_, _) => 11,
+            Type::Custom(_) | Type::Adt(_, _) | Type::Dyn(_) => 12,
+            _ => 0,
+        }
+    }
+
     fn emit_dict_lit(&mut self, pairs: &[(Expr, Expr)]) -> Result<(String, &'static str), String> {
-        let key_tag: u8 = if pairs
+        self.emit_dict_lit_tagged(pairs, None, None)
+    }
+
+    fn emit_dict_lit_tagged(
+        &mut self,
+        pairs: &[(Expr, Expr)],
+        key_ty: Option<&Type>,
+        val_ty: Option<&Type>,
+    ) -> Result<(String, &'static str), String> {
+        let key_tag: u8 = if let Some(kt) = key_ty {
+            Self::elem_tag_of_type(kt)
+        } else if pairs
             .first()
             .map(|(k, _)| matches!(self.infer_kind(k), ValKind::Str))
             .unwrap_or(false)
@@ -3061,12 +3916,20 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
             0
         };
         // Dict values are stored as BolideDynamic wrappers (value_type=9) so that
-        // reads (`row["key"]`) return a uniform dynamic the runtime can convert,
-        // and `where_eq` comparisons see the same representation as the query
-        // value. (Using the FIRST value's type for a mixed dict would store e.g. a
-        // bool as a string → the runtime reads it as a pointer and crashes.)
+        // reads (`row["key"]`) return a uniform dynamic the runtime can convert.
+        // Prefer Dynamic for value storage even when typed, unless caller forces.
         let use_dynamic = true;
-        let val_tag: u8 = 9;
+        let val_tag: u8 = if let Some(vt) = val_ty {
+            if matches!(vt, Type::Dynamic) {
+                9
+            } else if use_dynamic {
+                9
+            } else {
+                Self::elem_tag_of_type(vt)
+            }
+        } else {
+            9
+        };
         let d = self.fresh();
         let _ = writeln!(
             self.body,
@@ -3160,12 +4023,10 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
         let _ = writeln!(self.body, "  store i64 {}, ptr {}, align 8", v.tag, tp);
         for (i, arg) in args.iter().enumerate() {
             let (val, vty) = self.emit_expr(arg)?;
-            let lty = type_llvm(&v.fields[i].ty);
-            // Generic fields: store as i64/ptr best-effort
-            let store_ty = if lty == "double" {
+            // Pack all non-float payloads as i64 (ptr via ptrtoint) so match
+            // can load consistently regardless of Generic vs concrete field types.
+            let store_ty = if vty == "double" {
                 "double"
-            } else if vty == "ptr" || lty == "ptr" {
-                "ptr"
             } else {
                 "i64"
             };
@@ -3216,7 +4077,7 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
                 let _ = writeln!(self.body, "  {} = load double, ptr {}, align 8", r, a);
                 Ok((r, "double"))
             }
-            ValKind::Str | ValKind::List(_) | ValKind::Dict | ValKind::Object(_) | ValKind::Adt(_)
+            ValKind::Str | ValKind::List(_) | ValKind::Dict | ValKind::Object(_) | ValKind::Adt(_, _)
             | ValKind::Ptr => {
                 let r = self.cast_to(v, "i64", "ptr")?;
                 Ok((r, "ptr"))
@@ -3332,6 +4193,43 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
             let _ = writeln!(self.body, "  {} = inttoptr i64 {} to ptr", p, d);
             return Ok((p, "ptr"));
         }
+        if let ValKind::Tuple(ref elems) = base_kind {
+            let ix = self.cast_to(ix, ixty, "i64")?;
+            let d = self.fresh();
+            let _ = writeln!(
+                self.body,
+                "  {} = call i64 @bolide_tuple_get(ptr {}, i64 {})",
+                d, base_v, ix
+            );
+            // Prefer int element kind when known; otherwise i64
+            let elem_k = elems.first().cloned().unwrap_or(ValKind::Int);
+            return match elem_k {
+                ValKind::Float => {
+                    let a = self.fresh();
+                    let _ = writeln!(self.body, "  {} = alloca i64, align 8", a);
+                    let _ = writeln!(self.body, "  store i64 {}, ptr {}, align 8", d, a);
+                    let r = self.fresh();
+                    let _ = writeln!(self.body, "  {} = load double, ptr {}, align 8", r, a);
+                    Ok((r, "double"))
+                }
+                ValKind::Str
+                | ValKind::List(_)
+                | ValKind::ListObj(_)
+                | ValKind::Ptr
+                | ValKind::Object(_)
+                | ValKind::Adt(_, _)
+                | ValKind::Bytes
+                | ValKind::BigInt
+                | ValKind::Dict
+                | ValKind::Dynamic
+                | ValKind::Tuple(_) => {
+                    let p = self.fresh();
+                    let _ = writeln!(self.body, "  {} = inttoptr i64 {} to ptr", p, d);
+                    Ok((p, "ptr"))
+                }
+                _ => Ok((d, "i64")),
+            };
+        }
         if matches!(base_kind, ValKind::Str) {
             let ix = self.cast_to(ix, ixty, "i64")?;
             let d = self.fresh();
@@ -3363,26 +4261,21 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
             _ => list_tag_to_kind(tag),
         };
         let raw = self.emit_list_get_inline(&base_v, &ix, tag)?;
+        // unpack_list_value already inttoptr's NestedList / List / object elements
         let v = self.unpack_list_value(raw, &kind)?;
-        // nested list element is a list pointer stored as i64 → inttoptr
-        if matches!(base_kind, ValKind::NestedList(_)) {
-            let p = self.fresh();
-            let _ = writeln!(self.body, "  {} = inttoptr i64 {} to ptr", p, v);
-            return Ok((p, "ptr"));
-        }
         Ok((v, kind_to_llvm(&kind)))
     }
 
     fn emit_match(&mut self, m: &bolide_parser::MatchStmt) -> Result<bool, String> {
         let scrut_kind = self.infer_kind(&m.expr);
         let (scrut, _) = self.emit_expr(&m.expr)?;
-        let adt_name = match scrut_kind {
-            ValKind::Adt(n) => n,
-            ValKind::Object(n) if self.adts.contains_key(&n) => n,
+        let (adt_name, type_args) = match &scrut_kind {
+            ValKind::Adt(n, args) => (n.clone(), args.clone()),
+            ValKind::Object(n) if self.adts.contains_key(n) => (n.clone(), vec![]),
             // next() returns Option ptr often inferred as Ptr/Object — try Option
             ValKind::Ptr | ValKind::Object(_) => {
                 if self.adts.contains_key("Option") {
-                    "Option".into()
+                    ("Option".into(), vec![])
                 } else {
                     return Err(format!(
                         "LLVM match: unsupported scrutinee kind {:?}",
@@ -3416,6 +4309,10 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
         let mut all_term = true;
         let mut need_end = false;
         let mut open_next: Option<String> = None;
+        // Outer scope for the whole match: pattern bindings must not leak
+        // (shadowed names like `Leaf(value)` would otherwise leave an arm-local
+        // alloca that does not dominate uses after the match).
+        let match_saved = self.snapshot_scopes();
         for (i, arm) in m.arms.iter().enumerate() {
             // Close previous next-label fallthrough: start matching this arm there
             if let Some(prev) = open_next.take() {
@@ -3423,6 +4320,8 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
             }
             let body_l = self.fresh_label(&format!("match_arm{}", i));
             let next_l = self.fresh_label(&format!("match_next{}", i));
+            // Each arm gets a fresh scope snapshot from the pre-match bindings.
+            self.restore_scopes(match_saved.clone());
             match &arm.pattern {
                 Pattern::Wildcard | Pattern::Bind(_) => {
                     let _ = writeln!(self.body, "  br label %{}", body_l);
@@ -3437,7 +4336,7 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
                         );
                         self.locals.insert(name.clone(), (slot, "ptr"));
                         self.local_kind
-                            .insert(name.clone(), ValKind::Adt(adt_name.clone()));
+                            .insert(name.clone(), ValKind::Adt(adt_name.clone(), vec![]));
                         self.mutable.insert(name.clone(), true);
                     }
                     let mut term = false;
@@ -3493,13 +4392,28 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
                     for (fi, pat) in fields.iter().enumerate() {
                         if let Pattern::Bind(name) = pat {
                             let off = vinfo.fields[fi].offset;
-                            let fty = &vinfo.fields[fi].ty;
-                            let lty = type_llvm(fty);
-                            let load_ty = if matches!(fty, Type::Generic(_)) {
-                                "i64"
-                            } else {
-                                lty
+                            let fty_raw = &vinfo.fields[fi].ty;
+                            // Resolve Generic("T") against the scrutinee's type args
+                            // so Result.Err(e) binds e: str when Result is Result<int,str>.
+                            let fty_resolved: Type = match fty_raw {
+                                Type::Generic(tp) => {
+                                    if let Some(idx) =
+                                        adt.type_params.iter().position(|p| p == tp)
+                                    {
+                                        type_args
+                                            .get(idx)
+                                            .cloned()
+                                            .unwrap_or_else(|| fty_raw.clone())
+                                    } else {
+                                        fty_raw.clone()
+                                    }
+                                }
+                                other => other.clone(),
                             };
+                            let kind = kind_of_type(&Some(fty_resolved.clone()));
+                            // ADT fields are always packed as i64 (pointers via
+                            // ptrtoint) except floats. Load i64 then unpack.
+                            let is_float = matches!(kind, ValKind::Float);
                             let fp = self.fresh();
                             let _ = writeln!(
                                 self.body,
@@ -3507,31 +4421,64 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
                                 fp, scrut, off
                             );
                             let raw = self.fresh();
-                            let _ = writeln!(
-                                self.body,
-                                "  {} = load {}, ptr {}, align 8",
-                                raw, load_ty, fp
-                            );
-                            let slot = self.fresh_local(name);
-                            let store_ty = if load_ty == "double" {
-                                "double"
-                            } else if load_ty == "ptr" {
-                                "ptr"
+                            if is_float {
+                                let _ = writeln!(
+                                    self.body,
+                                    "  {} = load double, ptr {}, align 8",
+                                    raw, fp
+                                );
                             } else {
-                                "i64"
+                                let _ = writeln!(
+                                    self.body,
+                                    "  {} = load i64, ptr {}, align 8",
+                                    raw, fp
+                                );
+                            }
+                            let (val, store_ty) = if is_float {
+                                (raw, "double")
+                            } else if matches!(
+                                kind,
+                                ValKind::Str
+                                    | ValKind::List(_)
+                                    | ValKind::ListObj(_)
+                                    | ValKind::NestedList(_)
+                                    | ValKind::Dict
+                                    | ValKind::Object(_)
+                                    | ValKind::Adt(_, _)
+                                    | ValKind::Ptr
+                                    | ValKind::Bytes
+                                    | ValKind::BigInt
+                                    | ValKind::Dynamic
+                                    | ValKind::Closure
+                            ) {
+                                let p = self.fresh();
+                                let _ = writeln!(
+                                    self.body,
+                                    "  {} = inttoptr i64 {} to ptr",
+                                    p, raw
+                                );
+                                (p, "ptr")
+                            } else {
+                                (raw, "i64")
                             };
+                            let slot = self.fresh_local(name);
                             let _ = writeln!(self.body, "  {} = alloca {}, align 8", slot, store_ty);
                             let _ = writeln!(
                                 self.body,
                                 "  store {} {}, ptr {}, align 8",
-                                store_ty, raw, slot
+                                store_ty, val, slot
                             );
                             self.locals.insert(name.clone(), (slot, store_ty));
-                            self.local_kind
-                                .insert(name.clone(), kind_of_type(&Some(fty.clone())));
-                            if matches!(fty, Type::Generic(_)) {
-                                self.local_kind.insert(name.clone(), ValKind::Int);
-                            }
+                            // Nested recursive ADT (Tree.Pair(left, right)): keep Adt kind
+                            let final_kind = match &fty_resolved {
+                                Type::Custom(n) | Type::Adt(n, _)
+                                    if n == &adt_name || self.adts.contains_key(n) =>
+                                {
+                                    ValKind::Adt(n.clone(), type_args.clone())
+                                }
+                                _ => kind,
+                            };
+                            self.local_kind.insert(name.clone(), final_kind);
                             self.mutable.insert(name.clone(), true);
                         }
                     }
@@ -3587,6 +4534,9 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
                 }
             }
         }
+        // Restore outer bindings so code after the match sees pre-match locals
+        // (pattern shadows must not escape).
+        self.restore_scopes(match_saved);
         if let Some(prev) = open_next {
             let _ = writeln!(self.body, "{}:", prev);
             need_end = true;
@@ -3634,6 +4584,12 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
         let catch_l = self.fresh_label("catch");
         let end_l = self.fresh_label("try_end");
         let try_l = self.fresh_label("try_body");
+        // Both try-success and catch join into finally (if present) before end.
+        let after_try_l = if t.finally.is_some() {
+            self.fresh_label("try_join_fin")
+        } else {
+            end_l.clone()
+        };
         self.catch_stack.push(catch_l.clone());
         let _ = writeln!(self.body, "  br label %{}", try_l);
         let _ = writeln!(self.body, "{}:", try_l);
@@ -3648,7 +4604,7 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
         }
         self.restore_scopes(saved_try);
         if !try_term {
-            let _ = writeln!(self.body, "  br label %{}", end_l);
+            let _ = writeln!(self.body, "  br label %{}", after_try_l);
         }
         self.catch_stack.pop();
 
@@ -3658,6 +4614,11 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
             let saved_catch = self.snapshot_scopes();
             let ex = self.fresh();
             let _ = writeln!(self.body, "  {} = call ptr @bolide_exception_get()", ex);
+            // clear pending so subsequent code is clean
+            let _ = writeln!(
+                self.body,
+                "  call void @bolide_exception_set(ptr null, i64 0)"
+            );
             let slot = self.fresh_local(&cc.var);
             let _ = writeln!(self.body, "  {} = alloca ptr, align 8", slot);
             let _ = writeln!(self.body, "  store ptr {}, ptr {}, align 8", ex, slot);
@@ -3674,18 +4635,16 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
             }
             self.restore_scopes(saved_catch);
             if !term {
-                let _ = writeln!(self.body, "  br label %{}", end_l);
+                let _ = writeln!(self.body, "  br label %{}", after_try_l);
             }
         } else {
-            let _ = writeln!(self.body, "  br label %{}", end_l);
+            // no catch: rethrow after finally if we had an exception — for empty
+            // catch (with-desugar), just continue to finally
+            let _ = writeln!(self.body, "  br label %{}", after_try_l);
         }
 
         if let Some(fin) = &t.finally {
-            // simplified: finally after catch/try join
-            let fin_l = self.fresh_label("finally");
-            // re-route end to finally first — patch by inserting finally before end
-            let _ = writeln!(self.body, "  br label %{}", fin_l);
-            let _ = writeln!(self.body, "{}:", fin_l);
+            let _ = writeln!(self.body, "{}:", after_try_l);
             let saved_fin = self.snapshot_scopes();
             for s in fin {
                 let _ = self.emit_stmt(s)?;
@@ -3910,7 +4869,7 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
             ValKind::Str
             | ValKind::Ptr
             | ValKind::Object(_)
-            | ValKind::Adt(_)
+            | ValKind::Adt(_, _)
             | ValKind::Closure
             | ValKind::Dict
             | ValKind::List(_)
@@ -4082,6 +5041,38 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
             return Ok((d, "ptr"));
         }
 
+        // list + list → clone(left) then extend with right (same as Cranelift)
+        if matches!(op, BinOp::Add) {
+            let lk = self.infer_kind(l);
+            let rk = self.infer_kind(r);
+            let left_is_list = matches!(
+                lk,
+                ValKind::List(_) | ValKind::ListObj(_) | ValKind::NestedList(_)
+            );
+            let right_is_list = matches!(
+                rk,
+                ValKind::List(_) | ValKind::ListObj(_) | ValKind::NestedList(_)
+            );
+            if left_is_list && right_is_list {
+                let (lv, lt) = self.emit_expr(l)?;
+                let (rv, rt) = self.emit_expr(r)?;
+                let lv = self.cast_to(lv, lt, "ptr")?;
+                let rv = self.cast_to(rv, rt, "ptr")?;
+                let d = self.fresh();
+                let _ = writeln!(
+                    self.body,
+                    "  {} = call ptr @bolide_list_clone(ptr {})",
+                    d, lv
+                );
+                let _ = writeln!(
+                    self.body,
+                    "  call void @bolide_list_extend(ptr {}, ptr {})",
+                    d, rv
+                );
+                return Ok((d, "ptr"));
+            }
+        }
+
         // string comparisons must compare contents, not pointer identity
         if matches!(
             op,
@@ -4157,8 +5148,29 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
             }
         }
 
-        let (lv, lt) = self.emit_expr(l)?;
-        let (rv, rt) = self.emit_expr(r)?;
+        let (mut lv, mut lt) = self.emit_expr(l)?;
+        let (mut rv, mut rt) = self.emit_expr(r)?;
+        // Dynamic operands (e.g. dict[str] values) must be unwrapped before arithmetic
+        if matches!(self.infer_kind(l), ValKind::Dynamic) {
+            let want = if matches!(self.infer_kind(r), ValKind::Float) || rt == "double" {
+                "double"
+            } else {
+                "i64"
+            };
+            let (u, ut) = self.unwrap_dynamic(lv, lt, want)?;
+            lv = u;
+            lt = ut;
+        }
+        if matches!(self.infer_kind(r), ValKind::Dynamic) {
+            let want = if matches!(self.infer_kind(l), ValKind::Float) || lt == "double" {
+                "double"
+            } else {
+                "i64"
+            };
+            let (u, ut) = self.unwrap_dynamic(rv, rt, want)?;
+            rv = u;
+            rt = ut;
+        }
         if lt == "double" || rt == "double" {
             let lv = self.cast_to(lv, lt, "double")?;
             let rv = self.cast_to(rv, rt, "double")?;
@@ -5513,6 +6525,21 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
         name: &str,
         args: &[Expr],
     ) -> Result<(String, &'static str), String> {
+        // owned parameter move: after a call with `owned` param, zero the caller's
+        // variable so subsequent reads see the moved-from value (0/null).
+        let mut owned_move_names: Vec<String> = Vec::new();
+        if let Some(params) = self.func_params.get(name).cloned() {
+            for (i, a) in args.iter().enumerate() {
+                if let Some(p) = params.get(i) {
+                    if matches!(p.mode, bolide_parser::ParamMode::Owned) {
+                        if let Expr::Ident(n) = a {
+                            owned_move_names.push(n.clone());
+                        }
+                    }
+                }
+            }
+        }
+
         let overload_owner;
         let name: &str = if let Some(candidates) = self.overloads.get(name).cloned() {
             overload_owner = self
@@ -5557,6 +6584,25 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
                 name
             )
         })?;
+        // Class constructor with field defaults: pad missing trailing args from defaults.
+        let mut args_owned: Vec<Expr> = args.to_vec();
+        if let Some(ci) = self.classes.get(&resolved).cloned() {
+            if args_owned.len() < ci.fields.len() {
+                for f in ci.fields.iter().skip(args_owned.len()) {
+                    if let Some(def) = &f.default_value {
+                        args_owned.push(def.clone());
+                    } else {
+                        // zero-fill missing required field
+                        args_owned.push(match type_llvm(&f.ty) {
+                            "double" => Expr::Float(0.0),
+                            "ptr" => Expr::None,
+                            _ => Expr::Int(0),
+                        });
+                    }
+                }
+            }
+        }
+        let args = args_owned.as_slice();
         // 命名参数：算出每个实参的目标参数位（保持源码求值顺序，绑定到正确参数位）
         let (flat_args, target_indices) = if let Some(params) = self.func_params.get(&resolved) {
             let indices = Self::arg_target_indices(params, args, &resolved)?;
@@ -5664,6 +6710,27 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
                     a
                 ));
             }
+            // Typed empty/dict literal for Dict params: use key type from signature
+            // so `StringSet({})` gets string-keyed map (content hash), not int-keyed.
+            if let Expr::Dict(pairs) = a {
+                if let Some(Type::Dict(k, vty_ann)) = self
+                    .func_params
+                    .get(&resolved)
+                    .and_then(|ps| ps.get(ti))
+                    .map(|p| p.ty.clone())
+                    .or_else(|| {
+                        // class ctor: param types = field types
+                        self.classes.get(&resolved).and_then(|ci| {
+                            ci.fields.get(ti).map(|f| f.ty.clone())
+                        })
+                    })
+                {
+                    let (dv, _) =
+                        self.emit_dict_lit_tagged(pairs, Some(k.as_ref()), Some(vty_ann.as_ref()))?;
+                    prepared[ti] = Some(format!("ptr {}", dv));
+                    continue;
+                }
+            }
             let (v, ty) = self.emit_expr(a)?;
             // `*dynamic` param: wrap the arg into a BolideDynamic. Pick the wrapper
             // from the EMITTED type (`ty`) rather than infer_kind, since a `dynamic`-
@@ -5740,9 +6807,9 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
         } else {
             llvm_func_name(&resolved)
         };
-        if ret == "void" {
+        let result = if ret == "void" {
             let _ = writeln!(self.body, "  call void @{}({})", fname, arg_s);
-            Ok(("0".into(), "i64"))
+            ("0".into(), "i64")
         } else {
             let d = self.fresh();
             let _ = writeln!(
@@ -5750,12 +6817,38 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
                 "  {} = call {} @{}({})",
                 d, ret, fname, arg_s
             );
-            // Prefer high-level return kind when known
-            if let Some(k) = self.func_ret_kind.get(&resolved) {
-                let _ = k;
+            (d, ret)
+        };
+        // Zero moved-from owned arguments (Cranelift sets the source to 0/null).
+        for n in owned_move_names {
+            if let Some((slot, ty)) = self.locals.get(&n).cloned() {
+                match ty {
+                    "double" => {
+                        let _ = writeln!(self.body, "  store double 0.0, ptr {}, align 8", slot);
+                    }
+                    "ptr" => {
+                        let _ = writeln!(self.body, "  store ptr null, ptr {}, align 8", slot);
+                    }
+                    _ => {
+                        let _ = writeln!(self.body, "  store i64 0, ptr {}, align 8", slot);
+                    }
+                }
+            } else if let Some((ty, _)) = self.global_vars.get(&n).cloned() {
+                let g = llvm_func_name(&n);
+                match ty {
+                    "double" => {
+                        let _ = writeln!(self.body, "  store double 0.0, ptr @{}, align 8", g);
+                    }
+                    "ptr" => {
+                        let _ = writeln!(self.body, "  store ptr null, ptr @{}, align 8", g);
+                    }
+                    _ => {
+                        let _ = writeln!(self.body, "  store i64 0, ptr @{}, align 8", g);
+                    }
+                }
             }
-            Ok((d, ret))
         }
+        Ok(result)
     }
 
     fn emit_print(&mut self, args: &[Expr]) -> Result<(String, &'static str), String> {
@@ -5765,11 +6858,94 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
                 ValKind::List(_) => {
                     let _ = writeln!(self.body, "  call void @bolide_print_list(ptr {})", v);
                 }
+                ValKind::Tuple(ref elems) => {
+                    // Match Cranelift: inline printers (strings unquoted, no trailing
+                    // newline per element) then a final println.
+                    let _ = writeln!(self.body, "  call void @bolide_print_tuple_start()");
+                    for (i, ek) in elems.iter().enumerate() {
+                        if i > 0 {
+                            let _ = writeln!(
+                                self.body,
+                                "  call void @bolide_print_tuple_separator()"
+                            );
+                        }
+                        let raw = self.fresh();
+                        let _ = writeln!(
+                            self.body,
+                            "  {} = call i64 @bolide_tuple_get(ptr {}, i64 {})",
+                            raw, v, i
+                        );
+                        match ek {
+                            ValKind::Float => {
+                                let a = self.fresh();
+                                let _ = writeln!(self.body, "  {} = alloca i64, align 8", a);
+                                let _ = writeln!(
+                                    self.body,
+                                    "  store i64 {}, ptr {}, align 8",
+                                    raw, a
+                                );
+                                let f = self.fresh();
+                                let _ = writeln!(
+                                    self.body,
+                                    "  {} = load double, ptr {}, align 8",
+                                    f, a
+                                );
+                                let _ = writeln!(
+                                    self.body,
+                                    "  call void @bolide_print_float_inline(double {})",
+                                    f
+                                );
+                            }
+                            ValKind::Bool => {
+                                let _ = writeln!(
+                                    self.body,
+                                    "  call void @bolide_print_bool_inline(i64 {})",
+                                    raw
+                                );
+                            }
+                            ValKind::Str => {
+                                let p = self.fresh();
+                                let _ = writeln!(
+                                    self.body,
+                                    "  {} = inttoptr i64 {} to ptr",
+                                    p, raw
+                                );
+                                let _ = writeln!(
+                                    self.body,
+                                    "  call void @bolide_print_string_inline(ptr {})",
+                                    p
+                                );
+                            }
+                            ValKind::BigInt => {
+                                let p = self.fresh();
+                                let _ = writeln!(
+                                    self.body,
+                                    "  {} = inttoptr i64 {} to ptr",
+                                    p, raw
+                                );
+                                let _ = writeln!(
+                                    self.body,
+                                    "  call void @bolide_print_bigint_inline(ptr {})",
+                                    p
+                                );
+                            }
+                            _ => {
+                                let _ = writeln!(
+                                    self.body,
+                                    "  call void @bolide_print_int_inline(i64 {})",
+                                    raw
+                                );
+                            }
+                        }
+                    }
+                    let _ = writeln!(self.body, "  call void @bolide_print_tuple_end_inline()");
+                    let _ = writeln!(self.body, "  call void @bolide_println()");
+                }
                 ValKind::Str => {
                     let _ = writeln!(self.body, "  call void @bolide_print_string(ptr {})", v);
                 }
                 ValKind::Object(_)
-                | ValKind::Adt(_)
+                | ValKind::Adt(_, _)
                 | ValKind::Dict
                 | ValKind::Ptr
                 | ValKind::Closure
@@ -5856,6 +7032,46 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
         Ok(d)
     }
 
+    /// Unwrap a BolideDynamic pointer into a concrete LLVM value for `want_ty`.
+    fn unwrap_dynamic(
+        &mut self,
+        v: String,
+        ty: &str,
+        want_ty: &str,
+    ) -> Result<(String, &'static str), String> {
+        let p = self.cast_to(v, ty, "ptr")?;
+        match want_ty {
+            "double" => {
+                let d = self.fresh();
+                let _ = writeln!(
+                    self.body,
+                    "  {} = call double @bolide_dynamic_to_float(ptr {})",
+                    d, p
+                );
+                Ok((d, "double"))
+            }
+            "ptr" => {
+                // Prefer string form for generic ptr targets
+                let d = self.fresh();
+                let _ = writeln!(
+                    self.body,
+                    "  {} = call ptr @bolide_dynamic_to_string(ptr {})",
+                    d, p
+                );
+                Ok((d, "ptr"))
+            }
+            _ => {
+                let d = self.fresh();
+                let _ = writeln!(
+                    self.body,
+                    "  {} = call i64 @bolide_dynamic_to_int(ptr {})",
+                    d, p
+                );
+                Ok((d, "i64"))
+            }
+        }
+    }
+
     /// Picks the best-matching overload for a free-function call by comparing
     /// each candidate's registered param LLVM types against the inferred arg kinds.
     fn resolve_overload(&self, candidates: &[String], args: &[Expr]) -> Option<String> {
@@ -5926,7 +7142,7 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
                         ValKind::Bool => ValKind::List(2),
                         ValKind::Str => ValKind::List(3),
                         ValKind::Object(n) => ValKind::ListObj(n),
-                        ValKind::Adt(n) => ValKind::ListObj(n),
+                        ValKind::Adt(n, _) => ValKind::ListObj(n),
                         ValKind::Closure | ValKind::Dict | ValKind::Ptr => ValKind::List(4),
                         _ => ValKind::List(0),
                     }
@@ -5940,7 +7156,7 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
                 ValKind::Bool => ValKind::List(2),
                 ValKind::Str => ValKind::List(3),
                 ValKind::Object(n) => ValKind::ListObj(n),
-                ValKind::Adt(n) => ValKind::ListObj(n),
+                ValKind::Adt(n, _) => ValKind::ListObj(n),
                 _ => ValKind::List(0),
             },
             Expr::Ident(n) => self
@@ -5955,12 +7171,49 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
                 ValKind::ListObj(cn) => ValKind::Object(cn),
                 ValKind::Dict => ValKind::Dynamic,
                 ValKind::Str => ValKind::Str,
+                ValKind::Tuple(elems) => elems.first().cloned().unwrap_or(ValKind::Int),
                 _ => ValKind::Int,
             },
+            Expr::Tuple(items) => {
+                ValKind::Tuple(items.iter().map(|e| self.infer_kind(e)).collect())
+            }
+            Expr::SpawnAll(items) => {
+                ValKind::Tuple(
+                    items
+                        .iter()
+                        .map(|it| match it {
+                            Expr::Call(c, _) => {
+                                if let Expr::Ident(n) = c.as_ref() {
+                                    self.func_ret_kind
+                                        .get(n)
+                                        .cloned()
+                                        .unwrap_or(ValKind::Int)
+                                } else {
+                                    ValKind::Int
+                                }
+                            }
+                            Expr::Spawn(n, _) | Expr::SpawnThread(n, _) => self
+                                .func_ret_kind
+                                .get(n)
+                                .cloned()
+                                .unwrap_or(ValKind::Int),
+                            _ => ValKind::Int,
+                        })
+                        .collect(),
+                )
+            }
+            Expr::TryExpr(_) => ValKind::Adt("Result".into(), vec![Type::Int, Type::Custom("Error".into())]),
+            Expr::ValueConstruct(name, _) => {
+                if self.classes.contains_key(name) {
+                    ValKind::Object(name.clone())
+                } else {
+                    ValKind::Ptr
+                }
+            }
             Expr::Member(base, member) => {
                 if let Expr::Ident(en) = base.as_ref() {
                     if self.adts.contains_key(en) {
-                        return ValKind::Adt(en.clone());
+                        return ValKind::Adt(en.clone(), vec![]);
                     }
                 }
                 match self.infer_kind(base) {
@@ -5997,6 +7250,29 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
                 ) {
                     return ValKind::Bool;
                 }
+                // BigInt arithmetic → BigInt (print must use bolide_print_bigint)
+                if matches!(self.infer_kind(l), ValKind::BigInt)
+                    || matches!(self.infer_kind(r), ValKind::BigInt)
+                {
+                    return ValKind::BigInt;
+                }
+                // list + list → list (preserve nested/list kind from left)
+                if matches!(op, BinOp::Add) {
+                    let lk = self.infer_kind(l);
+                    let rk = self.infer_kind(r);
+                    if matches!(
+                        lk,
+                        ValKind::List(_) | ValKind::ListObj(_) | ValKind::NestedList(_)
+                    ) && matches!(
+                        rk,
+                        ValKind::List(_) | ValKind::ListObj(_) | ValKind::NestedList(_)
+                    ) {
+                        return lk;
+                    }
+                    if matches!(lk, ValKind::Str) && matches!(rk, ValKind::Str) {
+                        return ValKind::Str;
+                    }
+                }
                 if matches!(self.infer_kind(l), ValKind::Float)
                     || matches!(self.infer_kind(r), ValKind::Float)
                 {
@@ -6006,6 +7282,53 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
                 }
             }
             Expr::Call(c, args) => {
+                // ADT constructor: Result.Err("bad") / Option.Some(1)
+                if let Expr::Member(base, variant) = c.as_ref() {
+                    if let Expr::Ident(en) = base.as_ref() {
+                        if let Some(adt) = self.adts.get(en) {
+                            if let Some(vinfo) = adt.variants.iter().find(|v| v.name == *variant) {
+                                // Bind type params from constructor arg kinds
+                                let mut type_args: Vec<Type> = adt
+                                    .type_params
+                                    .iter()
+                                    .map(|_| Type::Int)
+                                    .collect();
+                                for (field, arg) in vinfo.fields.iter().zip(args.iter()) {
+                                    if let Type::Generic(tp) = &field.ty {
+                                        if let Some(idx) =
+                                            adt.type_params.iter().position(|p| p == tp)
+                                        {
+                                            let k = self.infer_kind(arg);
+                                            type_args[idx] = match k {
+                                                ValKind::Float => Type::Float,
+                                                ValKind::Bool => Type::Bool,
+                                                ValKind::Str => Type::Str,
+                                                ValKind::BigInt => Type::BigInt,
+                                                ValKind::Bytes => Type::Bytes,
+                                                ValKind::Dict => {
+                                                    Type::Dict(Box::new(Type::Int), Box::new(Type::Dynamic))
+                                                }
+                                                ValKind::List(t) => Type::List(Box::new(
+                                                    match t {
+                                                        1 => Type::Float,
+                                                        2 => Type::Bool,
+                                                        3 => Type::Str,
+                                                        _ => Type::Int,
+                                                    },
+                                                )),
+                                                ValKind::Object(n) => Type::Custom(n),
+                                                ValKind::Adt(n, a) => Type::Adt(n, a),
+                                                ValKind::Dynamic => Type::Dynamic,
+                                                _ => Type::Int,
+                                            };
+                                        }
+                                    }
+                                }
+                                return ValKind::Adt(en.clone(), type_args);
+                            }
+                        }
+                    }
+                }
                 if let Expr::Ident(n) = c.as_ref() {
                     if n == "str" {
                         return ValKind::Str;
@@ -6049,42 +7372,89 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
                 if let Expr::Member(base, method) = c.as_ref() {
                     if let Expr::Ident(en) = base.as_ref() {
                         if self.adts.contains_key(en) {
-                            return ValKind::Adt(en.clone());
+                            return ValKind::Adt(en.clone(), vec![]);
                         }
                     }
-                    if method == "format"
-                        || method == "replace"
-                        || method == "upper"
-                        || method == "lower"
-                        || method == "trim"
-                        || method == "repeat"
-                        || method == "slice"
-                        || method == "char_at"
-                        || method == "substring"
-                        || method == "to_upper"
-                        || method == "to_lower"
-                    {
-                        return ValKind::Str;
+                    // Class methods first: e.g. `Counter.count(n)` is a generator
+                    // factory (returns Object), not the string/list "count" → int.
+                    if let ValKind::Object(ref cn) = self.infer_kind(base) {
+                        if let Some(resolved) = self.resolve_class_name(cn) {
+                            let full = method_full_name(&resolved, method);
+                            if let Some(k) = self.func_ret_kind.get(&full) {
+                                return k.clone();
+                            }
+                            if let Some(md) =
+                                self.classes.get(&resolved).and_then(|c| c.methods.get(method))
+                            {
+                                return kind_of_type(&md.return_type);
+                            }
+                        }
                     }
-                    if method == "split" {
-                        return ValKind::List(3);
+                    let base_k = self.infer_kind(base);
+                    // String methods only when receiver is a string
+                    if matches!(base_k, ValKind::Str) {
+                        if method == "format"
+                            || method == "replace"
+                            || method == "upper"
+                            || method == "lower"
+                            || method == "trim"
+                            || method == "repeat"
+                            || method == "slice"
+                            || method == "char_at"
+                            || method == "substring"
+                            || method == "to_upper"
+                            || method == "to_lower"
+                        {
+                            return ValKind::Str;
+                        }
+                        if method == "split" {
+                            return ValKind::List(3);
+                        }
+                        if method == "contains"
+                            || method == "includes"
+                            || method == "starts_with"
+                            || method == "ends_with"
+                            || method == "is_empty"
+                            || method == "empty"
+                        {
+                            return ValKind::Bool;
+                        }
+                        if method == "find"
+                            || method == "count"
+                            || method == "len"
+                            || method == "length"
+                            || method == "size"
+                            || method == "index_of"
+                            || method == "index"
+                        {
+                            return ValKind::Int;
+                        }
                     }
-                    if method == "contains"
-                        || method == "includes"
-                        || method == "starts_with"
-                        || method == "ends_with"
-                        || method == "is_empty"
-                        || method == "empty"
-                    {
-                        return ValKind::Bool;
-                    }
-                    if method == "find"
-                        || method == "count"
-                        || method == "len"
-                        || method == "index_of"
-                        || method == "index"
-                    {
-                        return ValKind::Int;
+                    // List / bytes / dict length helpers
+                    if matches!(
+                        base_k,
+                        ValKind::List(_)
+                            | ValKind::ListObj(_)
+                            | ValKind::NestedList(_)
+                            | ValKind::Bytes
+                            | ValKind::Dict
+                    ) {
+                        if method == "len"
+                            || method == "length"
+                            || method == "size"
+                            || method == "count"
+                            || method == "index_of"
+                            || method == "index"
+                            || method == "find"
+                        {
+                            return ValKind::Int;
+                        }
+                        if method == "is_empty" || method == "empty" || method == "contains" {
+                            return ValKind::Bool;
+                        }
+                        if method == "clone" || method == "copy" {
+                            return base_k;
+                        }
                     }
                     if method == "args" {
                         if let Expr::Ident(m) = base.as_ref() {
@@ -6104,19 +7474,6 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
                     }
                     if method == "monotonic_ms" || method == "now_ms" || method == "now" {
                         return ValKind::Int;
-                    }
-                    if let ValKind::Object(ref cn) = self.infer_kind(base) {
-                        if let Some(resolved) = self.resolve_class_name(cn) {
-                            let full = method_full_name(&resolved, method);
-                            if let Some(k) = self.func_ret_kind.get(&full) {
-                                return k.clone();
-                            }
-                            if let Some(md) =
-                                self.classes.get(&resolved).and_then(|c| c.methods.get(method))
-                            {
-                                return kind_of_type(&md.return_type);
-                            }
-                        }
                     }
                     let _ = args;
                 }
@@ -6194,25 +7551,29 @@ fn kind_of_type(ty: &Option<Type>) -> ValKind {
             Type::List(_) => ValKind::NestedList(Box::new(kind_of_list_inner(inner))),
             Type::Dict(_, _) => ValKind::List(8),
             Type::Func | Type::FuncSig(_, _) => ValKind::List(4),
+            Type::Bytes => ValKind::List(4),
+            Type::Channel(_) | Type::Ptr | Type::BigInt => ValKind::List(4),
             _ => ValKind::List(0),
         },
         Some(Type::Dict(_, _)) => ValKind::Dict,
         Some(Type::Dynamic) => ValKind::Dynamic,
         Some(Type::Tuple(elems)) => {
-            // tuples are packed as lists in the LLVM backend
-            let tag = match elems.first() {
-                Some(Type::Float) | Some(Type::Decimal) => 1,
-                Some(Type::Bool) => 2,
-                Some(Type::Str) => 3,
-                _ => 0,
-            };
-            ValKind::List(tag)
+            ValKind::Tuple(elems.iter().map(|e| kind_of_type(&Some(e.clone()))).collect())
         }
         Some(Type::BigInt) => ValKind::BigInt,
         Some(Type::Custom(n)) | Some(Type::Dyn(n)) => ValKind::Object(n.clone()),
-        Some(Type::Adt(n, _)) => ValKind::Adt(n.clone()),
+        Some(Type::Adt(n, args)) => ValKind::Adt(n.clone(), args.clone()),
         Some(Type::Func) | Some(Type::FuncSig(_, _)) => ValKind::Closure,
         Some(Type::Bytes) => ValKind::Bytes,
+        // Pointer-like heap objects (must be `ptr`, not i64 — otherwise globals
+        // store via ptrtoint and method calls pass i64 where LLVM expects ptr).
+        Some(Type::Channel(_)) | Some(Type::Ptr) | Some(Type::Future) => ValKind::Ptr,
+        // weak/unowned class refs still expose fields of the underlying object
+        Some(Type::Weak(inner)) | Some(Type::Unowned(inner)) => match inner.as_ref() {
+            Type::Custom(n) | Type::Dyn(n) => ValKind::Object(n.clone()),
+            Type::Adt(n, args) => ValKind::Adt(n.clone(), args.clone()),
+            _ => ValKind::Ptr,
+        },
         _ => ValKind::Int,
     }
 }
@@ -6226,12 +7587,13 @@ fn kind_to_llvm(k: &ValKind) -> &'static str {
         | ValKind::NestedList(_)
         | ValKind::Dict
         | ValKind::Object(_)
-        | ValKind::Adt(_)
+        | ValKind::Adt(_, _)
         | ValKind::Closure
         | ValKind::RawFunc
         | ValKind::Dynamic
         | ValKind::BigInt
         | ValKind::Bytes
+        | ValKind::Tuple(_)
         | ValKind::Ptr => "ptr",
         ValKind::Int | ValKind::Bool => "i64",
     }
