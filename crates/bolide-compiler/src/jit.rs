@@ -276,6 +276,14 @@ pub struct JitCompiler {
     funcsig_adapter_defs: HashMap<String, (Vec<BolideType>, Option<Box<BolideType>>)>,
     /// 全局变量名 -> 数据ID 映射
     global_data_ids: HashMap<String, cranelift_module::DataId>,
+    /// 已编译的类构造函数（REPL 增量编译时跳过重复 define_function）
+    compiled_class_constructors: HashSet<String>,
+    /// 已编译的类方法（REPL 增量编译时跳过）
+    compiled_class_methods: HashSet<String>,
+    /// 已编译的函数键（REPL 增量编译时跳过重复 define_function）
+    compiled_func_keys: HashSet<String>,
+    /// REPL 模式：顶层 var/let 视作全局（跨输入保留状态）。
+    repl_mode: bool,
     /// 源文件所在目录（import 相对路径的解析基准）
     base_dir: Option<String>,
     /// 包管理器解析出的依赖映射
@@ -2828,6 +2836,10 @@ impl JitCompiler {
             module_sources: HashMap::new(),
             lifetime_funcs: HashSet::new(),
             global_data_ids: HashMap::new(),
+            compiled_class_constructors: HashSet::new(),
+            compiled_class_methods: HashSet::new(),
+            compiled_func_keys: HashSet::new(),
+            repl_mode: false,
             global_var_types: HashMap::new(),
             global_var_mutability: HashMap::new(),
             base_dir: None,
@@ -2854,6 +2866,21 @@ impl JitCompiler {
 
     /// 编译程序并返回入口函数指针
     pub fn compile(&mut self, program: &Program) -> Result<*const u8, String> {
+        self.compile_with_main(program, "__main__")
+    }
+
+    /// 设置 REPL 模式：顶层 var/let 视作全局（跨输入保留状态）。
+    pub fn set_repl_mode(&mut self, repl: bool) {
+        self.repl_mode = repl;
+    }
+
+    /// 编译程序，顶层语句包装成名为 `main_name` 的函数（REPL 每次输入用唯一名字，
+    /// 复用同一个 JitCompiler 增量编译，保留全局变量/函数状态）。
+    pub fn compile_with_main(
+        &mut self,
+        program: &Program,
+        main_name: &str,
+    ) -> Result<*const u8, String> {
         // 预处理 import 语句，加载并合并导入的模块
         let program = self.process_imports(program)?;
         // 宏展开（`name!` / `@derive` / `@test`），须在类型检查与单态化之前
@@ -2945,9 +2972,9 @@ impl JitCompiler {
             }
         }
 
-        // 将顶层代码包装成 __main__ 函数
+        // 将顶层代码包装成 main_name 函数
         let main_func = FuncDef {
-            name: "__main__".to_string(),
+            name: main_name.to_string(),
             is_async: false,
             is_export: false,
             is_inline: false,
@@ -2973,11 +3000,11 @@ impl JitCompiler {
             .finalize_definitions()
             .map_err(|e| format!("Finalize error: {}", e))?;
 
-        // 获取 __main__ 函数
+        // 获取 main 函数
         let func_id = self
             .functions
-            .get("__main__")
-            .ok_or("No __main__ function found")?;
+            .get(main_name)
+            .ok_or_else(|| format!("No {} function found", main_name))?;
         let main_ptr = self.module.get_finalized_function(*func_id);
         Ok(main_ptr)
     }
@@ -3039,6 +3066,10 @@ impl JitCompiler {
         }
 
         let function_key = self.overload_key_for_params(&func.name, &func.params);
+        // 幂等：REPL 增量编译时跳过已声明的函数。
+        if self.functions.contains_key(&function_key) {
+            return Ok(());
+        }
         let func_id = self
             .module
             .declare_function(&function_key, Linkage::Export, &sig)
@@ -3841,6 +3872,11 @@ impl JitCompiler {
                     BolideType::Int
                 };
 
+                // 幂等：REPL 增量编译时跳过已定义的全局变量。
+                if self.global_data_ids.contains_key(&decl.name) {
+                    continue;
+                }
+
                 // 为全局变量创建数据段（8 字节用于存储值）
                 let data_id = self
                     .module
@@ -4475,6 +4511,10 @@ impl JitCompiler {
     }
     /// 注册内置函数
     fn register_builtins(&mut self) -> Result<(), String> {
+        // 幂等：REPL 复用同一个 JitCompiler 增量编译时会重复调用。
+        if self.functions.contains_key("@_print_int") {
+            return Ok(());
+        }
         let ptr = self.ptr_type;
 
         // print_int(int) -> void
@@ -6763,6 +6803,10 @@ impl JitCompiler {
     /// 编译函数（第二遍）
     fn compile_function(&mut self, func: &FuncDef) -> Result<(), String> {
         let function_key = self.overload_key_for_params(&func.name, &func.params);
+        // 幂等：REPL 增量编译时跳过已编译的函数（类方法/内置类方法重复注入时）。
+        if self.compiled_func_keys.contains(&function_key) {
+            return Ok(());
+        }
         let func_id = *self
             .functions
             .get(&function_key)
@@ -6896,6 +6940,7 @@ impl JitCompiler {
             self.value_types.clone(),
         );
         compile_ctx.needs_exception_checks = self.needs_exception_checks;
+        compile_ctx.repl_mode = self.repl_mode;
 
         // 绑定参数到变量
         let params = compile_ctx.builder.block_params(entry_block).to_vec();
@@ -7058,6 +7103,7 @@ impl JitCompiler {
             }
         }
         self.module.clear_context(&mut self.ctx);
+        self.compiled_func_keys.insert(function_key);
 
         // 入队闭包 lifted 函数，待统一编译
         self.pending_closures.extend(pending);
@@ -7155,6 +7201,7 @@ impl JitCompiler {
             self.value_types.clone(),
         );
         compile_ctx.needs_exception_checks = self.needs_exception_checks;
+        compile_ctx.repl_mode = self.repl_mode;
 
         // 闭包 lifted 函数的返回类型必须登记，否则 compile_return 会按「无返回」生成 IR
         if let Some(ref ret) = job.return_type {
@@ -7626,8 +7673,9 @@ impl JitCompiler {
     fn collect_adts(&mut self, program: &Program) -> Result<(), String> {
         for stmt in &program.statements {
             if let Statement::EnumDef(def) = stmt {
+                // 幂等：REPL 增量编译时内置 Option 等会重复注入，跳过已收集的。
                 if self.adts.contains_key(&def.name) {
-                    return Err(format!("Duplicate enum/union '{}'", def.name));
+                    continue;
                 }
                 let mut seen_variants = HashSet::new();
                 let mut variants = Vec::new();
@@ -7856,6 +7904,10 @@ impl JitCompiler {
 
     /// 编译类构造函数
     fn compile_class_constructor(&mut self, class_name: &str) -> Result<(), String> {
+        // 幂等：REPL 增量编译时跳过已编译的构造函数。
+        if self.compiled_class_constructors.contains(class_name) {
+            return Ok(());
+        }
         let class_info = self
             .classes
             .get(class_name)
@@ -7987,6 +8039,7 @@ impl JitCompiler {
             .define_function(func_id, &mut self.ctx)
             .map_err(|e| format!("Define constructor error: {}", e))?;
         self.module.clear_context(&mut self.ctx);
+        self.compiled_class_constructors.insert(class_name.to_string());
 
         Ok(())
     }
@@ -9445,6 +9498,8 @@ struct CompileContext<'a, 'b> {
     finally_visibility_limit: Option<usize>,
     /// 本函数内创建的闭包，待外层函数编译完成后由顶层编译器统一编译
     pending_closures: Vec<ClosureJob>,
+    /// REPL 模式：顶层 var/let 视作全局（跨输入保留状态）。
+    repl_mode: bool,
     /// 闭包局部计数（与 current_func_name 组合成唯一 lifted 名）
     closure_local_counter: usize,
     /// 当前语句中产生、尚未被变量吸收的闭包临时值（语句末 @_closure_release）
@@ -9636,6 +9691,7 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             finally_stack: Vec::new(),
             finally_visibility_limit: None,
             pending_closures: Vec::new(),
+            repl_mode: false,
             closure_local_counter: 0,
             closure_temps: Vec::new(),
             closure_vars: HashSet::new(),
@@ -12041,7 +12097,7 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         // （if/for 块）里的同名 let 声明新的局部变量（遮蔽全局）。
         // scope_depth == 0 保证：inline 展开把函数体拼进 __main__ 后，分支内
         // `let x = ...` 与顶层全局 x 同名时是块级遮蔽，而不是写回全局。
-        if self.current_func_name == "__main__"
+        if (self.current_func_name == "__main__" || self.repl_mode)
             && self.scope_depth == 0
             && self.global_data_ids.contains_key(&decl.name)
         {

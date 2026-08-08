@@ -84,70 +84,22 @@ fn native_link_arg_unix(lib: &str) -> miette::Result<String> {
 
 /// REPL 状态，维护累积的代码
 struct ReplState {
-    /// 函数定义
-    functions: Vec<String>,
-    /// 全局变量声明
-    globals: Vec<String>,
+    /// 持久化 JitCompiler：跨输入保留已编译的全局变量/函数状态。
+    compiler: JitCompiler,
+    /// 每次输入分配唯一的顶层函数名（增量编译）。
+    input_counter: usize,
 }
 
 impl ReplState {
     fn new() -> Self {
+        let mut compiler = JitCompiler::new();
+        compiler.set_repl_mode(true);
         Self {
-            functions: Vec::new(),
-            globals: Vec::new(),
+            compiler,
+            input_counter: 0,
         }
     }
 
-    /// 判断输入类型并添加到状态
-    fn add_input(&mut self, input: &str) -> InputType {
-        let trimmed = input.trim();
-
-        if trimmed.starts_with("fn ") {
-            self.functions.push(input.to_string());
-            InputType::FuncDef
-        } else if trimmed.starts_with("let ") || trimmed.starts_with("var ") {
-            self.globals.push(input.to_string());
-            InputType::VarDecl
-        } else if trimmed.starts_with("class ") {
-            self.functions.push(input.to_string());
-            InputType::ClassDef
-        } else {
-            InputType::Expr
-        }
-    }
-
-    /// 生成完整的程序代码
-    fn build_program(&self, expr: Option<&str>) -> String {
-        let mut code = String::new();
-
-        // 添加函数/类定义
-        for func in &self.functions {
-            code.push_str(func);
-            code.push('\n');
-        }
-
-        // 添加全局变量
-        for var in &self.globals {
-            code.push_str(var);
-            code.push('\n');
-        }
-
-        // 添加表达式/语句
-        if let Some(e) = expr {
-            code.push_str(e);
-            code.push('\n');
-        }
-
-        code
-    }
-}
-
-#[derive(Debug, PartialEq)]
-enum InputType {
-    FuncDef,
-    VarDecl,
-    ClassDef,
-    Expr,
 }
 
 #[derive(Parser)]
@@ -1313,67 +1265,22 @@ fn print_help() {
 }
 
 fn eval_input(state: &mut ReplState, input: &str) -> Result<String, String> {
-    let input_type = state.add_input(input);
-
-    match input_type {
-        InputType::FuncDef => {
-            // 验证函数定义是否有效
-            let code = state.build_program(None);
-            let ast = parse_source_with_diagnostics(&code).map_err(|e| {
-                state.functions.pop();
-                repl_parse_error(&code, e)
-            })?;
-            let mut compiler = JitCompiler::new();
-            compiler.compile(&ast).map_err(|e| {
-                state.functions.pop();
-                repl_compile_error(&code, e)
-            })?;
-            Ok("Function defined.".to_string())
-        }
-        InputType::ClassDef => {
-            let code = state.build_program(None);
-            let ast = parse_source_with_diagnostics(&code).map_err(|e| {
-                state.functions.pop();
-                repl_parse_error(&code, e)
-            })?;
-            let mut compiler = JitCompiler::new();
-            compiler.compile(&ast).map_err(|e| {
-                state.functions.pop();
-                repl_compile_error(&code, e)
-            })?;
-            Ok("Class defined.".to_string())
-        }
-        InputType::VarDecl => {
-            // 验证变量声明是否有效
-            let code = state.build_program(None);
-            let ast = parse_source_with_diagnostics(&code).map_err(|e| {
-                state.globals.pop();
-                repl_parse_error(&code, e)
-            })?;
-            let mut compiler = JitCompiler::new();
-            compiler.compile(&ast).map_err(|e| {
-                state.globals.pop();
-                repl_compile_error(&code, e)
-            })?;
-            Ok("Variable declared.".to_string())
-        }
-        InputType::Expr => {
-            let code = state.build_program(Some(input));
-            let ast =
-                parse_source_with_diagnostics(&code).map_err(|e| repl_parse_error(&code, e))?;
-            let mut compiler = JitCompiler::new();
-            let main_ptr = compiler
-                .compile(&ast)
-                .map_err(|e| repl_compile_error(&code, e))?;
-            let main_fn: fn() -> i64 = unsafe { std::mem::transmute(main_ptr) };
-            let result = main_fn();
-            // 只有非零结果才显示（print等语句返回0）
-            if result != 0 {
-                Ok(result.to_string())
-            } else {
-                Ok(String::new())
-            }
-        }
+    // 解析当前输入（单独解析，不重放之前的声明）。
+    let ast = parse_source_with_diagnostics(input).map_err(|e| repl_parse_error(input, e))?;
+    // 每次输入编译成一个全新的顶层函数（唯一名），复用同一个 JitCompiler，
+    // 从而保留已编译的全局变量/函数状态：声明只执行一次，input() 即时读取。
+    let main_name = format!("__repl_{}", state.input_counter);
+    state.input_counter += 1;
+    let main_ptr = state
+        .compiler
+        .compile_with_main(&ast, &main_name)
+        .map_err(|e| repl_compile_error(input, e))?;
+    let main_fn: fn() -> i64 = unsafe { std::mem::transmute(main_ptr) };
+    let result = main_fn();
+    if result != 0 {
+        Ok(result.to_string())
+    } else {
+        Ok(String::new())
     }
 }
 
