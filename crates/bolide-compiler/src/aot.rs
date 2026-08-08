@@ -1666,6 +1666,14 @@ impl AotCompiler {
                 };
                 Some(BolideType::List(Box::new(elem)))
             }
+            Expr::ListComprehension { iter, .. } => {
+                // 推导式元素类型：迭代器为 list → 元素类型；range 等 → Int。
+                let elem = match self.infer_expr_type_static(iter) {
+                    Some(BolideType::List(inner)) => *inner,
+                    _ => BolideType::Int,
+                };
+                Some(BolideType::List(Box::new(elem)))
+            }
             Expr::Dict(entries) => {
                 // 跨条目加宽键/值类型（与运行时 compile_dict 一致）
                 let (k, v) = if let Some((k0, v0)) = entries.first() {
@@ -13127,7 +13135,14 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
                     Some(BolideType::List(Box::new(BolideType::Dynamic)))
                 }
             }
-            Expr::ListComprehension { .. } => Some(BolideType::List(Box::new(BolideType::Dynamic))),
+            Expr::ListComprehension { iter, .. } => {
+                // 推导式元素类型：迭代器为 list → 元素类型；range 等 → Int。
+                let elem = match self.infer_expr_type(iter) {
+                    Some(BolideType::List(inner)) => *inner,
+                    _ => BolideType::Int,
+                };
+                Some(BolideType::List(Box::new(elem)))
+            }
             Expr::Dict(entries) => {
                 let (k_type, v_type) = if entries.is_empty() {
                     (BolideType::Dynamic, BolideType::Dynamic)
