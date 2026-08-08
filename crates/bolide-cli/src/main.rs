@@ -105,7 +105,7 @@ impl ReplState {
         if trimmed.starts_with("fn ") {
             self.functions.push(input.to_string());
             InputType::FuncDef
-        } else if trimmed.starts_with("let ") {
+        } else if trimmed.starts_with("let ") || trimmed.starts_with("var ") {
             self.globals.push(input.to_string());
             InputType::VarDecl
         } else if trimmed.starts_with("class ") {
