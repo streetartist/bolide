@@ -204,6 +204,8 @@ fn parse_statement(pair: Pair<Rule>) -> Result<Vec<Statement>, String> {
         Rule::match_stmt => Ok(vec![Statement::Match(parse_match_stmt(pair)?)]),
         Rule::return_stmt => Ok(vec![parse_return_stmt(pair)?]),
         Rule::expr_stmt => Ok(vec![Statement::Expr(parse_expr_stmt(pair)?)]),
+        // 空语句 `;`：不产生 AST，等价于 no-op
+        Rule::empty_stmt => Ok(vec![]),
         Rule::import_stmt => Ok(vec![Statement::Import(parse_import(pair)?)]),
         Rule::class_def => Ok(vec![Statement::ClassDef(parse_class_def(pair)?)]),
         Rule::value_def => Ok(vec![Statement::ValueDef(parse_value_def(pair)?)]),

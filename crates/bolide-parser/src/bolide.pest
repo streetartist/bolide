@@ -60,8 +60,13 @@ statement = {
     macro_rep_stmt |
     var_decl |
     assign_stmt |
-    expr_stmt
+    expr_stmt |
+    // 空语句：单独 `;`（C/JS/Rust 风格；REPL 多行粘贴常见）
+    empty_stmt
 }
+
+// 空语句（无操作）
+empty_stmt = { ";" }
 
 // 模板体重复：$( print($x); )* 或 $( let $f = ...; )+
 macro_rep_stmt = { "$" ~ "(" ~ statement+ ~ ")" ~ macro_rep_op }

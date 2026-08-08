@@ -1,0 +1,13 @@
+// Empty statement `;` is a no-op (like C / JS / Rust).
+;
+print(1);
+;
+;
+print(2);
+
+fn f() {
+    ;
+    print(3);
+    ;
+}
+f();
