@@ -14,3 +14,4 @@ bolide-runtime = { path = "../bolide-runtime" }
 bolide-pkg = { path = "../bolide-pkg" }
 clap.workspace = true
 miette.workspace = true
+rustyline = "14"

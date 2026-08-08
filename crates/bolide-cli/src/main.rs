@@ -1,4 +1,10 @@
 use clap::{Parser, Subcommand};
+use rustyline::completion::{Completer, Pair};
+use rustyline::highlight::Highlighter;
+use rustyline::hint::Hinter;
+use rustyline::validate::{ValidationResult, Validator};
+use rustyline::{Cmd, Context, Helper, KeyCode, KeyEvent, Modifiers};
+use std::borrow::Cow;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -1162,52 +1168,41 @@ fn run_repl() -> miette::Result<()> {
     println!("Type 'exit' or 'quit' to exit, 'help' for help.");
     println!();
 
-    let stdin = io::stdin();
+    // rustyline：方向键编辑、历史记录、多行块内上下移动编辑、Tab 缩进、语法高亮。
+    // Validator 在块未闭合时返回 Incomplete → Enter 插入换行，整个块作为可编辑缓冲区。
+    let mut editor = rustyline::Editor::<ReplHelper, _>::with_config(rustyline::Config::default())
+        .map_err(|e| miette::miette!("REPL init error: {}", e))?;
+    editor.set_helper(Some(ReplHelper));
+    // Tab → 插入 4 个空格（缩进）。直接绑定 Cmd::Insert，避免 rustyline
+    // 补全的 Circular 循环导致第二次 Tab 取消缩进。
+    editor.bind_sequence(
+        KeyEvent(KeyCode::Tab, Modifiers::NONE),
+        Cmd::Insert(1, "    ".to_string()),
+    );
+    let _ = editor.load_history("bolide_repl_history.txt");
+
     let mut state = ReplState::new();
-    let mut input_buffer = String::new();
-    let mut in_multiline = false;
 
     loop {
-        if in_multiline {
-            print!("... ");
-        } else {
-            print!(">>> ");
-        }
-        io::stdout().flush().unwrap();
-
-        let mut line = String::new();
-        if stdin.read_line(&mut line).is_err() {
-            break;
-        }
-
-        let line = line.trim_end_matches('\n').trim_end_matches('\r');
-
-        // 处理多行输入（函数/类定义、嵌套字典等）
-        if in_multiline {
-            input_buffer.push_str(line);
-            input_buffer.push('\n');
-
-            // 用括号深度判断是否结束
-            let depth = count_brace_depth(&input_buffer);
-            if depth == 0 {
-                in_multiline = false;
-                let input = input_buffer.trim().to_string();
-                input_buffer.clear();
-
-                match eval_input(&mut state, &input) {
-                    Ok(msg) => println!("{}", msg),
-                    Err(e) => eprintln!("Error: {}", e),
-                }
+        let input = match editor.readline(">>> ") {
+            Ok(l) => l.trim().to_string(),
+            // Ctrl+C：取消当前输入（多行块可放弃重来），不退出 REPL。
+            Err(rustyline::error::ReadlineError::Interrupted) => {
+                println!("^C");
+                continue;
             }
-            continue;
-        }
+            // Ctrl+D：退出。
+            Err(rustyline::error::ReadlineError::Eof) => break,
+            Err(e) => {
+                eprintln!("Error: {}", e);
+                break;
+            }
+        };
 
-        let input = line.trim();
         if input.is_empty() {
             continue;
         }
-
-        match input {
+        match input.as_str() {
             "exit" | "quit" => break,
             "help" => {
                 print_help();
@@ -1221,30 +1216,48 @@ fn run_repl() -> miette::Result<()> {
             _ => {}
         }
 
-        // 检查是否是多行输入——按括号深度判断
-        let depth = count_brace_depth(input);
-        if depth > 0 {
-            in_multiline = true;
-            input_buffer = input.to_string();
-            input_buffer.push('\n');
-            continue;
-        }
-
-        match eval_input(&mut state, input) {
-            Ok(msg) => println!("{}", msg),
+        let _ = editor.add_history_entry(&input);
+        match eval_input(&mut state, &input) {
+            Ok(msg) => {
+                if !msg.is_empty() {
+                    println!("{}", msg);
+                }
+            }
             Err(e) => eprintln!("Error: {}", e),
         }
     }
 
+    let _ = editor.save_history("bolide_repl_history.txt");
     println!("Goodbye!");
     Ok(())
 }
 
-/// 计算未闭合的 { } 括号深度。>0 表示还有未闭合的 {
+/// 计算未闭合的 { } 括号深度（跳过字符串字面量、// 注释）。>0 表示还有未闭合的 {
 fn count_brace_depth(s: &str) -> usize {
     let mut depth = 0usize;
-    for ch in s.chars() {
-        match ch {
+    let mut in_string = false;
+    let mut in_comment = false;
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if in_comment {
+            if c == '\n' {
+                in_comment = false;
+            }
+            continue;
+        }
+        if in_string {
+            if c == '\\' {
+                chars.next();
+                continue;
+            }
+            if c == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match c {
+            '"' => in_string = true,
+            '/' if chars.peek() == Some(&'/') => in_comment = true,
             '{' => depth += 1,
             '}' => depth = depth.saturating_sub(1),
             _ => {}
@@ -1252,6 +1265,291 @@ fn count_brace_depth(s: &str) -> usize {
     }
     depth
 }
+
+const RESET: &str = "\x1b[0m";
+const HL_KEYWORD: &str = "\x1b[1;34m"; // 粗蓝：关键字 / 控制流
+const HL_TYPE: &str = "\x1b[35m"; // 品红：类型名
+const HL_BUILTIN: &str = "\x1b[33m"; // 黄：内置函数 / 常量
+const HL_STRING: &str = "\x1b[32m"; // 绿：字符串
+const HL_STRING_ESC: &str = "\x1b[36m"; // 青：字符串转义
+const HL_NUMBER: &str = "\x1b[36m"; // 青：数字
+const HL_COMMENT: &str = "\x1b[90m"; // 灰：注释
+const HL_CONST: &str = "\x1b[1;36m"; // 粗青：常量（大写）
+
+const HL_KEYWORDS: &[&str] = &[
+    "let", "var", "fn", "for", "while", "if", "else", "return", "class", "import", "match",
+    "enum", "trait", "true", "false", "and", "or", "not", "break", "continue", "yield", "async",
+    "await", "throw", "try", "catch", "finally", "as", "in", "is", "pub", "mut", "self",
+    "None", "defer", "with", "struct",
+];
+
+const HL_TYPES: &[&str] = &[
+    "int", "float", "bigint", "decimal", "str", "string", "bool", "bytes", "byte", "char", "list",
+    "dict", "tuple", "set", "dynamic", "Option", "Error", "Future", "Result",
+];
+
+const HL_BUILTINS: &[&str] = &[
+    "print", "input", "len", "range", "repr", "type", "isinstance", "sorted", "min", "max",
+    "sum", "abs", "enumerate", "zip", "map", "filter", "exit", "quit",
+];
+
+/// 给单个标识符上色（关键字 / 类型 / 内置 / 大写常量 / 其他）。
+fn classify_word(w: &str) -> String {
+    if HL_KEYWORDS.contains(&w) {
+        format!("{}{}{}", HL_KEYWORD, w, RESET)
+    } else if HL_TYPES.contains(&w) {
+        format!("{}{}{}", HL_TYPE, w, RESET)
+    } else if HL_BUILTINS.contains(&w) {
+        format!("{}{}{}", HL_BUILTIN, w, RESET)
+    } else if w == w.to_uppercase() && w.len() > 1 && w.chars().all(|c| c.is_uppercase() || c == '_')
+    {
+        // 全大写 → 常量
+        format!("{}{}{}", HL_CONST, w, RESET)
+    } else if w.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) {
+        // 首字母大写 → 类/类型名
+        format!("{}{}{}", HL_TYPE, w, RESET)
+    } else {
+        w.to_string()
+    }
+}
+
+/// 语法高亮。输入为整个（多行）缓冲区，跨行保持字符串 / 注释状态。
+fn highlight_line(line: &str) -> String {
+    let mut out = String::new();
+    let mut chars = line.chars().peekable();
+    let mut in_string = false;
+    let mut in_comment = false;
+
+    while let Some(c) = chars.next() {
+        if in_comment {
+            out.push(c);
+            if c == '\n' {
+                in_comment = false;
+                out.push_str(RESET);
+            }
+            continue;
+        }
+        if in_string {
+            match c {
+                '\\' => {
+                    out.push_str(HL_STRING_ESC);
+                    out.push('\\');
+                    if let Some(n) = chars.next() {
+                        out.push(n);
+                    }
+                    out.push_str(HL_STRING);
+                }
+                '"' => {
+                    in_string = false;
+                    out.push('"');
+                    out.push_str(RESET);
+                }
+                _ => out.push(c),
+            }
+            continue;
+        }
+        match c {
+            '"' => {
+                in_string = true;
+                out.push_str(HL_STRING);
+                out.push('"');
+            }
+            '/' if chars.peek() == Some(&'/') => {
+                in_comment = true;
+                out.push_str(HL_COMMENT);
+                out.push('/');
+                // 吃掉第二个 '/'，避免重复输出成 '///'
+                if let Some(n) = chars.next() {
+                    out.push(n);
+                }
+            }
+            // 标识符 / 关键字 / 类型 / 内置
+            c if c.is_alphabetic() || c == '_' => {
+                let mut word = String::new();
+                word.push(c);
+                while let Some(&n) = chars.peek() {
+                    if n.is_alphanumeric() || n == '_' {
+                        word.push(n);
+                        chars.next();
+                    } else {
+                        break;
+                    }
+                }
+                out.push_str(&classify_word(&word));
+            }
+            // 数字（含 0x/0b、下划线、b/d 后缀、浮点）
+            c if c.is_ascii_digit()
+                || (c == '.' && chars.peek().map(|n| n.is_ascii_digit()).unwrap_or(false)) =>
+            {
+                let mut tok = String::new();
+                tok.push(c);
+                while let Some(&n) = chars.peek() {
+                    if n.is_alphanumeric() || n == '_' || n == '.' {
+                        tok.push(n);
+                        chars.next();
+                    } else {
+                        break;
+                    }
+                }
+                out.push_str(HL_NUMBER);
+                out.push_str(&tok);
+                out.push_str(RESET);
+            }
+            // f"..." / r"..." 前缀：字符串前缀并入字符串色
+            c if (c == 'f' || c == 'r') && chars.peek() == Some(&'"') => {
+                out.push_str(HL_STRING);
+                out.push(c);
+                chars.next(); // 吃掉 "
+                out.push('"');
+                in_string = true;
+            }
+            _ => out.push(c),
+        }
+    }
+    if in_string || in_comment {
+        out.push_str(RESET);
+    }
+    out
+}
+
+/// rustyline Helper：Tab 插入缩进、语法高亮、Enter 在块未闭合时继续多行编辑。
+struct ReplHelper;
+
+impl Completer for ReplHelper {
+    type Candidate = Pair;
+    fn complete(
+        &self,
+        _line: &str,
+        _pos: usize,
+        _ctx: &Context<'_>,
+    ) -> rustyline::Result<(usize, Vec<Pair>)> {
+        // Tab 已绑定为插入缩进（见 run_repl），这里不做补全。
+        Ok((0, Vec::new()))
+    }
+}
+
+impl Hinter for ReplHelper {
+    type Hint = String;
+    fn hint(&self, _line: &str, _pos: usize, _ctx: &Context<'_>) -> Option<String> {
+        None
+    }
+}
+
+impl Highlighter for ReplHelper {
+    fn highlight<'l>(&self, line: &'l str, _pos: usize) -> Cow<'l, str> {
+        Cow::Owned(highlight_line(line))
+    }
+    // 只在光标位于着色区域（字符串/注释/数字/关键字等）时整行重绘，
+    // 普通文本走快路径 → 减少闪烁；forced(Enter) 时始终重绘。
+    fn highlight_char(&self, line: &str, pos: usize, forced: bool) -> bool {
+        forced || char_is_highlighted(line, pos)
+    }
+}
+
+/// 判断缓冲区中 pos（字节下标）处的字符是否处于着色区域。
+fn char_is_highlighted(line: &str, pos: usize) -> bool {
+    let mut byte = 0usize;
+    let mut chars = line.chars().peekable();
+    let mut in_string = false;
+    let mut in_comment = false;
+    while let Some(c) = chars.next() {
+        let start = byte;
+        byte += c.len_utf8();
+        if in_comment {
+            if pos >= start && pos <= byte {
+                return true;
+            }
+            if c == '\n' {
+                in_comment = false;
+            }
+            continue;
+        }
+        if in_string {
+            if pos >= start && pos <= byte {
+                return true;
+            }
+            if c == '\\' {
+                if let Some(n) = chars.next() {
+                    byte += n.len_utf8();
+                }
+                continue;
+            }
+            if c == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match c {
+            '"' => {
+                if pos >= start && pos <= byte {
+                    return true;
+                }
+                in_string = true;
+            }
+            '/' if chars.peek() == Some(&'/') => {
+                if pos >= start && pos <= byte {
+                    return true;
+                }
+                in_comment = true;
+            }
+            // f"..." / r"..." 前缀
+            c if (c == 'f' || c == 'r') && chars.peek() == Some(&'"') => {
+                if pos >= start && pos <= byte {
+                    return true;
+                }
+                chars.next();
+                byte += 1;
+                in_string = true;
+            }
+            // 标识符：若为着色词（关键字/类型/内置/常量）则命中。
+            // 用 pos <= byte：光标停在词末（刚打完关键字）时也应触发重绘。
+            c if c.is_alphabetic() || c == '_' => {
+                let mut word = String::new();
+                word.push(c);
+                while let Some(&n) = chars.peek() {
+                    if n.is_alphanumeric() || n == '_' {
+                        word.push(n);
+                        chars.next();
+                        byte += n.len_utf8();
+                    } else {
+                        break;
+                    }
+                }
+                if classify_word(&word) != word && pos >= start && pos <= byte {
+                    return true;
+                }
+            }
+            // 数字
+            c if c.is_ascii_digit() => {
+                while let Some(&n) = chars.peek() {
+                    if n.is_alphanumeric() || n == '_' || n == '.' {
+                        chars.next();
+                        byte += n.len_utf8();
+                    } else {
+                        break;
+                    }
+                }
+                if pos >= start && pos <= byte {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+impl Validator for ReplHelper {
+    fn validate(&self, ctx: &mut rustyline::validate::ValidationContext<'_>) -> rustyline::Result<ValidationResult> {
+        if count_brace_depth(ctx.input()) > 0 {
+            Ok(ValidationResult::Incomplete)
+        } else {
+            Ok(ValidationResult::Valid(None))
+        }
+    }
+}
+
+impl Helper for ReplHelper {}
 
 fn print_help() {
     println!("Bolide Interactive Mode Commands:");
@@ -1287,6 +1585,33 @@ fn eval_input(state: &mut ReplState, input: &str) -> Result<String, String> {
 #[cfg(test)]
 mod diagnostics_tests {
     use super::*;
+
+    /// 高亮输出应包含 ANSI 颜色码，且字符串/注释状态跨行保持。
+    #[test]
+    fn highlight_line_emits_ansi_codes() {
+        let src = "fn fib(n: int) -> int {\n    // comment\n    let x = \"a\\tb\"; // c\n    return 0x1F + 1_000;\n}\n";
+        let out = highlight_line(src);
+        assert!(out.contains("\x1b[1;34mfn\x1b[0m"), "fn keyword; got: {:?}", out);
+        assert!(out.contains("\x1b[35mint\x1b[0m"), "int type; got: {:?}", out);
+        assert!(
+            out.contains("\x1b[90m// comment\n\x1b[0m"),
+            "comment reset; got: {:?}",
+            out
+        );
+        assert!(out.contains("\x1b[90m// c\n\x1b[0m"), "comment c; got: {:?}", out);
+        assert!(
+            out.contains("\x1b[32m\"a\x1b[36m\\t\x1b[32mb\"\x1b[0m"),
+            "string+escape; got: {:?}",
+            out
+        );
+        assert!(out.contains("\x1b[36m0x1F\x1b[0m"), "hex; got: {:?}", out);
+        assert!(out.contains("\x1b[36m1_000\x1b[0m"), "underscore; got: {:?}", out);
+        assert!(
+            out.contains("\x1b[1;34mreturn\x1b[0m"),
+            "return keyword; got: {:?}",
+            out
+        );
+    }
 
     #[test]
     fn missing_required_argument_points_to_call_site() {
