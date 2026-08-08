@@ -1,7 +1,7 @@
 
 print("Testing List Operations");
 
-let l: list<int> = [1, 2];
+var l: list<int> = [1, 2];
 
 // Test push/append
 // Try push first as it's the runtime name

@@ -1,7 +1,7 @@
 // Test list methods step by step
 
 print("Test 1: Basic list and push");
-let nums: list<int> = [3, 1, 4];
+var nums: list<int> = [3, 1, 4];
 nums.push(5);
 print(nums);
 
