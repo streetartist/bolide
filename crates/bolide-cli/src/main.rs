@@ -1613,6 +1613,21 @@ mod diagnostics_tests {
         );
     }
 
+    /// 光标位于着色区域（关键字/字符串/注释/数字）时应触发重绘。
+    #[test]
+    fn char_is_highlighted_detects_colored_regions() {
+        // "print(x)" 中，光标在 "print" 末尾（pos=5）应命中
+        assert!(char_is_highlighted("print(x)", 5));
+        // 光标在普通标识符 "x" 处不应命中
+        assert!(!char_is_highlighted("print(x)", 7));
+        // 字符串内部应命中
+        assert!(char_is_highlighted("let s = \"hi\";", 10));
+        // 注释内应命中
+        assert!(char_is_highlighted("let a = 1; // comment", 15));
+        // 数字应命中
+        assert!(char_is_highlighted("let n = 1234;", 11));
+    }
+
     #[test]
     fn missing_required_argument_points_to_call_site() {
         let source = r#"fn add(a: int, b: int) -> int {

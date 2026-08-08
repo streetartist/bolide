@@ -3945,6 +3945,14 @@ impl JitCompiler {
                 };
                 BolideType::List(Box::new(item_type))
             }
+            Expr::ListComprehension { iter, .. } => {
+                // 推导式元素类型：迭代器为 list → 元素类型；range 等 → Int。
+                let elem = match self.infer_expr_type_static(iter) {
+                    BolideType::List(inner) => *inner,
+                    _ => BolideType::Int,
+                };
+                BolideType::List(Box::new(elem))
+            }
             Expr::Dict(entries) => {
                 let (k_type, v_type) = if entries.is_empty() {
                     (BolideType::Int, BolideType::Int)
@@ -17783,7 +17791,14 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                 };
                 BolideType::List(Box::new(item_type))
             }
-            Expr::ListComprehension { .. } => BolideType::List(Box::new(BolideType::Dynamic)),
+            Expr::ListComprehension { iter, .. } => {
+                // 推导式元素类型：迭代器为 list → 元素类型；range 等 → Int。
+                let elem = match self.infer_expr_type(iter) {
+                    BolideType::List(inner) => *inner,
+                    _ => BolideType::Int,
+                };
+                BolideType::List(Box::new(elem))
+            }
             Expr::Dict(entries) => {
                 let (k_type, v_type) = if entries.is_empty() {
                     (BolideType::Int, BolideType::Int)

@@ -58,3 +58,7 @@ examples/tmp/
 /Bolide语言教程.pdf
 docs/standard-library.html
 docs/standard-library.pdf
+
+# REPL 运行时产物
+bolide_repl_history.txt
+__repl_*_ir.txt
