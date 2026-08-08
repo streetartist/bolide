@@ -108,6 +108,7 @@ for c in classify(4) {
 
 // 内层 for range
 fn from_range(n: int) {
+    var i: int = 0;
     for i in range(n) {
         yield i * 10;
     }
@@ -169,6 +170,7 @@ for m in ctr.count(3) {
 
 // for range + break 组合
 fn range_break(n: int) {
+    var i: int = 0;
     for i in range(n) {
         if i == 3 {
             break;

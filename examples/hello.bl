@@ -2,8 +2,4 @@
 
 print("Hello, Bolide!");
 
-let x: int = 42;
-let y: int = 58;
-let sum: int = x + y;
-
-print(sum);
+let x: decimal = 0.1d;

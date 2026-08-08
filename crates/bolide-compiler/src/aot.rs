@@ -6544,6 +6544,8 @@ struct AotCompileContext<'a, 'b> {
     temp_rc_values: Vec<(Value, BolideType)>,
     /// 循环块栈：(continue 目标块, break 目标块, 循环作用域基索引, 入栈时 finally 深度)
     loop_stack: Vec<(Block, Block, usize, usize)>,
+    /// 列表推导式模式：其中的 `for x in range(...)` 自动声明循环变量（不要求预先声明）。
+    in_comprehension: bool,
     /// catch 落点栈：每个 try 块的 catch_block，用于编译 throw（同函数内直接跳转）
     catch_stack: Vec<Block>,
     /// 程序是否可能跨函数传播异常
@@ -6671,6 +6673,7 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             rc_variables: Vec::new(),
             temp_rc_values: Vec::new(),
             loop_stack: Vec::new(),
+            in_comprehension: false,
             catch_stack: Vec::new(),
             needs_exception_checks: true,
             catch_body_depth: 0,
@@ -8678,7 +8681,12 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             iter: iter.clone(),
             body,
         };
-        self.compile_for(&for_stmt)?;
+        // 推导式循环变量自动声明，不要求预先声明。
+        let prev = self.in_comprehension;
+        self.in_comprehension = true;
+        let r = self.compile_for(&for_stmt);
+        self.in_comprehension = prev;
+        r?;
 
         Ok(list_ptr)
     }
@@ -8960,14 +8968,14 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         if is_bigint {
             let lhs = self.compile_expr(left)?;
             let rhs = self.compile_expr(right)?;
-            return self.compile_bigint_binop(lhs, op, rhs);
+            return self.compile_bigint_binop(lhs, &left_type, op, rhs, &right_type);
         }
 
         // Decimal 操作
         if is_decimal {
             let lhs = self.compile_expr(left)?;
             let rhs = self.compile_expr(right)?;
-            return self.compile_decimal_binop(lhs, op, rhs);
+            return self.compile_decimal_binop(lhs, &left_type, op, rhs, &right_type);
         }
 
         let lhs = self.compile_expr(left)?;
@@ -9452,13 +9460,26 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         Ok(result)
     }
 
-    /// 编译 BigInt 二元运算
+    /// 编译 BigInt 二元运算。
+    /// 非 bigint 操作数（int 字面量等）先隐式转成 bigint，否则 i64 会被误当指针。
     fn compile_bigint_binop(
         &mut self,
         lhs: Value,
+        left_type: &Option<BolideType>,
         op: &BinOp,
         rhs: Value,
+        right_type: &Option<BolideType>,
     ) -> Result<Value, String> {
+        let lhs = if matches!(left_type, Some(BolideType::Int)) {
+            self.prepare_value_for_storage(lhs, left_type.as_ref().unwrap(), &BolideType::BigInt)?
+        } else {
+            lhs
+        };
+        let rhs = if matches!(right_type, Some(BolideType::Int)) {
+            self.prepare_value_for_storage(rhs, right_type.as_ref().unwrap(), &BolideType::BigInt)?
+        } else {
+            rhs
+        };
         let func_name = match op {
             BinOp::Add => "@_bigint_add",
             BinOp::Sub => "@_bigint_sub",
@@ -9508,12 +9529,34 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
     }
 
     /// 编译 Decimal 二元运算
+    /// 编译 Decimal 二元运算。
+    /// 非 decimal 操作数（int/float 等）先隐式转成 decimal，否则会被误当指针。
     fn compile_decimal_binop(
         &mut self,
         lhs: Value,
+        left_type: &Option<BolideType>,
         op: &BinOp,
         rhs: Value,
+        right_type: &Option<BolideType>,
     ) -> Result<Value, String> {
+        let lhs = if !matches!(left_type, Some(BolideType::Decimal)) {
+            self.prepare_value_for_storage(
+                lhs,
+                left_type.as_ref().unwrap_or(&BolideType::Int),
+                &BolideType::Decimal,
+            )?
+        } else {
+            lhs
+        };
+        let rhs = if !matches!(right_type, Some(BolideType::Decimal)) {
+            self.prepare_value_for_storage(
+                rhs,
+                right_type.as_ref().unwrap_or(&BolideType::Int),
+                &BolideType::Decimal,
+            )?
+        } else {
+            rhs
+        };
         let func_name = match op {
             BinOp::Add => "@_decimal_add",
             BinOp::Sub => "@_decimal_sub",
@@ -13827,11 +13870,110 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         actual_ty: &BolideType,
         target_ty: &BolideType,
     ) -> Result<Value, String> {
+        let actual_ty = self.normalize_bolide_type(actual_ty);
+        let target_ty = self.normalize_bolide_type(target_ty);
+
         if matches!(target_ty, BolideType::Dynamic) && !matches!(actual_ty, BolideType::Dynamic) {
-            return self.convert_to_dynamic(val, actual_ty);
+            return self.convert_to_dynamic(val, &actual_ty);
         }
 
-        Ok(val)
+        if actual_ty == target_ty {
+            return Ok(val);
+        }
+
+        // 与 JIT 对齐：标注类型 / 传参 / 赋值时的隐式转换，避免 i64 被当成 bigint 指针。
+        match (&actual_ty, &target_ty) {
+            (BolideType::Int, BolideType::BigInt) => {
+                let func_ref = *self
+                    .func_refs
+                    .get("@_bigint_from_i64")
+                    .ok_or("bigint_from_i64 not found")?;
+                let call = self.builder.ins().call(func_ref, &[val]);
+                let result = self.builder.inst_results(call)[0];
+                self.track_temp_rc_value(result, &BolideType::BigInt);
+                Ok(result)
+            }
+            (BolideType::Str, BolideType::BigInt) => {
+                let func_ref = *self
+                    .func_refs
+                    .get("@_bigint_from_str")
+                    .ok_or("bigint_from_str not found")?;
+                let call = self.builder.ins().call(func_ref, &[val]);
+                let result = self.builder.inst_results(call)[0];
+                self.track_temp_rc_value(result, &BolideType::BigInt);
+                Ok(result)
+            }
+            (BolideType::Int, BolideType::Decimal) => {
+                let func_ref = *self
+                    .func_refs
+                    .get("@_decimal_from_i64")
+                    .ok_or("decimal_from_i64 not found")?;
+                let call = self.builder.ins().call(func_ref, &[val]);
+                let result = self.builder.inst_results(call)[0];
+                self.track_temp_rc_value(result, &BolideType::Decimal);
+                Ok(result)
+            }
+            (BolideType::Float, BolideType::Decimal) => {
+                let func_ref = *self
+                    .func_refs
+                    .get("@_decimal_from_f64")
+                    .ok_or("decimal_from_f64 not found")?;
+                let call = self.builder.ins().call(func_ref, &[val]);
+                let result = self.builder.inst_results(call)[0];
+                self.track_temp_rc_value(result, &BolideType::Decimal);
+                Ok(result)
+            }
+            (BolideType::Str, BolideType::Decimal) => {
+                let func_ref = *self
+                    .func_refs
+                    .get("@_decimal_from_str")
+                    .ok_or("decimal_from_str not found")?;
+                let call = self.builder.ins().call(func_ref, &[val]);
+                let result = self.builder.inst_results(call)[0];
+                self.track_temp_rc_value(result, &BolideType::Decimal);
+                Ok(result)
+            }
+            (BolideType::Int, BolideType::Float) => {
+                Ok(self.builder.ins().fcvt_from_sint(types::F64, val))
+            }
+            (BolideType::Float, BolideType::Int) => {
+                Ok(self.builder.ins().fcvt_to_sint(types::I64, val))
+            }
+            (BolideType::BigInt, BolideType::Int) => {
+                let func_ref = *self
+                    .func_refs
+                    .get("@_bigint_to_i64")
+                    .ok_or("bigint_to_i64 not found")?;
+                let call = self.builder.ins().call(func_ref, &[val]);
+                Ok(self.builder.inst_results(call)[0])
+            }
+            (BolideType::Decimal, BolideType::Int) => {
+                let func_ref = *self
+                    .func_refs
+                    .get("@_decimal_to_i64")
+                    .ok_or("decimal_to_i64 not found")?;
+                let call = self.builder.ins().call(func_ref, &[val]);
+                Ok(self.builder.inst_results(call)[0])
+            }
+            (BolideType::Decimal, BolideType::Float) => {
+                let func_ref = *self
+                    .func_refs
+                    .get("@_decimal_to_f64")
+                    .ok_or("decimal_to_f64 not found")?;
+                let call = self.builder.ins().call(func_ref, &[val]);
+                Ok(self.builder.inst_results(call)[0])
+            }
+            (BolideType::Bool, BolideType::Int) => Ok(val),
+            _ => {
+                if Self::is_rc_type(&target_ty) && !Self::is_rc_type(&actual_ty) {
+                    return Err(format!(
+                        "cannot implicitly convert {:?} to {:?}; use an explicit cast like bigint(x) / decimal(x) / str(x)",
+                        actual_ty, target_ty
+                    ));
+                }
+                Ok(val)
+            }
+        }
     }
 
     fn prepare_funcsig_for_container_storage(
@@ -16768,43 +16910,104 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
     }
 
     /// 编译 range for 循环
-    fn compile_range_for(
+    /// 编译 range() 的一个边界表达式并统一转成 i64。
+    /// bigint 边界此前会被当成堆指针比较导致死循环。
+    fn compile_range_bound_i64(&mut self, e: &Expr) -> Result<Value, String> {
+        let rc_before = self.temp_rc_values.len();
+        let closure_before = self.closure_temps.len();
+        let ty = self.normalize_bolide_type(&self.infer_expr_type(e).unwrap_or(BolideType::Int));
+        let v = self.compile_expr(e)?;
+        let result = self.prepare_value_for_storage(v, &ty, &BolideType::Int)?;
+        self.release_temp_rc_values_from(rc_before, closure_before);
+        Ok(result)
+    }
+
+    /// 编译期判断 range 步长是否为负常量（支持 -1、-1b、-(1)、-(1b) 等写法）。
+    fn is_negative_const_step(e: &Expr) -> bool {
+        match e {
+            Expr::Int(n) => *n < 0,
+            Expr::BigInt(s) => s.trim_start().starts_with('-'),
+            Expr::UnaryOp(UnaryOp::Neg, inner) => match inner.as_ref() {
+                Expr::Int(n) => *n > 0,
+                Expr::BigInt(s) => !s.trim_start().starts_with('-'),
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+
+    /// 读取 range 循环计数器（局部变量 use_var / 全局变量 load）。
+    fn read_range_counter(
+        &mut self,
+        loop_var: Option<Variable>,
+        global_addr: Option<Value>,
+    ) -> Value {
+        match loop_var {
+            Some(v) => self.builder.use_var(v),
+            None => self.builder.ins().load(
+                types::I64,
+                MemFlags::new(),
+                global_addr.expect("global loop counter address"),
+                0,
+            ),
+        }
+    }
+
+    /// 写入 range 循环计数器（局部变量 def_var / 全局变量 store）。
+    fn write_range_counter(
+        &mut self,
+        loop_var: Option<Variable>,
+        global_addr: Option<Value>,
+        val: Value,
+    ) {
+        match loop_var {
+            Some(v) => self.builder.def_var(v, val),
+            None => {
+                let addr = global_addr.expect("global loop counter address");
+                self.builder.ins().store(MemFlags::new(), val, addr, 0);
+            }
+        }
+    }
+
+    /// 列表推导式中的 `for x in range(...)`：自动声明 i64 循环变量（作用域限于循环）。
+    fn compile_range_for_autodeclare(
         &mut self,
         for_stmt: &bolide_parser::ForStmt,
         args: &[Expr],
     ) -> Result<(), String> {
-        // 解析 range 参数: range(end) 或 range(start, end) 或 range(start, end, step)
-        let (start, end, step) = match args.len() {
-            1 => {
-                let end = self.compile_expr(&args[0])?;
-                let start = self.builder.ins().iconst(types::I64, 0);
-                let step = self.builder.ins().iconst(types::I64, 1);
-                (start, end, step)
-            }
-            2 => {
-                let start = self.compile_expr(&args[0])?;
-                let end = self.compile_expr(&args[1])?;
-                let step = self.builder.ins().iconst(types::I64, 1);
-                (start, end, step)
-            }
-            3 => {
-                let start = self.compile_expr(&args[0])?;
-                let end = self.compile_expr(&args[1])?;
-                let step = self.compile_expr(&args[2])?;
-                (start, end, step)
-            }
-            _ => return Err("range() requires 1-3 arguments".to_string()),
-        };
-
-        // 创建循环变量
         let var_name = for_stmt
             .vars
             .first()
             .ok_or("For loop requires at least one variable")?;
+
+        // int 模式：边界统一转成 i64
+        let (start_val, end_val, step_val, is_negative_step) = match args.len() {
+            1 => {
+                let end = self.compile_range_bound_i64(&args[0])?;
+                let start = self.builder.ins().iconst(types::I64, 0);
+                let step = self.builder.ins().iconst(types::I64, 1);
+                (start, end, step, false)
+            }
+            2 => {
+                let start = self.compile_range_bound_i64(&args[0])?;
+                let end = self.compile_range_bound_i64(&args[1])?;
+                let step = self.builder.ins().iconst(types::I64, 1);
+                (start, end, step, false)
+            }
+            3 => {
+                let start = self.compile_range_bound_i64(&args[0])?;
+                let end = self.compile_range_bound_i64(&args[1])?;
+                let step = self.compile_range_bound_i64(&args[2])?;
+                let is_neg = Self::is_negative_const_step(&args[2]);
+                (start, end, step, is_neg)
+            }
+            _ => return Err("range() expects 1, 2, or 3 arguments".to_string()),
+        };
+
         let loop_scope_idx = self.enter_scope();
         let loop_var = self.declare_variable(var_name, types::I64);
-        self.builder.def_var(loop_var, start);
-        self.var_types.insert(var_name.clone(), BolideType::Int);
+        self.builder.def_var(loop_var, start_val);
+        self.var_types.insert(var_name.to_string(), BolideType::Int);
         self.record_var_scope(var_name);
 
         let header_block = self.builder.create_block();
@@ -16817,7 +17020,158 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         // 条件检查
         self.builder.switch_to_block(header_block);
         let idx = self.builder.use_var(loop_var);
-        let cond = self.builder.ins().icmp(IntCC::SignedLessThan, idx, end);
+        let cond = if is_negative_step {
+            self.builder.ins().icmp(IntCC::SignedGreaterThan, idx, end_val)
+        } else {
+            self.builder.ins().icmp(IntCC::SignedLessThan, idx, end_val)
+        };
+        self.builder
+            .ins()
+            .brif(cond, body_block, &[], exit_block, &[]);
+
+        // 循环体
+        self.builder.switch_to_block(body_block);
+        self.builder.seal_block(body_block);
+
+        let scope_idx = self.enter_scope();
+        self.loop_stack.push((
+            latch_block,
+            exit_block,
+            scope_idx,
+            self.current_finally_depth(),
+        ));
+        let mut body_returned = false;
+        for stmt in &for_stmt.body {
+            if self.compile_stmt(stmt)? {
+                body_returned = true;
+                break;
+            }
+        }
+        self.loop_stack.pop();
+
+        if body_returned {
+            self.abandon_scope(scope_idx)?;
+        } else {
+            self.leave_scope(scope_idx)?;
+            self.builder.ins().jump(latch_block, &[]);
+        }
+
+        // latch
+        self.builder.switch_to_block(latch_block);
+        self.builder.seal_block(latch_block);
+        let idx = self.builder.use_var(loop_var);
+        let new_idx = self.builder.ins().iadd(idx, step_val);
+        self.builder.def_var(loop_var, new_idx);
+        self.builder.ins().jump(header_block, &[]);
+
+        self.builder.seal_block(header_block);
+
+        self.builder.switch_to_block(exit_block);
+        self.builder.seal_block(exit_block);
+        self.leave_scope(loop_scope_idx)?;
+
+        Ok(())
+    }
+
+    fn compile_range_for(
+        &mut self,
+        for_stmt: &bolide_parser::ForStmt,
+        args: &[Expr],
+    ) -> Result<(), String> {
+        // 列表推导式模式：循环变量自动声明（作用域限于循环），不要求预先声明。
+        if self.in_comprehension {
+            return self.compile_range_for_autodeclare(for_stmt, args);
+        }
+
+        // 循环变量必须预先声明（用户语义决定），且为 int 或 bigint。
+        let var_name = for_stmt
+            .vars
+            .first()
+            .ok_or("For loop requires at least one variable")?;
+        let is_local = self.variables.contains_key(var_name);
+        let is_global = self.global_refs.contains_key(var_name);
+        let predeclared_ty = if is_local {
+            self.var_types.get(var_name).cloned()
+        } else if is_global {
+            self.global_var_types.get(var_name).cloned()
+        } else {
+            None
+        };
+        match &predeclared_ty {
+            Some(BolideType::Int) | Some(BolideType::BigInt) => {
+                self.ensure_mutable_binding(var_name, "assign to")?;
+            }
+            Some(other) => {
+                return Err(format!(
+                    "for-range loop variable '{}' must be declared as int or bigint, got {:?}",
+                    var_name, other
+                ));
+            }
+            None => {
+                return Err(format!("Undefined variable or function: {}", var_name));
+            }
+        }
+        if matches!(predeclared_ty, Some(BolideType::BigInt)) {
+            return self.compile_range_for_bigint(for_stmt, args);
+        }
+
+        // int 模式：边界统一转成 i64
+        let (start_val, end_val, step_val, is_negative_step) = match args.len() {
+            1 => {
+                let end = self.compile_range_bound_i64(&args[0])?;
+                let start = self.builder.ins().iconst(types::I64, 0);
+                let step = self.builder.ins().iconst(types::I64, 1);
+                (start, end, step, false)
+            }
+            2 => {
+                let start = self.compile_range_bound_i64(&args[0])?;
+                let end = self.compile_range_bound_i64(&args[1])?;
+                let step = self.builder.ins().iconst(types::I64, 1);
+                (start, end, step, false)
+            }
+            3 => {
+                let start = self.compile_range_bound_i64(&args[0])?;
+                let end = self.compile_range_bound_i64(&args[1])?;
+                let step = self.compile_range_bound_i64(&args[2])?;
+                let is_neg = Self::is_negative_const_step(&args[2]);
+                (start, end, step, is_neg)
+            }
+            _ => return Err("range() expects 1, 2, or 3 arguments".to_string()),
+        };
+
+        let loop_scope_idx = self.enter_scope();
+
+        // 计数器存储位置：局部变量 or 全局变量地址
+        let loop_var = if is_local {
+            Some(*self.variables.get(var_name).expect("local loop var"))
+        } else {
+            None
+        };
+        let global_addr = if is_global {
+            let gv = *self.global_refs.get(var_name).expect("global loop var");
+            Some(self.builder.ins().global_value(self.ptr_type, gv))
+        } else {
+            None
+        };
+
+        // 复用预声明的 int 变量作为计数器（循环后保留最后的值）。
+        self.write_range_counter(loop_var, global_addr, start_val);
+
+        let header_block = self.builder.create_block();
+        let body_block = self.builder.create_block();
+        let latch_block = self.builder.create_block();
+        let exit_block = self.builder.create_block();
+
+        self.builder.ins().jump(header_block, &[]);
+
+        // 条件检查
+        self.builder.switch_to_block(header_block);
+        let idx = self.read_range_counter(loop_var, global_addr);
+        let cond = if is_negative_step {
+            self.builder.ins().icmp(IntCC::SignedGreaterThan, idx, end_val)
+        } else {
+            self.builder.ins().icmp(IntCC::SignedLessThan, idx, end_val)
+        };
         self.builder
             .ins()
             .brif(cond, body_block, &[], exit_block, &[]);
@@ -16852,15 +17206,225 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         // latch: 递增索引后回到 header（continue 跳转到此处以保证步进）
         self.builder.switch_to_block(latch_block);
         self.builder.seal_block(latch_block);
-        let idx = self.builder.use_var(loop_var);
-        let new_idx = self.builder.ins().iadd(idx, step);
-        self.builder.def_var(loop_var, new_idx);
+        let idx = self.read_range_counter(loop_var, global_addr);
+        let new_idx = self.builder.ins().iadd(idx, step_val);
+        self.write_range_counter(loop_var, global_addr, new_idx);
         self.builder.ins().jump(header_block, &[]);
 
         self.builder.seal_block(header_block);
 
         self.builder.switch_to_block(exit_block);
         self.builder.seal_block(exit_block);
+        self.leave_scope(loop_scope_idx)?;
+
+        Ok(())
+    }
+
+    /// 编译 range() 的一个边界表达式为 bigint 指针（int → from_i64，bigint → 原样）。
+    fn compile_expr_to_bigint(&mut self, e: &Expr) -> Result<Value, String> {
+        let ty = self.normalize_bolide_type(&self.infer_expr_type(e).unwrap_or(BolideType::Int));
+        let v = self.compile_expr(e)?;
+        self.prepare_value_for_storage(v, &ty, &BolideType::BigInt)
+    }
+
+    /// 让一个 bigint 值成为循环拥有的独立所有权：临时值直接接管，否则 clone 一份。
+    fn own_bigint_value(&mut self, val: Value) -> Value {
+        let is_temp = self.temp_rc_values.iter().any(|(v, _)| *v == val);
+        if is_temp {
+            self.remove_temp_rc_value(val);
+            val
+        } else {
+            let clone_ref = *self
+                .func_refs
+                .get("@_bigint_clone")
+                .expect("bigint_clone not registered");
+            let call = self.builder.ins().call(clone_ref, &[val]);
+            self.builder.inst_results(call)[0]
+        }
+    }
+
+    /// 读取 bigint 循环计数器（局部变量 use_var / 全局变量 load）。
+    fn read_bigint_counter(
+        &mut self,
+        counter_var: Option<Variable>,
+        counter_addr: Option<Value>,
+    ) -> Value {
+        match counter_var {
+            Some(v) => self.builder.use_var(v),
+            None => self.builder.ins().load(
+                self.ptr_type,
+                MemFlags::new(),
+                counter_addr.expect("global bigint loop counter address"),
+                0,
+            ),
+        }
+    }
+
+    /// 写入 bigint 循环计数器（局部变量 def_var / 全局变量 store）。
+    fn write_bigint_counter(
+        &mut self,
+        counter_var: Option<Variable>,
+        counter_addr: Option<Value>,
+        val: Value,
+    ) {
+        match counter_var {
+            Some(v) => self.builder.def_var(v, val),
+            None => {
+                let addr = counter_addr.expect("global bigint loop counter address");
+                self.builder.ins().store(MemFlags::new(), val, addr, 0);
+            }
+        }
+    }
+
+    /// 编译 for i in range(...)，循环变量为 bigint。
+    /// 用真正的 bigint 计数器（不截断为 i64），支持任意大小的 bigint 区间。
+    fn compile_range_for_bigint(
+        &mut self,
+        for_stmt: &bolide_parser::ForStmt,
+        args: &[Expr],
+    ) -> Result<(), String> {
+        let var_name = for_stmt
+            .vars
+            .first()
+            .ok_or("For loop requires at least one variable")?;
+        let (start_e, end_e, step_e) = match args.len() {
+            1 => (Expr::Int(0), args[0].clone(), Expr::Int(1)),
+            2 => (args[0].clone(), args[1].clone(), Expr::Int(1)),
+            3 => (args[0].clone(), args[1].clone(), args[2].clone()),
+            _ => return Err("range() expects 1, 2, or 3 arguments".to_string()),
+        };
+        let is_neg = Self::is_negative_const_step(&step_e);
+
+        // 编译边界为 bigint，并各自取得独立所有权。编译产生的临时 RC 值在进入循环前立即释放。
+        let rc_before = self.temp_rc_values.len();
+        let closure_before = self.closure_temps.len();
+        let start_big = self.compile_expr_to_bigint(&start_e)?;
+        let start_big = self.own_bigint_value(start_big);
+        self.release_temp_rc_values_from(rc_before, closure_before);
+
+        let rc_before = self.temp_rc_values.len();
+        let closure_before = self.closure_temps.len();
+        let end_big = self.compile_expr_to_bigint(&end_e)?;
+        let end_big = self.own_bigint_value(end_big);
+        self.release_temp_rc_values_from(rc_before, closure_before);
+
+        let rc_before = self.temp_rc_values.len();
+        let closure_before = self.closure_temps.len();
+        let step_big = self.compile_expr_to_bigint(&step_e)?;
+        let step_big = self.own_bigint_value(step_big);
+        self.release_temp_rc_values_from(rc_before, closure_before);
+
+        let loop_scope_idx = self.enter_scope();
+
+        self.ensure_mutable_binding(var_name, "assign to")?;
+        let is_local = self.variables.contains_key(var_name);
+        let counter_var = if is_local {
+            Some(*self.variables.get(var_name).expect("local bigint loop var"))
+        } else {
+            None
+        };
+        let counter_addr = if !is_local {
+            let gv = *self.global_refs.get(var_name).expect("global bigint loop var");
+            Some(self.builder.ins().global_value(self.ptr_type, gv))
+        } else {
+            None
+        };
+
+        // 初始化计数器：写入 start（释放旧的 i 值）。
+        let old = self.read_bigint_counter(counter_var, counter_addr);
+        self.emit_release(old, &BolideType::BigInt);
+        self.write_bigint_counter(counter_var, counter_addr, start_big);
+
+        // end/step 物化为拥有所有权的隐藏变量（进入循环后由 leave_scope 释放）。
+        let end_name = format!("__range_end_{}", var_name);
+        let end_var = self.declare_variable(&end_name, self.ptr_type);
+        self.builder.def_var(end_var, end_big);
+        self.track_rc_variable(&end_name, &BolideType::BigInt);
+        self.record_var_scope(&end_name);
+
+        let step_name = format!("__range_step_{}", var_name);
+        let step_var = self.declare_variable(&step_name, self.ptr_type);
+        self.builder.def_var(step_var, step_big);
+        self.track_rc_variable(&step_name, &BolideType::BigInt);
+        self.record_var_scope(&step_name);
+
+        let header_block = self.builder.create_block();
+        let body_block = self.builder.create_block();
+        let latch_block = self.builder.create_block();
+        let exit_block = self.builder.create_block();
+
+        self.builder.ins().jump(header_block, &[]);
+
+        // header: bigint 比较（正步长 lt / 负步长 gt，gt 用 lt(end, cur) 表达）→ i64 → i1 → brif
+        self.builder.switch_to_block(header_block);
+        let cur = self.read_bigint_counter(counter_var, counter_addr);
+        let end_val = self.builder.use_var(end_var);
+        let cmp_lt_ref = *self
+            .func_refs
+            .get("@_bigint_lt")
+            .ok_or("bigint_lt not found")?;
+        let cmp_call = if is_neg {
+            self.builder.ins().call(cmp_lt_ref, &[end_val, cur])
+        } else {
+            self.builder.ins().call(cmp_lt_ref, &[cur, end_val])
+        };
+        let cmp_result = self.builder.inst_results(cmp_call)[0];
+        let cond = self
+            .builder
+            .ins()
+            .icmp_imm(IntCC::NotEqual, cmp_result, 0);
+        self.builder
+            .ins()
+            .brif(cond, body_block, &[], exit_block, &[]);
+
+        // 循环体
+        self.builder.switch_to_block(body_block);
+        self.builder.seal_block(body_block);
+
+        let scope_idx = self.enter_scope();
+        self.loop_stack.push((
+            latch_block,
+            exit_block,
+            scope_idx,
+            self.current_finally_depth(),
+        ));
+        let mut body_returned = false;
+        for stmt in &for_stmt.body {
+            if self.compile_stmt(stmt)? {
+                body_returned = true;
+                break;
+            }
+        }
+        self.loop_stack.pop();
+
+        if body_returned {
+            self.abandon_scope(scope_idx)?;
+        } else {
+            self.leave_scope(scope_idx)?;
+            self.builder.ins().jump(latch_block, &[]);
+        }
+
+        // latch: i = i + step（bigint 加法，释放旧值、写入新值）
+        self.builder.switch_to_block(latch_block);
+        self.builder.seal_block(latch_block);
+        let cur = self.read_bigint_counter(counter_var, counter_addr);
+        let step_val = self.builder.use_var(step_var);
+        let add_ref = *self
+            .func_refs
+            .get("@_bigint_add")
+            .ok_or("bigint_add not found")?;
+        let add_call = self.builder.ins().call(add_ref, &[cur, step_val]);
+        let new_big = self.builder.inst_results(add_call)[0];
+        self.emit_release(cur, &BolideType::BigInt);
+        self.write_bigint_counter(counter_var, counter_addr, new_big);
+        self.builder.ins().jump(header_block, &[]);
+
+        self.builder.seal_block(header_block);
+
+        self.builder.switch_to_block(exit_block);
+        self.builder.seal_block(exit_block);
+
+        // 计数器（即循环变量 i）的最后值保留在 i 中，由外层作用域释放。
         self.leave_scope(loop_scope_idx)?;
 
         Ok(())

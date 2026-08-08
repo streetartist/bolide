@@ -216,6 +216,8 @@ impl Codegen {
             ("bolide_closure_release", vec!["ptr"], "void"),
             // BigInt / Decimal / Bytes
             ("bolide_bigint_debug_stats", vec![], "void"),
+            ("bolide_bigint_to_i64", vec!["ptr"], "i64"),
+            ("bolide_bigint_clone", vec!["ptr"], "ptr"),
             ("bolide_bigint_from_i64", vec!["i64"], "ptr"),
             ("bolide_bigint_from_str", vec!["ptr", "i64"], "ptr"),
             ("bolide_decimal_from_i64", vec!["i64"], "ptr"),
@@ -484,6 +486,8 @@ declare ptr @bolide_closure_env_ptr(ptr)
 declare void @bolide_closure_retain(ptr)
 declare void @bolide_closure_release(ptr)
 declare void @bolide_bigint_debug_stats()
+declare i64 @bolide_bigint_to_i64(ptr)
+declare ptr @bolide_bigint_clone(ptr)
 declare ptr @bolide_bigint_from_i64(i64)
 declare ptr @bolide_bigint_from_str(ptr, i64)
 declare ptr @bolide_decimal_from_i64(i64)
@@ -3071,6 +3075,33 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
         Ok(())
     }
 
+    /// 编译期判断 range 步长是否为负常量（支持 -1、-1b、-(1)、-(1b) 等写法）。
+    fn is_negative_const_step(e: &Expr) -> bool {
+        match e {
+            Expr::Int(n) => *n < 0,
+            Expr::BigInt(s) => s.trim_start().starts_with('-'),
+            Expr::UnaryOp(UnaryOp::Neg, inner) => match inner.as_ref() {
+                Expr::Int(n) => *n > 0,
+                Expr::BigInt(s) => !s.trim_start().starts_with('-'),
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+
+    /// 编译 range 边界并转成 i64：bigint/decimal 指针 → 调用运行时取 i64 值，
+    /// 否则直接 cast。此前 bigint 边界被 ptrtoint 当成指针比较导致死循环。
+    fn emit_range_bound_i64(&mut self, e: &Expr) -> Result<String, String> {
+        let (v, ty) = self.emit_expr(e)?;
+        if ty == "ptr" {
+            let d = self.fresh();
+            let _ = writeln!(self.body, "  {} = call i64 @bolide_bigint_to_i64(ptr {})", d, v);
+            Ok(d)
+        } else {
+            self.cast_to(v, &ty, "i64")
+        }
+    }
+
     fn emit_for_range(
         &mut self,
         var: &str,
@@ -3088,29 +3119,26 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
             return Err("range() step cannot be 0".into());
         }
         // 步长符号只在编译期常量时确定（对齐 JIT is_negative_step）；非零负数 → 降序
-        let is_neg = matches!(&step_e, Expr::Int(n) if *n < 0);
+        let is_neg = Self::is_negative_const_step(&step_e);
         // var i = start; while (i < end | i > end) { body; i = i + step }
         // Whole loop-body scope is snapshot/restored (JIT enter_scope/leave_scope):
         // the loop var + any `let` inside the body don't leak out of the loop.
         let saved = self.snapshot_scopes();
         let slot = self.fresh_local(var);
         let _ = writeln!(self.body, "  {} = alloca i64, align 8", slot);
-        let (sv, sty) = self.emit_expr(&start_e)?;
-        let sv = self.cast_to(sv, sty, "i64")?;
+        let sv = self.emit_range_bound_i64(&start_e)?;
         let _ = writeln!(self.body, "  store i64 {}, ptr {}, align 8", sv, slot);
         self.locals
             .insert(var.to_string(), (slot.clone(), "i64"));
         self.local_kind.insert(var.to_string(), ValKind::Int);
         self.mutable.insert(var.to_string(), true);
 
-        let (endv, ety) = self.emit_expr(&end_e)?;
-        let endv = self.cast_to(endv, ety, "i64")?;
+        let endv = self.emit_range_bound_i64(&end_e)?;
         let end_slot = self.fresh_local("__range_end");
         let _ = writeln!(self.body, "  {} = alloca i64, align 8", end_slot);
         let _ = writeln!(self.body, "  store i64 {}, ptr {}, align 8", endv, end_slot);
 
-        let (stepv, stty) = self.emit_expr(&step_e)?;
-        let stepv = self.cast_to(stepv, stty, "i64")?;
+        let stepv = self.emit_range_bound_i64(&step_e)?;
         let step_slot = self.fresh_local("__range_step");
         let _ = writeln!(self.body, "  {} = alloca i64, align 8", step_slot);
         let _ = writeln!(self.body, "  store i64 {}, ptr {}, align 8", stepv, step_slot);
