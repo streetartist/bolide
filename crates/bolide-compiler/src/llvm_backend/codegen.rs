@@ -139,6 +139,8 @@ struct Codegen {
     current_env_slot: Option<String>,
     /// module-level globals: name → (llvm ty, kind, optional const init expr already lowered)
     global_vars: HashMap<String, (&'static str, ValKind)>,
+    /// top-level let/var mutability (mirrors locals `mutable` map)
+    global_mutable: HashMap<String, bool>,
     /// parameter names that are `ref` params — their `locals[name]` holds the
     /// caller's variable ADDRESS (ptr); reads deref, writes store through it.
     ref_params: HashSet<String>,
@@ -374,6 +376,7 @@ impl Codegen {
             current_captures: HashMap::new(),
             current_env_slot: None,
             global_vars: HashMap::new(),
+            global_mutable: HashMap::new(),
             ref_params: HashSet::new(),
             ref_param_val_ty: HashMap::new(),
             ref_param_addr_slot: HashMap::new(),
@@ -760,6 +763,7 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
                 };
                 let ty = kind_to_llvm(&kind);
                 self.global_vars.insert(d.name.clone(), (ty, kind));
+                self.global_mutable.insert(d.name.clone(), d.mutable);
             }
         }
 
@@ -2471,7 +2475,15 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
             } else {
                 self.emit_expr(v)?
             };
-            let val = self.cast_to(val, vty, ty)?;
+            // `let x: dynamic = 1` must wrap into BolideDynamic, not ptr-cast the int.
+            let val = if matches!(kind, ValKind::Dynamic)
+                && !matches!(self.infer_kind(v), ValKind::Dynamic)
+            {
+                let k = self.infer_kind(v);
+                self.wrap_as_dynamic(val, vty, &k)?
+            } else {
+                self.cast_to(val, vty, ty)?
+            };
             let _ = writeln!(self.body, "  store {} {}, ptr {}, align 8", ty, val, slot);
         } else {
             match ty {
@@ -2490,6 +2502,79 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
         self.local_kind.insert(d.name.clone(), kind);
         self.mutable.insert(d.name.clone(), d.mutable);
         Ok(())
+    }
+
+    /// `let` is immutable, `var` is mutable (same as Cranelift).
+    fn binding_is_mutable(&self, name: &str) -> bool {
+        if let Some(m) = self.mutable.get(name) {
+            return *m;
+        }
+        if let Some(m) = self.global_mutable.get(name) {
+            return *m;
+        }
+        // ref params are aliases of caller's variable; allow store-through
+        if self.ref_params.contains(name) {
+            return true;
+        }
+        // Unknown / not a binding — treat as mutable so other errors surface first
+        true
+    }
+
+    fn ensure_mutable_binding(&self, name: &str, action: &str) -> Result<(), String> {
+        if self.binding_is_mutable(name) {
+            return Ok(());
+        }
+        Err(format!(
+            "Cannot {} immutable binding '{}'; declare it with var to make it mutable",
+            action, name
+        ))
+    }
+
+    /// Root identifier of an lvalue chain (`xs[0]`, `obj.field`, bare `x`).
+    fn lvalue_root(expr: &Expr) -> Option<&str> {
+        match expr {
+            Expr::Ident(n) => Some(n.as_str()),
+            Expr::Index(base, _) | Expr::Member(base, _) => Self::lvalue_root(base),
+            _ => None,
+        }
+    }
+
+    fn ensure_mutable_target(&self, expr: &Expr, action: &str) -> Result<(), String> {
+        if let Some(root) = Self::lvalue_root(expr) {
+            self.ensure_mutable_binding(root, action)?;
+        }
+        Ok(())
+    }
+
+    fn is_mutating_method(base_kind: &ValKind, method: &str) -> bool {
+        match base_kind {
+            ValKind::List(_) | ValKind::ListObj(_) | ValKind::NestedList(_) => matches!(
+                method,
+                "push"
+                    | "append"
+                    | "pop"
+                    | "set"
+                    | "insert"
+                    | "remove"
+                    | "clear"
+                    | "reverse"
+                    | "extend"
+                    | "sort"
+                    | "resize"
+                    | "reserve"
+            ),
+            ValKind::Dict => matches!(
+                method,
+                "set" | "insert" | "remove" | "delete" | "clear" | "update"
+            ),
+            ValKind::Bytes => matches!(
+                method,
+                "push" | "append" | "set" | "insert" | "remove" | "clear" | "extend"
+            ),
+            // Channel send/close mutate channel state
+            ValKind::Ptr => matches!(method, "send" | "close"),
+            _ => false,
+        }
     }
 
     fn emit_assign(&mut self, a: &Assign) -> Result<(), String> {
@@ -2517,12 +2602,7 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
                     return Ok(());
                 }
                 if let Some((slot, ty)) = self.locals.get(name).cloned() {
-                    if self.mutable.get(name) == Some(&false) {
-                        return Err(format!(
-                            "Cannot assign to immutable binding '{}'; use var",
-                            name
-                        ));
-                    }
+                    self.ensure_mutable_binding(name, "assign to")?;
                     let (mut val, mut vty) = self.emit_expr(&a.value)?;
                     if matches!(self.infer_kind(&a.value), ValKind::Dynamic) {
                         let (uv, uty) = self.unwrap_dynamic(val, vty, ty)?;
@@ -2540,6 +2620,7 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
                     return Ok(());
                 }
                 if let Some((ty, _)) = self.global_vars.get(name).cloned() {
+                    self.ensure_mutable_binding(name, "assign to")?;
                     let (val, vty) = self.emit_expr(&a.value)?;
                     let val = self.cast_to(val, vty, ty)?;
                     let g = llvm_func_name(name);
@@ -2549,6 +2630,7 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
                 Err(format!("Undefined variable: {}", name))
             }
             Expr::Index(base, idx) => {
+                self.ensure_mutable_target(base, "mutate")?;
                 let base_kind = self.infer_kind(base);
                 let (base_v, _) = self.emit_expr(base)?;
                 let (ix, ixty) = self.emit_expr(idx)?;
@@ -2579,6 +2661,7 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
                 }
             }
             Expr::Member(base, field) => {
+                self.ensure_mutable_target(base, "mutate")?;
                 let class_name = match self.infer_kind(base) {
                     ValKind::Object(n) => n,
                     other => {
@@ -5773,8 +5856,14 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
         method: &str,
         args: &[Expr],
     ) -> Result<(String, &'static str), String> {
-        let (obj, _) = self.emit_expr(base)?;
         let base_kind = self.infer_kind(base);
+        // `let xs = []; xs.push(1)` is an error — same as Cranelift
+        if Self::is_mutating_method(&base_kind, method) {
+            self.ensure_mutable_target(base, "call mutating method on")?;
+        }
+        // Channel methods: send/close need mutability when receiver is a named binding
+        // (handled via ValKind::Ptr above for bare channels).
+        let (obj, _) = self.emit_expr(base)?;
         // String methods
         if matches!(base_kind, ValKind::Str) {
             match method {
@@ -7033,6 +7122,8 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
     }
 
     /// Unwrap a BolideDynamic pointer into a concrete LLVM value for `want_ty`.
+    /// When the target is already `ptr` (e.g. function returns `dynamic`), pass
+    /// the dynamic object through unchanged — do NOT convert to string.
     fn unwrap_dynamic(
         &mut self,
         v: String,
@@ -7051,14 +7142,8 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
                 Ok((d, "double"))
             }
             "ptr" => {
-                // Prefer string form for generic ptr targets
-                let d = self.fresh();
-                let _ = writeln!(
-                    self.body,
-                    "  {} = call ptr @bolide_dynamic_to_string(ptr {})",
-                    d, p
-                );
-                Ok((d, "ptr"))
+                // Returning/storing as dynamic/ptr: keep the BolideDynamic handle.
+                Ok((p, "ptr"))
             }
             _ => {
                 let d = self.fresh();
