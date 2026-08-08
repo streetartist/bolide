@@ -17,6 +17,7 @@ fn check_int(name: str, got: int, want: int) {
 }
 
 fn bump(counter: atomic.AtomicInt, count: int) -> int {
+    var i: int = 0;
     for i in range(count) {
         counter.inc();
     }

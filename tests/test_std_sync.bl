@@ -17,6 +17,7 @@ fn check_int(name: str, got: int, want: int) {
 }
 
 fn bump(lock: sync.Mutex, count: int) -> int {
+    var i: int = 0;
     for i in range(count) {
         lock.add_int(1);
     }

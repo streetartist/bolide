@@ -20,7 +20,7 @@ print("escaped: \"quoted\" and backslash \\ done");
 print("line1\nline2\ttabbed");
 
 // 4. 复合赋值
-let x: int = 10;
+var x: int = 10;
 x += 5;
 print(x);   // 15
 x -= 3;
@@ -33,7 +33,8 @@ x %= 4;
 print(x);   // 2
 
 // 5. break / continue
-let total: int = 0;
+var total: int = 0;
+var i: int = 0;
 for i in range(10) {
     if i == 3 {
         continue;
@@ -45,7 +46,7 @@ for i in range(10) {
 }
 print(total);  // 0+1+2+4+5 = 12
 
-let n: int = 0;
+var n: int = 0;
 while true {
     n += 1;
     if n >= 5 {
@@ -55,8 +56,9 @@ while true {
 print(n);  // 5
 
 // 嵌套循环中的 break 只跳出内层
-let count: int = 0;
+var count: int = 0;
 for i in range(3) {
+    var j: int = 0;
     for j in range(10) {
         if j == 2 {
             break;
@@ -68,7 +70,7 @@ print(count);  // 3 * 2 = 6
 
 // 列表迭代里的 continue/break
 let nums: list<int> = [1, 2, 3, 4, 5, 6];
-let acc: int = 0;
+var acc: int = 0;
 for v in nums {
     if v == 2 {
         continue;

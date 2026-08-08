@@ -7,14 +7,15 @@ fn card(id: int, title: str, text: str) -> str {
 }
 
 fn render_once(n: int) -> str {
-    let items: str = "";
+    var items: str = "";
     items = items + card(n, "alpha", "one");
     items = items + card(n + 1, "beta", "two");
     items = items + card(n + 2, "gamma", "three");
     return wrap("page " + str(n), "<main>" + items + "</main>");
 }
 
-let total: int = 0;
+var total: int = 0;
+var i: int = 0;
 for i in range(2000) {
     let page: str = render_once(i);
     total = total + page.len();

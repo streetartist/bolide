@@ -1,12 +1,12 @@
 // 测试多层嵌套循环的内存管理
 
 fn test_nested_loops() {
-    let i: int = 0;
+    var i: int = 0;
     while i < 2 {
         let outer: bigint = 100B;
         print(outer);
 
-        let j: int = 0;
+        var j: int = 0;
         while j < 3 {
             let inner: bigint = 200B;
             print(inner);
@@ -18,15 +18,15 @@ fn test_nested_loops() {
 }
 
 fn test_triple_nested() {
-    let i: int = 0;
+    var i: int = 0;
     while i < 2 {
         let a: bigint = 1B;
 
-        let j: int = 0;
+        var j: int = 0;
         while j < 2 {
             let b: bigint = 2B;
 
-            let k: int = 0;
+            var k: int = 0;
             while k < 2 {
                 let c: bigint = 3B;
                 print(a + b + c);

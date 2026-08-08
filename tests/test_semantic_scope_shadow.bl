@@ -28,12 +28,13 @@ fn block_shadow() -> int {
 }
 
 fn loop_shadow() -> int {
-    let total: int = 0;
-    let i: int = 99;
+    var total: int = 0;
+    var i: int = 99;
     for i in range(4) {
         total = total + i;
     }
-    check("loop induction does not overwrite outer", i, 99);
+    // for 复用预声明的循环变量：循环后 i 保留最后的值（end=4）
+    check("loop induction keeps last value in var", i, 4);
     return total;
 }
 

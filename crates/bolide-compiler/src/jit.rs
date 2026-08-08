@@ -10207,10 +10207,8 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                         result.extend(self.collect_rc_var_decls(else_body));
                     }
                 }
-                Statement::While(while_stmt) => {
-                    // 递归收集嵌套循环中的变量
-                    result.extend(self.collect_rc_var_decls(&while_stmt.body));
-                }
+                // 不递归嵌套循环：内层循环自己预声明并释放其 body 的 RC 变量。
+                // 否则外层循环也会收集内层变量并在循环结束后重复释放（双重释放）。
                 _ => {}
             }
         }
