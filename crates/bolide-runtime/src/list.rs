@@ -478,6 +478,15 @@ pub extern "C" fn bolide_list_len(list: *const BolideList) -> usize {
     unsafe { (*list).len() }
 }
 
+/// 列表元素类型标签（ElementType 编码，供 dynamic 索引装箱）。
+#[no_mangle]
+pub extern "C" fn bolide_list_element_type(list: *const BolideList) -> u8 {
+    if list.is_null() {
+        return 0;
+    }
+    unsafe { (*list).elem_type as u8 }
+}
+
 /// 预分配容量到至少 `capacity` 个元素（不改变 len）
 #[no_mangle]
 pub extern "C" fn bolide_list_reserve(list: *mut BolideList, capacity: i64) {

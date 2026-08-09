@@ -594,6 +594,10 @@ impl JitCompiler {
             bolide_runtime::bolide_dynamic_index_set as *const u8,
         );
         builder.symbol(
+            "@_dynamic_len",
+            bolide_runtime::bolide_dynamic_len as *const u8,
+        );
+        builder.symbol(
             "@_dynamic_add",
             bolide_runtime::bolide_dynamic_add as *const u8,
         );
@@ -4219,6 +4223,8 @@ impl JitCompiler {
                 BolideType::Dict(_, val_ty) => *val_ty,
                 BolideType::Bytes => BolideType::Int,
                 BolideType::Str => BolideType::Str,
+                // dynamic 索引：运行时装箱成 dynamic 返回。
+                BolideType::Dynamic => BolideType::Dynamic,
                 _ => BolideType::Int,
             },
             Expr::Closure {
@@ -5933,6 +5939,38 @@ impl JitCompiler {
             .declare_function("@_dynamic_index_set", Linkage::Import, &sig)
             .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_dynamic_index_set".to_string(), id);
+
+        // dynamic_eq(ptr, ptr) -> i64
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(ptr));
+        sig.params.push(AbiParam::new(ptr));
+        sig.returns.push(AbiParam::new(types::I64));
+        let id = self
+            .module
+            .declare_function("@_dynamic_eq", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
+        self.functions.insert("@_dynamic_eq".to_string(), id);
+
+        // dynamic_lt(ptr, ptr) -> i64
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(ptr));
+        sig.params.push(AbiParam::new(ptr));
+        sig.returns.push(AbiParam::new(types::I64));
+        let id = self
+            .module
+            .declare_function("@_dynamic_lt", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
+        self.functions.insert("@_dynamic_lt".to_string(), id);
+
+        // dynamic_len(ptr) -> i64
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(ptr));
+        sig.returns.push(AbiParam::new(types::I64));
+        let id = self
+            .module
+            .declare_function("@_dynamic_len", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
+        self.functions.insert("@_dynamic_len".to_string(), id);
 
         // ===== 字符串函数 =====
         // string_from_slice(ptr, i64) -> ptr
@@ -15532,20 +15570,52 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             self.convert_to_dynamic(rhs, right_ty)?
         };
 
-        let func_name = match op {
-            BinOp::Add => "@_dynamic_add",
-            BinOp::Sub => "@_dynamic_sub",
-            BinOp::Mul => "@_dynamic_mul",
-            BinOp::Div => "@_dynamic_div",
+        let call_binop = |this: &mut Self,
+                          name: &str,
+                          l: Value,
+                          r: Value|
+         -> Result<Value, String> {
+            let func_ref = *this
+                .func_refs
+                .get(name)
+                .ok_or_else(|| format!("{} not found", name))?;
+            let call = this.builder.ins().call(func_ref, &[l, r]);
+            Ok(this.builder.inst_results(call)[0])
+        };
+
+        // 比较运算返回 i64 0/1；算术返回新的 dynamic（需跟踪 RC）。
+        let is_cmp = matches!(
+            op,
+            BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge
+        );
+        let result = match op {
+            BinOp::Add => call_binop(self, "@_dynamic_add", lhs_dyn, rhs_dyn)?,
+            BinOp::Sub => call_binop(self, "@_dynamic_sub", lhs_dyn, rhs_dyn)?,
+            BinOp::Mul => call_binop(self, "@_dynamic_mul", lhs_dyn, rhs_dyn)?,
+            BinOp::Div => call_binop(self, "@_dynamic_div", lhs_dyn, rhs_dyn)?,
+            BinOp::Eq => call_binop(self, "@_dynamic_eq", lhs_dyn, rhs_dyn)?,
+            BinOp::Ne => {
+                let eq = call_binop(self, "@_dynamic_eq", lhs_dyn, rhs_dyn)?;
+                let one = self.builder.ins().iconst(types::I64, 1);
+                self.builder.ins().isub(one, eq)
+            }
+            BinOp::Lt => call_binop(self, "@_dynamic_lt", lhs_dyn, rhs_dyn)?,
+            BinOp::Gt => call_binop(self, "@_dynamic_lt", rhs_dyn, lhs_dyn)?,
+            BinOp::Le => {
+                let lt = call_binop(self, "@_dynamic_lt", lhs_dyn, rhs_dyn)?;
+                let eq = call_binop(self, "@_dynamic_eq", lhs_dyn, rhs_dyn)?;
+                self.builder.ins().bor(lt, eq)
+            }
+            BinOp::Ge => {
+                let lt = call_binop(self, "@_dynamic_lt", lhs_dyn, rhs_dyn)?;
+                let one = self.builder.ins().iconst(types::I64, 1);
+                self.builder.ins().isub(one, lt)
+            }
             _ => return Err(format!("Unsupported dynamic operation: {:?}", op)),
         };
-        let func_ref = *self
-            .func_refs
-            .get(func_name)
-            .ok_or_else(|| format!("{} not found", func_name))?;
-        let call = self.builder.ins().call(func_ref, &[lhs_dyn, rhs_dyn]);
-        let result = self.builder.inst_results(call)[0];
-        self.track_temp_rc_value(result, &BolideType::Dynamic);
+        if !is_cmp {
+            self.track_temp_rc_value(result, &BolideType::Dynamic);
+        }
         Ok(result)
     }
 
@@ -17834,6 +17904,8 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                     BolideType::Bytes => BolideType::Int,
                     // 字符串索引按码点，返回单码点新串
                     BolideType::Str => BolideType::Str,
+                    // dynamic 索引：运行时装箱成 dynamic 返回。
+                    BolideType::Dynamic => BolideType::Dynamic,
                     _ => BolideType::Int,
                 }
             }
@@ -20156,6 +20228,8 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                     BolideType::Dict(_, val_ty) => Ok(*val_ty),
                     BolideType::Bytes => Ok(BolideType::Int),
                     BolideType::Str => Ok(BolideType::Str),
+                    // dynamic 索引：运行时装箱成 dynamic 返回。
+                    BolideType::Dynamic => Ok(BolideType::Dynamic),
                     other => Err(format!("Index access on non-indexable type: {:?}", other)),
                 }
             }
@@ -20488,6 +20562,27 @@ impl<'a, 'b> CompileContext<'a, 'b> {
         if let BolideType::Channel(ref inner) = class_name {
             let inner_ty = inner.as_ref().clone();
             return self.compile_channel_method_call(base, method_name, args, inner_ty);
+        }
+
+        // Dynamic 方法调用：目前支持 len（按标签分发到 list/dict/str/bytes/tuple）。
+        if matches!(class_name, BolideType::Dynamic) {
+            let base_val = self.compile_expr(base)?;
+            match method_name {
+                "len" | "length" | "size" => {
+                    let len_ref = *self
+                        .func_refs
+                        .get("@_dynamic_len")
+                        .ok_or("dynamic_len not found")?;
+                    let call = self.builder.ins().call(len_ref, &[base_val]);
+                    return Ok(self.builder.inst_results(call)[0]);
+                }
+                _ => {
+                    return Err(format!(
+                        "Method '{}' not supported on dynamic (only len)",
+                        method_name
+                    ));
+                }
+            }
         }
 
         let is_super_call = matches!(base, Expr::Ident(name) if name == "super");

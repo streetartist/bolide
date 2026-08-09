@@ -5,6 +5,7 @@
 use crate::rc::{RcHeader, TypeTag};
 use crate::{
     BolideBigInt, BolideBytes, BolideDecimal, BolideDict, BolideList, BolideString, BolideTuple,
+    ElementType,
 };
 use once_cell::sync::Lazy;
 
@@ -547,7 +548,88 @@ pub extern "C" fn bolide_dynamic_to_tuple(a: *const BolideDynamic) -> *mut Bolid
     }
 }
 
-/// dynamic 索引读取：按标签分发到 list / dict / tuple。
+/// dynamic 长度：按标签分发到 list / dict / str / bytes / tuple。
+#[no_mangle]
+pub extern "C" fn bolide_dynamic_len(d: *const BolideDynamic) -> i64 {
+    if d.is_null() {
+        return 0;
+    }
+    let a = unsafe { &*d };
+    match a.tag {
+        DynamicType::List => crate::bolide_list_len(unsafe { a.data.list_ptr }) as i64,
+        DynamicType::Dict => crate::bolide_dict_len(unsafe { a.data.dict_ptr }) as i64,
+        DynamicType::String => crate::bolide_string_len(unsafe { a.data.string_ptr }) as i64,
+        DynamicType::Bytes => crate::bolide_bytes_len(unsafe { a.data.bytes_ptr }) as i64,
+        DynamicType::Tuple => crate::bolide_tuple_len(unsafe { a.data.tuple_ptr }) as i64,
+        _ => 0,
+    }
+}
+
+/// 把容器元素（tag + 裸值）装箱成 dynamic 指针返回。
+/// RC 元素（str/bigint/decimal/bytes/list/dict/tuple）先 retain 一份，
+/// dynamic 元素直接 retain 后返回；标量直接装箱。
+fn box_dynamic_element(tag: u8, raw: i64) -> i64 {
+    let elem = ElementType::from_u8(tag);
+    match elem {
+        ElementType::Dynamic => {
+            let d = raw as *mut BolideDynamic;
+            if !d.is_null() {
+                unsafe {
+                    (*d).retain();
+                }
+            }
+            raw
+        }
+        ElementType::Int => BolideDynamic::from_int(raw) as i64,
+        ElementType::Float => BolideDynamic::from_float(f64::from_bits(raw as u64)) as i64,
+        ElementType::Bool => BolideDynamic::from_bool(raw != 0) as i64,
+        ElementType::String => {
+            let p = raw as *mut BolideString;
+            if !p.is_null() {
+                crate::bolide_string_retain(p);
+            }
+            BolideDynamic::from_string(p) as i64
+        }
+        ElementType::BigInt => {
+            let p = raw as *mut BolideBigInt;
+            if !p.is_null() {
+                crate::bolide_bigint_retain(p);
+            }
+            BolideDynamic::from_bigint(p) as i64
+        }
+        ElementType::Decimal => {
+            let p = raw as *mut BolideDecimal;
+            if !p.is_null() {
+                crate::bolide_decimal_retain(p);
+            }
+            BolideDynamic::from_decimal(p) as i64
+        }
+        ElementType::Bytes => {
+            let p = raw as *mut BolideBytes;
+            if !p.is_null() {
+                crate::bolide_bytes_retain(p);
+            }
+            BolideDynamic::from_bytes(p) as i64
+        }
+        ElementType::List => {
+            let p = raw as *mut BolideList;
+            if !p.is_null() {
+                crate::bolide_list_retain(p);
+            }
+            BolideDynamic::from_list(p) as i64
+        }
+        ElementType::Dict => {
+            let p = raw as *mut BolideDict;
+            if !p.is_null() {
+                crate::bolide_dict_retain(p);
+            }
+            BolideDynamic::from_dict(p) as i64
+        }
+        _ => BolideDynamic::from_int(raw) as i64,
+    }
+}
+
+/// dynamic 索引读取：按标签分发到 list / dict / tuple，并把元素装箱成 dynamic。
 /// idx 对 list/tuple 是整数下标，对 dict 是键指针（i64 承载）。
 #[no_mangle]
 pub extern "C" fn bolide_dynamic_index(d: *const BolideDynamic, idx: i64) -> i64 {
@@ -556,9 +638,21 @@ pub extern "C" fn bolide_dynamic_index(d: *const BolideDynamic, idx: i64) -> i64
     }
     let a = unsafe { &*d };
     match a.tag {
-        DynamicType::List => crate::bolide_list_get(unsafe { a.data.list_ptr }, idx as usize),
-        DynamicType::Dict => crate::bolide_dict_get(unsafe { a.data.dict_ptr }, idx),
-        DynamicType::Tuple => crate::bolide_tuple_get(unsafe { a.data.tuple_ptr }, idx as usize),
+        DynamicType::List => {
+            let list = unsafe { a.data.list_ptr };
+            let raw = crate::bolide_list_get(list, idx as usize);
+            box_dynamic_element(crate::bolide_list_element_type(list), raw)
+        }
+        DynamicType::Dict => {
+            let dict = unsafe { a.data.dict_ptr };
+            let raw = crate::bolide_dict_get(dict, idx);
+            box_dynamic_element(crate::bolide_dict_value_type(dict), raw)
+        }
+        DynamicType::Tuple => {
+            let tup = unsafe { a.data.tuple_ptr };
+            let raw = crate::bolide_tuple_get(tup, idx as usize);
+            box_dynamic_element(crate::bolide_tuple_get_type(tup, idx as usize), raw)
+        }
         _ => 0,
     }
 }

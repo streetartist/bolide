@@ -1857,6 +1857,7 @@ impl AotCompiler {
                 Some(BolideType::Dict(_, val_ty)) => Some(*val_ty),
                 Some(BolideType::Bytes) => Some(BolideType::Int),
                 Some(BolideType::Str) => Some(BolideType::Str),
+                Some(BolideType::Dynamic) => Some(BolideType::Dynamic),
                 _ => Some(BolideType::Int),
             },
             Expr::Closure {
@@ -3317,6 +3318,24 @@ impl AotCompiler {
                 "bolide_dynamic_index_set",
                 vec![p, i64t, i64t],
                 None,
+            ),
+            (
+                "@_dynamic_eq",
+                "bolide_dynamic_eq",
+                vec![p, p],
+                Some(i64t),
+            ),
+            (
+                "@_dynamic_lt",
+                "bolide_dynamic_lt",
+                vec![p, p],
+                Some(i64t),
+            ),
+            (
+                "@_dynamic_len",
+                "bolide_dynamic_len",
+                vec![p],
+                Some(i64t),
             ),
             (
                 "@_dynamic_is_truthy",
@@ -9149,20 +9168,52 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             self.convert_to_dynamic(rhs, right_ty)?
         };
 
-        let func_name = match op {
-            BinOp::Add => "@_dynamic_add",
-            BinOp::Sub => "@_dynamic_sub",
-            BinOp::Mul => "@_dynamic_mul",
-            BinOp::Div => "@_dynamic_div",
+        let call_binop = |this: &mut Self,
+                          name: &str,
+                          l: Value,
+                          r: Value|
+         -> Result<Value, String> {
+            let func_ref = *this
+                .func_refs
+                .get(name)
+                .ok_or_else(|| format!("{} not found", name))?;
+            let call = this.builder.ins().call(func_ref, &[l, r]);
+            Ok(this.builder.inst_results(call)[0])
+        };
+
+        // 比较运算返回 i64 0/1；算术返回新的 dynamic（需跟踪 RC）。
+        let is_cmp = matches!(
+            op,
+            BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge
+        );
+        let result = match op {
+            BinOp::Add => call_binop(self, "@_dynamic_add", lhs_dyn, rhs_dyn)?,
+            BinOp::Sub => call_binop(self, "@_dynamic_sub", lhs_dyn, rhs_dyn)?,
+            BinOp::Mul => call_binop(self, "@_dynamic_mul", lhs_dyn, rhs_dyn)?,
+            BinOp::Div => call_binop(self, "@_dynamic_div", lhs_dyn, rhs_dyn)?,
+            BinOp::Eq => call_binop(self, "@_dynamic_eq", lhs_dyn, rhs_dyn)?,
+            BinOp::Ne => {
+                let eq = call_binop(self, "@_dynamic_eq", lhs_dyn, rhs_dyn)?;
+                let one = self.builder.ins().iconst(types::I64, 1);
+                self.builder.ins().isub(one, eq)
+            }
+            BinOp::Lt => call_binop(self, "@_dynamic_lt", lhs_dyn, rhs_dyn)?,
+            BinOp::Gt => call_binop(self, "@_dynamic_lt", rhs_dyn, lhs_dyn)?,
+            BinOp::Le => {
+                let lt = call_binop(self, "@_dynamic_lt", lhs_dyn, rhs_dyn)?;
+                let eq = call_binop(self, "@_dynamic_eq", lhs_dyn, rhs_dyn)?;
+                self.builder.ins().bor(lt, eq)
+            }
+            BinOp::Ge => {
+                let lt = call_binop(self, "@_dynamic_lt", lhs_dyn, rhs_dyn)?;
+                let one = self.builder.ins().iconst(types::I64, 1);
+                self.builder.ins().isub(one, lt)
+            }
             _ => return Err(format!("Unsupported dynamic operation: {:?}", op)),
         };
-        let func_ref = *self
-            .func_refs
-            .get(func_name)
-            .ok_or_else(|| format!("{} not found", func_name))?;
-        let call = self.builder.ins().call(func_ref, &[lhs_dyn, rhs_dyn]);
-        let result = self.builder.inst_results(call)[0];
-        self.track_temp_rc_value(result, &BolideType::Dynamic);
+        if !is_cmp {
+            self.track_temp_rc_value(result, &BolideType::Dynamic);
+        }
         Ok(result)
     }
 
@@ -9897,6 +9948,27 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         if let Some(BolideType::Channel(inner)) = &base_type {
             let inner_ty = inner.as_ref().clone();
             return self.compile_channel_method_call(base, method_name, args, inner_ty);
+        }
+
+        // Dynamic 方法调用：目前支持 len（按标签分发到 list/dict/str/bytes/tuple）。
+        if matches!(base_type.as_ref(), Some(BolideType::Dynamic)) {
+            let base_val = self.compile_expr(base)?;
+            match method_name {
+                "len" | "length" | "size" => {
+                    let len_ref = *self
+                        .func_refs
+                        .get("@_dynamic_len")
+                        .ok_or("dynamic_len not found")?;
+                    let call = self.builder.ins().call(len_ref, &[base_val]);
+                    return Ok(self.builder.inst_results(call)[0]);
+                }
+                _ => {
+                    return Err(format!(
+                        "Method '{}' not supported on dynamic (only len)",
+                        method_name
+                    ));
+                }
+            }
         }
 
         // 处理类方法（沿继承链查找）
@@ -13235,8 +13307,8 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
                     BolideType::Bytes => Some(BolideType::Int),
                     // 字符串索引按码点，返回单码点新串
                     BolideType::Str => Some(BolideType::Str),
-                    // dynamic 容器索引：返回裸元素值（list<int> 场景按 int 处理，对齐 JIT）
-                    BolideType::Dynamic => Some(BolideType::Int),
+                    // dynamic 容器索引：运行时装箱成 dynamic 返回。
+                    BolideType::Dynamic => Some(BolideType::Dynamic),
                     _ => Some(BolideType::Dynamic),
                 }
             }
