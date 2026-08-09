@@ -4772,6 +4772,14 @@ impl AotCompiler {
                 break;
             }
         }
+        // 同时按重载键（name__sig_<hash>）索引：调用点可能用 mangle 名查。
+        let plain_entries: Vec<(String, HashSet<usize>)> = out.clone().into_iter().collect();
+        for (plain, indices) in plain_entries {
+            if let Some(params) = self.func_params.get(&plain) {
+                let key = self.overload_key_for_params(&plain, params);
+                out.entry(key).or_default().extend(indices);
+            }
+        }
         out
     }
 
@@ -5501,8 +5509,10 @@ impl AotCompiler {
         };
         for (name, (params, ret)) in sigs {
             let Some(func_id) = self.functions.get(&name).copied() else {
+                eprintln!("[DEBUG] adapter {} not in functions, skipped", name);
                 continue;
             };
+            eprintln!("[DEBUG] compiling adapter {}", name);
             let param_cl_types: Vec<types::Type> = params
                 .iter()
                 .map(|param| self.bolide_type_to_cranelift(param))
@@ -11080,7 +11090,7 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
                                 self.prepare_value_for_storage(val, &actual_ty, &target_ty)?;
                             let callee_expects_closure = self
                                 .funcsig_closure_param_indices
-                                .get(&func_name)
+                                .get(&orig_func_name)
                                 .map(|indices| indices.contains(&target_index))
                                 .unwrap_or(false);
                             if callee_expects_closure
@@ -11141,7 +11151,7 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
                             self.prepare_value_for_storage(raw_val, &actual_ty, &target_ty)?;
                         let callee_expects_closure = self
                             .funcsig_closure_param_indices
-                            .get(&func_name)
+                            .get(&orig_func_name)
                             .map(|indices| indices.contains(&target_index))
                             .unwrap_or(false);
                         if callee_expects_closure
