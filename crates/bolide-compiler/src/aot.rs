@@ -1775,7 +1775,7 @@ impl AotCompiler {
                             },
                             Some(BolideType::List(elem)) => match method.as_str() {
                                 "pop" | "get" | "first" | "last" | "remove" => Some(*elem),
-                                "slice" | "copy" | "clone" | "filter" => {
+                                "slice" | "copy" | "clone" | "filter" | "map" => {
                                     Some(BolideType::List(elem))
                                 }
                                 "set" | "contains" | "includes" | "is_empty" | "empty" => {
@@ -3072,6 +3072,12 @@ impl AotCompiler {
                 vec![p, i64t],
                 Some(p),
             ),
+            (
+                "@_bigint_from_string",
+                "bolide_bigint_from_string",
+                vec![p],
+                Some(p),
+            ),
             ("@_bigint_add", "bolide_bigint_add", vec![p, p], Some(p)),
             ("@_bigint_sub", "bolide_bigint_sub", vec![p, p], Some(p)),
             ("@_bigint_mul", "bolide_bigint_mul", vec![p, p], Some(p)),
@@ -3122,6 +3128,12 @@ impl AotCompiler {
                 "@_decimal_from_str",
                 "bolide_decimal_from_str",
                 vec![p, i64t],
+                Some(p),
+            ),
+            (
+                "@_decimal_from_string",
+                "bolide_decimal_from_string",
+                vec![p],
                 Some(p),
             ),
             ("@_decimal_add", "bolide_decimal_add", vec![p, p], Some(p)),
@@ -12613,8 +12625,8 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             Some(BolideType::Str) => {
                 let func_ref = *self
                     .func_refs
-                    .get("@_bigint_from_str")
-                    .ok_or("bigint_from_str not found")?;
+                    .get("@_bigint_from_string")
+                    .ok_or("bigint_from_string not found")?;
                 let call = self.builder.ins().call(func_ref, &[val]);
                 Ok(self.builder.inst_results(call)[0])
             }
@@ -12663,8 +12675,8 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             Some(BolideType::Str) => {
                 let func_ref = *self
                     .func_refs
-                    .get("@_decimal_from_str")
-                    .ok_or("decimal_from_str not found")?;
+                    .get("@_decimal_from_string")
+                    .ok_or("decimal_from_string not found")?;
                 let call = self.builder.ins().call(func_ref, &[val]);
                 Ok(self.builder.inst_results(call)[0])
             }

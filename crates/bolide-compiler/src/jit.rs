@@ -425,6 +425,10 @@ impl JitCompiler {
             bolide_runtime::bolide_bigint_from_str as *const u8,
         );
         builder.symbol(
+            "@_bigint_from_string",
+            bolide_runtime::bolide_bigint_from_string as *const u8,
+        );
+        builder.symbol(
             "@_bigint_add",
             bolide_runtime::bolide_bigint_add as *const u8,
         );
@@ -478,6 +482,10 @@ impl JitCompiler {
         builder.symbol(
             "@_decimal_from_str",
             bolide_runtime::bolide_decimal_from_str as *const u8,
+        );
+        builder.symbol(
+            "@_decimal_from_string",
+            bolide_runtime::bolide_decimal_from_string as *const u8,
         );
         builder.symbol(
             "@_decimal_add",
@@ -4105,7 +4113,9 @@ impl JitCompiler {
                         BolideType::List(elem) => {
                             return match member.as_str() {
                                 "pop" | "get" | "first" | "last" | "remove" => *elem,
-                                "slice" | "copy" | "clone" | "filter" => BolideType::List(elem),
+                                "slice" | "copy" | "clone" | "filter" | "map" => {
+                                    BolideType::List(elem)
+                                }
                                 "set" | "contains" | "includes" | "is_empty" | "empty" => {
                                     BolideType::Bool
                                 }
@@ -5388,6 +5398,16 @@ impl JitCompiler {
             .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_bigint_from_str".to_string(), id);
 
+        // bigint_from_string(ptr) -> ptr
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(ptr));
+        sig.returns.push(AbiParam::new(ptr));
+        let id = self
+            .module
+            .declare_function("@_bigint_from_string", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
+        self.functions.insert("@_bigint_from_string".to_string(), id);
+
         // bigint_add(ptr, ptr) -> ptr
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
@@ -5558,6 +5578,16 @@ impl JitCompiler {
             .declare_function("@_decimal_from_str", Linkage::Import, &sig)
             .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_decimal_from_str".to_string(), id);
+
+        // decimal_from_string(ptr) -> ptr
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(ptr));
+        sig.returns.push(AbiParam::new(ptr));
+        let id = self
+            .module
+            .declare_function("@_decimal_from_string", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
+        self.functions.insert("@_decimal_from_string".to_string(), id);
 
         // decimal_add(ptr, ptr) -> ptr
         let mut sig = self.module.make_signature();
@@ -17392,6 +17422,28 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                 self.track_temp_rc_value(result, &BolideType::BigInt);
                 Ok(result)
             }
+            BolideType::Str => {
+                let func_ref = *self
+                    .func_refs
+                    .get("@_bigint_from_string")
+                    .ok_or("bigint_from_string not found")?;
+                let call = self.builder.ins().call(func_ref, &[val]);
+                let result = self.builder.inst_results(call)[0];
+                self.track_temp_rc_value(result, &BolideType::BigInt);
+                Ok(result)
+            }
+            BolideType::Float => {
+                // float -> bigint：按 i64 取整后 from_i64
+                let iv = self.builder.ins().fcvt_to_sint(types::I64, val);
+                let func_ref = *self
+                    .func_refs
+                    .get("@_bigint_from_i64")
+                    .ok_or("bigint_from_i64 not found")?;
+                let call = self.builder.ins().call(func_ref, &[iv]);
+                let result = self.builder.inst_results(call)[0];
+                self.track_temp_rc_value(result, &BolideType::BigInt);
+                Ok(result)
+            }
             _ => Err(format!("Cannot convert {:?} to bigint", arg_type)),
         }
     }
@@ -17421,6 +17473,16 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                     .func_refs
                     .get("@_decimal_from_f64")
                     .ok_or("decimal_from_f64 not found")?;
+                let call = self.builder.ins().call(func_ref, &[val]);
+                let result = self.builder.inst_results(call)[0];
+                self.track_temp_rc_value(result, &BolideType::Decimal);
+                Ok(result)
+            }
+            BolideType::Str => {
+                let func_ref = *self
+                    .func_refs
+                    .get("@_decimal_from_string")
+                    .ok_or("decimal_from_string not found")?;
                 let call = self.builder.ins().call(func_ref, &[val]);
                 let result = self.builder.inst_results(call)[0];
                 self.track_temp_rc_value(result, &BolideType::Decimal);

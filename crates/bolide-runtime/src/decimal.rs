@@ -116,6 +116,17 @@ pub extern "C" fn bolide_decimal_from_str(s: *const i8, len: usize) -> *mut Boli
     BolideDecimal::from_str(s).unwrap_or(std::ptr::null_mut())
 }
 
+/// 从 BolideString 直接构造 decimal（decimal("3.14") 转换用）。
+#[no_mangle]
+pub extern "C" fn bolide_decimal_from_string(s: *const crate::BolideString) -> *mut BolideDecimal {
+    if s.is_null() {
+        return std::ptr::null_mut();
+    }
+    let bs = unsafe { &*s };
+    let text = bs.as_str();
+    BolideDecimal::from_str(text).unwrap_or(std::ptr::null_mut())
+}
+
 /// 增加引用计数
 #[no_mangle]
 pub extern "C" fn bolide_decimal_retain(d: *mut BolideDecimal) -> *mut BolideDecimal {
