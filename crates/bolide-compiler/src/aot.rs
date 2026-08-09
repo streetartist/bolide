@@ -15016,6 +15016,10 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
                 let val = self.compile_expr(expr)?;
                 // 抛出的 RC 临时值所有权转移给异常通道，避免语句末提前释放
                 self.remove_temp_rc_value(val);
+                // throw 是终止语句，语句末的 release_temp_rc_values 不会执行；
+                // 这里立即释放其余临时值（如 Error("x") 的中间字符串），
+                // 否则会被后续 if/循环 合并块的语句末释放 → SSA dominance 违规。
+                self.release_temp_rc_values();
                 let tag_val = self.builder.ins().iconst(types::I64, tag);
                 let emitted_catch_finally = if self.catch_body_depth > 0 {
                     self.emit_active_finallys_from(self.current_finally_depth().saturating_sub(1))?;
