@@ -3283,6 +3283,42 @@ impl AotCompiler {
                 Some(p),
             ),
             (
+                "@_dynamic_to_list",
+                "bolide_dynamic_to_list",
+                vec![p],
+                Some(p),
+            ),
+            (
+                "@_dynamic_to_dict",
+                "bolide_dynamic_to_dict",
+                vec![p],
+                Some(p),
+            ),
+            (
+                "@_dynamic_to_tuple",
+                "bolide_dynamic_to_tuple",
+                vec![p],
+                Some(p),
+            ),
+            (
+                "@_dynamic_from_tuple",
+                "bolide_dynamic_from_tuple",
+                vec![p],
+                Some(p),
+            ),
+            (
+                "@_dynamic_index",
+                "bolide_dynamic_index",
+                vec![p, i64t],
+                Some(i64t),
+            ),
+            (
+                "@_dynamic_index_set",
+                "bolide_dynamic_index_set",
+                vec![p, i64t, i64t],
+                None,
+            ),
+            (
                 "@_dynamic_is_truthy",
                 "bolide_dynamic_is_truthy",
                 vec![p],
@@ -12819,6 +12855,15 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
                 self.track_temp_rc_value(result, &BolideType::Str);
                 Ok(result)
             }
+            Some(BolideType::Dynamic) => {
+                // dynamic 持有的容器：运行时按标签分发到 list / dict / tuple。
+                let dyn_index = *self
+                    .func_refs
+                    .get("@_dynamic_index")
+                    .ok_or("dynamic_index not found")?;
+                let call = self.builder.ins().call(dyn_index, &[base_val, index_val]);
+                Ok(self.builder.inst_results(call)[0])
+            }
             _ => {
                 // If type unknown, assume tuple or dynamic
                 let func_ref = *self
@@ -13190,6 +13235,8 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
                     BolideType::Bytes => Some(BolideType::Int),
                     // 字符串索引按码点，返回单码点新串
                     BolideType::Str => Some(BolideType::Str),
+                    // dynamic 容器索引：返回裸元素值（list<int> 场景按 int 处理，对齐 JIT）
+                    BolideType::Dynamic => Some(BolideType::Int),
                     _ => Some(BolideType::Dynamic),
                 }
             }
@@ -13698,38 +13745,38 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         hint: Option<&BolideType>,
     ) -> Result<Value, String> {
         let map_tag = |ty: &BolideType| -> u8 { Self::bolide_type_to_element_tag(ty) };
-        let (key_type_tag, val_type_tag, key_final_ty, val_final_ty) = if entries.is_empty() {
-            match hint {
-                Some(BolideType::Dict(hint_k, hint_v)) => {
-                    let kt = hint_k.as_ref().clone();
-                    let vt = hint_v.as_ref().clone();
-                    (map_tag(&kt), map_tag(&vt), kt, vt)
-                }
-                _ => (0u8, 0u8, BolideType::Int, BolideType::Int),
+        let (key_type_tag, val_type_tag, key_final_ty, val_final_ty) = match hint {
+            // 有类型注解（如 dict<str, dynamic>）：注解是权威的，字面量值按注解装箱。
+            Some(BolideType::Dict(hint_k, hint_v)) => {
+                let kt = hint_k.as_ref().clone();
+                let vt = hint_v.as_ref().clone();
+                (map_tag(&kt), map_tag(&vt), kt, vt)
             }
-        } else {
-            let mut k_final_ty = self
-                .infer_expr_type(&entries[0].0)
-                .unwrap_or(BolideType::Dynamic);
-            let mut v_final_ty = self
-                .infer_expr_type(&entries[0].1)
-                .unwrap_or(BolideType::Dynamic);
-            for (k, v) in entries.iter().skip(1) {
-                let next_k = self.infer_expr_type(k).unwrap_or(BolideType::Dynamic);
-                if k_final_ty != next_k {
-                    k_final_ty = BolideType::Dynamic;
+            _ if entries.is_empty() => (0u8, 0u8, BolideType::Int, BolideType::Int),
+            _ => {
+                let mut k_final_ty = self
+                    .infer_expr_type(&entries[0].0)
+                    .unwrap_or(BolideType::Dynamic);
+                let mut v_final_ty = self
+                    .infer_expr_type(&entries[0].1)
+                    .unwrap_or(BolideType::Dynamic);
+                for (k, v) in entries.iter().skip(1) {
+                    let next_k = self.infer_expr_type(k).unwrap_or(BolideType::Dynamic);
+                    if k_final_ty != next_k {
+                        k_final_ty = BolideType::Dynamic;
+                    }
+                    let next_v = self.infer_expr_type(v).unwrap_or(BolideType::Dynamic);
+                    if v_final_ty != next_v {
+                        v_final_ty = BolideType::Dynamic;
+                    }
                 }
-                let next_v = self.infer_expr_type(v).unwrap_or(BolideType::Dynamic);
-                if v_final_ty != next_v {
-                    v_final_ty = BolideType::Dynamic;
-                }
+                (
+                    Self::bolide_type_to_element_tag(&k_final_ty),
+                    Self::bolide_type_to_element_tag(&v_final_ty),
+                    k_final_ty,
+                    v_final_ty,
+                )
             }
-            (
-                Self::bolide_type_to_element_tag(&k_final_ty),
-                Self::bolide_type_to_element_tag(&v_final_ty),
-                k_final_ty,
-                v_final_ty,
-            )
         };
 
         let func_ref = *self
@@ -13855,6 +13902,7 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             BolideType::List(_) => "@_dynamic_from_list",
             BolideType::Bytes => "@_dynamic_from_bytes",
             BolideType::Dict(_, _) => "@_dynamic_from_dict",
+            BolideType::Tuple(_) => "@_dynamic_from_tuple",
             BolideType::Dynamic => return Ok(val),
             _ => return Err(format!("Cannot convert {:?} to dynamic", ty)),
         };
@@ -16460,6 +16508,15 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
         match base_type {
             Some(BolideType::List(ref elem_ty)) => {
                 val = self.prepare_funcsig_for_container_storage(val, value, elem_ty)?;
+                // 元素类型为 Dynamic 时，先把值装箱成 dynamic 再存入列表。
+                if **elem_ty == BolideType::Dynamic {
+                    let actual_v_ty = self.normalize_bolide_type(
+                        &self.infer_expr_type(value).unwrap_or(BolideType::Dynamic),
+                    );
+                    if actual_v_ty != BolideType::Dynamic {
+                        val = self.convert_to_dynamic(val, &actual_v_ty)?;
+                    }
+                }
                 if matches!(
                     elem_ty.as_ref(),
                     BolideType::Int | BolideType::Float | BolideType::Bool
@@ -16512,6 +16569,16 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
                 self.builder
                     .ins()
                     .call(func_ref, &[base_val, index_val, val]);
+            }
+            Some(BolideType::Dynamic) => {
+                // dynamic 持有的容器：运行时按标签分发到 list / dict / tuple。
+                let dyn_set = *self
+                    .func_refs
+                    .get("@_dynamic_index_set")
+                    .ok_or_else(|| "@_dynamic_index_set not found")?;
+                self.builder
+                    .ins()
+                    .call(dyn_set, &[base_val, index_val, val]);
             }
             _ => {
                 let func_ref = *self

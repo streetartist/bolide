@@ -570,6 +570,30 @@ impl JitCompiler {
             bolide_runtime::bolide_dynamic_to_string as *const u8,
         );
         builder.symbol(
+            "@_dynamic_to_list",
+            bolide_runtime::bolide_dynamic_to_list as *const u8,
+        );
+        builder.symbol(
+            "@_dynamic_to_dict",
+            bolide_runtime::bolide_dynamic_to_dict as *const u8,
+        );
+        builder.symbol(
+            "@_dynamic_to_tuple",
+            bolide_runtime::bolide_dynamic_to_tuple as *const u8,
+        );
+        builder.symbol(
+            "@_dynamic_from_tuple",
+            bolide_runtime::bolide_dynamic_from_tuple as *const u8,
+        );
+        builder.symbol(
+            "@_dynamic_index",
+            bolide_runtime::bolide_dynamic_index as *const u8,
+        );
+        builder.symbol(
+            "@_dynamic_index_set",
+            bolide_runtime::bolide_dynamic_index_set as *const u8,
+        );
+        builder.symbol(
             "@_dynamic_add",
             bolide_runtime::bolide_dynamic_add as *const u8,
         );
@@ -5847,6 +5871,68 @@ impl JitCompiler {
             .declare_function("@_dynamic_to_string", Linkage::Import, &sig)
             .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_dynamic_to_string".to_string(), id);
+
+        // dynamic_to_list(ptr) -> ptr
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(ptr));
+        sig.returns.push(AbiParam::new(ptr));
+        let id = self
+            .module
+            .declare_function("@_dynamic_to_list", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
+        self.functions.insert("@_dynamic_to_list".to_string(), id);
+
+        // dynamic_to_dict(ptr) -> ptr
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(ptr));
+        sig.returns.push(AbiParam::new(ptr));
+        let id = self
+            .module
+            .declare_function("@_dynamic_to_dict", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
+        self.functions.insert("@_dynamic_to_dict".to_string(), id);
+
+        // dynamic_to_tuple(ptr) -> ptr
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(ptr));
+        sig.returns.push(AbiParam::new(ptr));
+        let id = self
+            .module
+            .declare_function("@_dynamic_to_tuple", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
+        self.functions.insert("@_dynamic_to_tuple".to_string(), id);
+
+        // dynamic_from_tuple(ptr) -> ptr
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(ptr));
+        sig.returns.push(AbiParam::new(ptr));
+        let id = self
+            .module
+            .declare_function("@_dynamic_from_tuple", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
+        self.functions.insert("@_dynamic_from_tuple".to_string(), id);
+
+        // dynamic_index(ptr, i64) -> i64
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(ptr));
+        sig.params.push(AbiParam::new(types::I64));
+        sig.returns.push(AbiParam::new(types::I64));
+        let id = self
+            .module
+            .declare_function("@_dynamic_index", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
+        self.functions.insert("@_dynamic_index".to_string(), id);
+
+        // dynamic_index_set(ptr, i64, i64) -> void
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(ptr));
+        sig.params.push(AbiParam::new(types::I64));
+        sig.params.push(AbiParam::new(types::I64));
+        let id = self
+            .module
+            .declare_function("@_dynamic_index_set", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
+        self.functions.insert("@_dynamic_index_set".to_string(), id);
 
         // ===== 字符串函数 =====
         // string_from_slice(ptr, i64) -> ptr
@@ -11664,6 +11750,13 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             BolideType::List(ref elem_ty) => {
                 value_val =
                     self.prepare_funcsig_for_container_storage(value_val, value, elem_ty)?;
+                // 元素类型为 Dynamic 时，先把值装箱成 dynamic 再存入列表。
+                if **elem_ty == BolideType::Dynamic {
+                    let actual_v_ty = self.normalize_bolide_type(&self.infer_expr_type(value));
+                    if actual_v_ty != BolideType::Dynamic {
+                        value_val = self.convert_to_dynamic(value_val, &actual_v_ty)?;
+                    }
+                }
                 // Int/Float/Bool 内联：单次 store，无运行时调用
                 if matches!(
                     elem_ty.as_ref(),
@@ -11720,6 +11813,17 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                 self.builder
                     .ins()
                     .call(tuple_set, &[base_val, index_val, value_val]);
+                Ok(())
+            }
+            BolideType::Dynamic => {
+                // dynamic 持有的容器：运行时按标签分发到 list / dict / tuple。
+                let dyn_set = *self
+                    .func_refs
+                    .get("@_dynamic_index_set")
+                    .ok_or("dynamic_index_set not found")?;
+                self.builder
+                    .ins()
+                    .call(dyn_set, &[base_val, index_val, value_val]);
                 Ok(())
             }
             _ => Err(format!(
@@ -18819,6 +18923,7 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             BolideType::List(_) => "@_dynamic_from_list",
             BolideType::Bytes => "@_dynamic_from_bytes",
             BolideType::Dict(_, _) => "@_dynamic_from_dict",
+            BolideType::Tuple(_) => "@_dynamic_from_tuple",
             BolideType::Dynamic => return Ok(val), // Already dynamic
             _ => return Err(format!("Cannot convert {:?} to dynamic", ty)),
         };
@@ -18879,36 +18984,36 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                 _ => 7,
             }
         };
-        let (key_type_tag, val_type_tag, key_final_ty, val_final_ty) = if entries.is_empty() {
-            match hint {
-                Some(BolideType::Dict(hint_k, hint_v)) => {
-                    let kt = hint_k.as_ref().clone();
-                    let vt = hint_v.as_ref().clone();
-                    (map_tag(&kt), map_tag(&vt), kt, vt)
-                }
-                _ => (0u8, 0u8, BolideType::Int, BolideType::Int),
+        let (key_type_tag, val_type_tag, key_final_ty, val_final_ty) = match hint {
+            // 有类型注解（如 dict<str, dynamic>）：注解是权威的，字面量值按注解装箱。
+            Some(BolideType::Dict(hint_k, hint_v)) => {
+                let kt = hint_k.as_ref().clone();
+                let vt = hint_v.as_ref().clone();
+                (map_tag(&kt), map_tag(&vt), kt, vt)
             }
-        } else {
-            // 第一次扫描：推断统一类型 (Dynamic or specific)
-            let mut k_final_ty = self.infer_expr_type(&entries[0].0);
-            let mut v_final_ty = self.infer_expr_type(&entries[0].1);
+            _ if entries.is_empty() => (0u8, 0u8, BolideType::Int, BolideType::Int),
+            _ => {
+                // 无注解：第一次扫描推断统一类型 (Dynamic or specific)
+                let mut k_final_ty = self.infer_expr_type(&entries[0].0);
+                let mut v_final_ty = self.infer_expr_type(&entries[0].1);
 
-            for (k, v) in entries.iter().skip(1) {
-                let next_k = self.infer_expr_type(k);
-                if k_final_ty != next_k {
-                    k_final_ty = BolideType::Dynamic;
+                for (k, v) in entries.iter().skip(1) {
+                    let next_k = self.infer_expr_type(k);
+                    if k_final_ty != next_k {
+                        k_final_ty = BolideType::Dynamic;
+                    }
+                    let next_v = self.infer_expr_type(v);
+                    if v_final_ty != next_v {
+                        v_final_ty = BolideType::Dynamic;
+                    }
                 }
-                let next_v = self.infer_expr_type(v);
-                if v_final_ty != next_v {
-                    v_final_ty = BolideType::Dynamic;
-                }
+                (
+                    map_tag(&k_final_ty),
+                    map_tag(&v_final_ty),
+                    k_final_ty,
+                    v_final_ty,
+                )
             }
-            (
-                map_tag(&k_final_ty),
-                map_tag(&v_final_ty),
-                k_final_ty,
-                v_final_ty,
-            )
         };
 
         // 创建字典
@@ -19013,6 +19118,16 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                 let result = self.builder.inst_results(call)[0];
                 self.track_temp_rc_value(result, &BolideType::Str);
                 Ok(result)
+            }
+
+            BolideType::Dynamic => {
+                // dynamic 持有的容器：运行时按标签分发到 list / dict / tuple。
+                let dyn_index = *self
+                    .func_refs
+                    .get("@_dynamic_index")
+                    .ok_or("dynamic_index not found")?;
+                let call = self.builder.ins().call(dyn_index, &[base_val, index_val]);
+                Ok(self.builder.inst_results(call)[0])
             }
 
             _ => {

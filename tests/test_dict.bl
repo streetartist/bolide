@@ -1,7 +1,7 @@
 // Test Dictionary Functionality
 
 // 1. Creation and Literal
-let d = {1: 10, 2: 20};
+var d = {1: 10, 2: 20};
 print(d);
 
 // 2. Set/Get via methods
@@ -48,7 +48,7 @@ print(d.len()); // 0
 print(d.is_empty()); // 1
 
 // 11. Mixed types (keys are int/str, values any) - NOW SUPPORTED
-let d2 = {"name": "Bolide", "version": 1};
+var d2 = {"name": "Bolide", "version": 1};
 print(d2["name"]);
 print(d2["version"]);
 

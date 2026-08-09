@@ -271,7 +271,9 @@ fn db_value_from_dynamic(value: *const BolideDynamic) -> DbValue {
             }
         }
         DynamicType::BigInt | DynamicType::Decimal => DbValue::String(value_ref.to_string_repr()),
-        DynamicType::List | DynamicType::Dict => DbValue::String(value_ref.to_string_repr()),
+        DynamicType::List | DynamicType::Dict | DynamicType::Tuple => {
+            DbValue::String(value_ref.to_string_repr())
+        }
     }
 }
 

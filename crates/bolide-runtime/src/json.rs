@@ -453,6 +453,7 @@ unsafe fn stringify_dynamic(
         DynamicType::List => stringify_list(out, dy.data.list_ptr, pretty, indent, level, depth),
         DynamicType::Dict => stringify_dict(out, dy.data.dict_ptr, pretty, indent, level, depth),
         DynamicType::Bytes => out.push_str("null"),
+        DynamicType::Tuple => out.push_str("null"),
     }
 }
 
@@ -689,6 +690,7 @@ pub extern "C" fn bolide_json_type(d: *const BolideDynamic) -> *mut BolideString
                 DynamicType::List => "array",
                 DynamicType::Dict => "object",
                 DynamicType::Bytes => "bytes",
+                DynamicType::Tuple => "tuple",
             }
         }
     };

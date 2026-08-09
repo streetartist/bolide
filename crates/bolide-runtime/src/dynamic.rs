@@ -3,7 +3,9 @@
 //! BolideDynamic 是 Python 风格的动态类型，使用引用计数管理内存
 
 use crate::rc::{RcHeader, TypeTag};
-use crate::{BolideBigInt, BolideBytes, BolideDecimal, BolideDict, BolideList, BolideString};
+use crate::{
+    BolideBigInt, BolideBytes, BolideDecimal, BolideDict, BolideList, BolideString, BolideTuple,
+};
 use once_cell::sync::Lazy;
 
 /// newtype 包装 *mut T 使其满足 Send+Sync（不可变单例指针跨线程安全）
@@ -51,6 +53,7 @@ pub enum DynamicType {
     List = 7,
     Bytes = 8,
     Dict = 9,
+    Tuple = 10,
 }
 
 /// 动态类型数据联合
@@ -66,6 +69,7 @@ pub union DynamicData {
     pub list_ptr: *mut BolideList,
     pub bytes_ptr: *mut BolideBytes,
     pub dict_ptr: *mut BolideDict,
+    pub tuple_ptr: *mut BolideTuple,
 }
 
 /// Bolide 动态类型（带引用计数）
@@ -158,6 +162,14 @@ impl BolideDynamic {
         }))
     }
 
+    pub fn from_tuple(ptr: *mut BolideTuple) -> *mut Self {
+        Box::into_raw(Box::new(Self {
+            header: RcHeader::new(TypeTag::Object),
+            tag: DynamicType::Tuple,
+            data: DynamicData { tuple_ptr: ptr },
+        }))
+    }
+
     pub fn get_type(&self) -> DynamicType {
         self.tag
     }
@@ -174,6 +186,7 @@ impl BolideDynamic {
             DynamicType::List => "list",
             DynamicType::Bytes => "bytes",
             DynamicType::Dict => "dict",
+            DynamicType::Tuple => "tuple",
         }
     }
 
@@ -219,6 +232,12 @@ impl BolideDynamic {
                 }
                 crate::bolide_dict_len(self.data.dict_ptr) > 0
             },
+            DynamicType::Tuple => unsafe {
+                if self.data.tuple_ptr.is_null() {
+                    return false;
+                }
+                crate::bolide_tuple_len(self.data.tuple_ptr) > 0
+            },
         }
     }
 
@@ -252,6 +271,7 @@ impl BolideDynamic {
             DynamicType::List => 0,
             DynamicType::Bytes => 0,
             DynamicType::Dict => 0,
+            DynamicType::Tuple => 0,
         }
     }
 
@@ -285,6 +305,7 @@ impl BolideDynamic {
             DynamicType::List => 0.0,
             DynamicType::Bytes => 0.0,
             DynamicType::Dict => 0.0,
+            DynamicType::Tuple => 0.0,
         }
     }
 
@@ -323,6 +344,7 @@ impl BolideDynamic {
             },
             DynamicType::List => "[...]".to_string(),
             DynamicType::Dict => "{...}".to_string(),
+            DynamicType::Tuple => "(...)".to_string(),
             DynamicType::Bytes => unsafe {
                 if self.data.bytes_ptr.is_null() {
                     "null".to_string()
@@ -402,6 +424,11 @@ impl BolideDynamic {
                     crate::bolide_dict_release(self.data.dict_ptr);
                 }
             }
+            DynamicType::Tuple => {
+                if !self.data.tuple_ptr.is_null() {
+                    crate::bolide_tuple_release(self.data.tuple_ptr);
+                }
+            }
             _ => {}
         }
     }
@@ -437,6 +464,11 @@ impl BolideDynamic {
             DynamicType::Dict => {
                 if !self.data.dict_ptr.is_null() {
                     crate::bolide_dict_retain(self.data.dict_ptr);
+                }
+            }
+            DynamicType::Tuple => {
+                if !self.data.tuple_ptr.is_null() {
+                    crate::bolide_tuple_retain(self.data.tuple_ptr);
                 }
             }
             _ => {}
@@ -494,6 +526,62 @@ pub extern "C" fn bolide_dynamic_from_bytes(ptr: *mut BolideBytes) -> *mut Bolid
 #[no_mangle]
 pub extern "C" fn bolide_dynamic_from_dict(ptr: *mut BolideDict) -> *mut BolideDynamic {
     BolideDynamic::from_dict(ptr)
+}
+
+#[no_mangle]
+pub extern "C" fn bolide_dynamic_from_tuple(ptr: *mut BolideTuple) -> *mut BolideDynamic {
+    BolideDynamic::from_tuple(ptr)
+}
+
+/// 解箱 dynamic 为 tuple 指针（非 Tuple 标签时返回 null）。
+#[no_mangle]
+pub extern "C" fn bolide_dynamic_to_tuple(a: *const BolideDynamic) -> *mut BolideTuple {
+    if a.is_null() {
+        return std::ptr::null_mut();
+    }
+    let a = unsafe { &*a };
+    if a.tag == DynamicType::Tuple {
+        unsafe { a.data.tuple_ptr }
+    } else {
+        std::ptr::null_mut()
+    }
+}
+
+/// dynamic 索引读取：按标签分发到 list / dict / tuple。
+/// idx 对 list/tuple 是整数下标，对 dict 是键指针（i64 承载）。
+#[no_mangle]
+pub extern "C" fn bolide_dynamic_index(d: *const BolideDynamic, idx: i64) -> i64 {
+    if d.is_null() {
+        return 0;
+    }
+    let a = unsafe { &*d };
+    match a.tag {
+        DynamicType::List => crate::bolide_list_get(unsafe { a.data.list_ptr }, idx as usize),
+        DynamicType::Dict => crate::bolide_dict_get(unsafe { a.data.dict_ptr }, idx),
+        DynamicType::Tuple => crate::bolide_tuple_get(unsafe { a.data.tuple_ptr }, idx as usize),
+        _ => 0,
+    }
+}
+
+/// dynamic 索引写入：按标签分发到 list / dict / tuple。
+#[no_mangle]
+pub extern "C" fn bolide_dynamic_index_set(d: *mut BolideDynamic, idx: i64, val: i64) {
+    if d.is_null() {
+        return;
+    }
+    let a = unsafe { &*d };
+    match a.tag {
+        DynamicType::List => {
+            crate::bolide_list_set(unsafe { a.data.list_ptr }, idx as usize, val);
+        }
+        DynamicType::Dict => {
+            crate::bolide_dict_set(unsafe { a.data.dict_ptr }, idx, val);
+        }
+        DynamicType::Tuple => {
+            crate::bolide_tuple_set(unsafe { a.data.tuple_ptr }, idx as usize, val);
+        }
+        _ => {}
+    }
 }
 
 /// 增加引用计数
@@ -582,6 +670,14 @@ pub extern "C" fn bolide_dynamic_clone(a: *const BolideDynamic) -> *mut BolideDy
                 BolideDynamic::from_dict(cloned)
             }
         },
+        DynamicType::Tuple => unsafe {
+            if a.data.tuple_ptr.is_null() {
+                BolideDynamic::from_tuple(std::ptr::null_mut())
+            } else {
+                let cloned = crate::bolide_tuple_clone(a.data.tuple_ptr);
+                BolideDynamic::from_tuple(cloned)
+            }
+        },
     }
 }
 
@@ -646,6 +742,34 @@ pub extern "C" fn bolide_dynamic_to_string(a: *const BolideDynamic) -> *mut Boli
     }
     let a = unsafe { &*a };
     BolideString::new(&a.to_string_repr())
+}
+
+/// 解箱 dynamic 为 list 指针（非 List 标签时返回 null）。
+#[no_mangle]
+pub extern "C" fn bolide_dynamic_to_list(a: *const BolideDynamic) -> *mut BolideList {
+    if a.is_null() {
+        return std::ptr::null_mut();
+    }
+    let a = unsafe { &*a };
+    if a.tag == DynamicType::List {
+        unsafe { a.data.list_ptr }
+    } else {
+        std::ptr::null_mut()
+    }
+}
+
+/// 解箱 dynamic 为 dict 指针（非 Dict 标签时返回 null）。
+#[no_mangle]
+pub extern "C" fn bolide_dynamic_to_dict(a: *const BolideDynamic) -> *mut BolideDict {
+    if a.is_null() {
+        return std::ptr::null_mut();
+    }
+    let a = unsafe { &*a };
+    if a.tag == DynamicType::Dict {
+        unsafe { a.data.dict_ptr }
+    } else {
+        std::ptr::null_mut()
+    }
 }
 
 // ==================== 动态算术运算 ====================
@@ -873,6 +997,7 @@ pub extern "C" fn bolide_dynamic_eq(a: *const BolideDynamic, b: *const BolideDyn
             }
         },
         DynamicType::Dict => 0, // 字典比较暂不实现
+        DynamicType::Tuple => 0, // 元组比较暂不实现
     }
 }
 

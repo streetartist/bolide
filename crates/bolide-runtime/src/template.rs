@@ -225,7 +225,7 @@ fn value_from_dynamic(value: *const BolideDynamic) -> ValueRef {
         DynamicType::List => ValueRef::List(unsafe { dyn_value.data.list_ptr }),
         DynamicType::Bytes => ValueRef::Bytes(unsafe { dyn_value.data.bytes_ptr }),
         DynamicType::Dict => ValueRef::Dict(unsafe { dyn_value.data.dict_ptr }),
-        DynamicType::BigInt | DynamicType::Decimal => ValueRef::Dynamic(value),
+        DynamicType::BigInt | DynamicType::Decimal | DynamicType::Tuple => ValueRef::Dynamic(value),
     }
 }
 
