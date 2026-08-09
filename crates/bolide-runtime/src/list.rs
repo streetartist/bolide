@@ -1035,6 +1035,99 @@ pub extern "C" fn bolide_list_map(
     }
 }
 
+/// 调用闭包回调：fn(env_ptr, arg) -> ret。env 是闭包捕获环境（第一个参数）。
+#[inline]
+unsafe fn invoke_closure_callback(
+    cb: *const u8,
+    env: *mut u8,
+    arg: i64,
+    param_is_float: bool,
+    ret_is_float: bool,
+) -> i64 {
+    match (param_is_float, ret_is_float) {
+        (false, false) => {
+            let f: extern "C" fn(*mut u8, i64) -> i64 = std::mem::transmute(cb);
+            f(env, arg)
+        }
+        (false, true) => {
+            let f: extern "C" fn(*mut u8, i64) -> f64 = std::mem::transmute(cb);
+            f(env, arg).to_bits() as i64
+        }
+        (true, false) => {
+            let f: extern "C" fn(*mut u8, f64) -> i64 = std::mem::transmute(cb);
+            f(env, f64::from_bits(arg as u64))
+        }
+        (true, true) => {
+            let f: extern "C" fn(*mut u8, f64) -> f64 = std::mem::transmute(cb);
+            f(env, f64::from_bits(arg as u64)).to_bits() as i64
+        }
+    }
+}
+
+/// 闭包版本的 map：callback 是闭包对象，取出 fn_ptr + env_ptr 后按 fn(env, elem) 调用。
+#[no_mangle]
+pub extern "C" fn bolide_list_map_closure(
+    list: *const BolideList,
+    closure: *mut c_void,
+    result_elem_type: u8,
+) -> *mut BolideList {
+    if list.is_null() || closure.is_null() {
+        return std::ptr::null_mut();
+    }
+    let fn_ptr = crate::bolide_closure_fn_ptr(closure);
+    let env_ptr = crate::bolide_closure_env_ptr(closure);
+    if fn_ptr.is_null() {
+        return std::ptr::null_mut();
+    }
+    unsafe {
+        let src = &*list;
+        let result_et = ElementType::from_u8(result_elem_type);
+        let param_is_float = matches!(src.elem_type, ElementType::Float);
+        let ret_is_float = matches!(result_et, ElementType::Float);
+        let dst = BolideList::with_capacity(result_et, src.len);
+        for i in 0..src.len {
+            let val = src.read_at(i);
+            let new_val = invoke_closure_callback(
+                fn_ptr,
+                env_ptr,
+                val,
+                param_is_float,
+                ret_is_float,
+            );
+            bolide_list_push(dst, new_val);
+        }
+        dst
+    }
+}
+
+/// 闭包版本的 filter：callback 是闭包对象。
+#[no_mangle]
+pub extern "C" fn bolide_list_filter_closure(
+    list: *const BolideList,
+    closure: *mut c_void,
+) -> *mut BolideList {
+    if list.is_null() || closure.is_null() {
+        return std::ptr::null_mut();
+    }
+    let fn_ptr = crate::bolide_closure_fn_ptr(closure);
+    let env_ptr = crate::bolide_closure_env_ptr(closure);
+    if fn_ptr.is_null() {
+        return std::ptr::null_mut();
+    }
+    unsafe {
+        let src = &*list;
+        let param_is_float = matches!(src.elem_type, ElementType::Float);
+        let dst = BolideList::new(src.elem_type);
+        for i in 0..src.len {
+            let val = src.read_at(i);
+            if invoke_closure_callback(fn_ptr, env_ptr, val, param_is_float, false) != 0 {
+                bolide_list_push(dst, val);
+            }
+        }
+        dst
+    }
+}
+
 /// 过滤列表元素，callback(val) 返回非零则保留（返回值始终是 bool/i64）。
 /// 参数可能是 float，按源元素类型 transmute 回调签名。
 #[no_mangle]

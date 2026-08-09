@@ -2748,8 +2748,16 @@ impl JitCompiler {
         );
         builder.symbol("@_list_map", bolide_runtime::bolide_list_map as *const u8);
         builder.symbol(
+            "@_list_map_closure",
+            bolide_runtime::bolide_list_map_closure as *const u8,
+        );
+        builder.symbol(
             "@_list_filter",
             bolide_runtime::bolide_list_filter as *const u8,
+        );
+        builder.symbol(
+            "@_list_filter_closure",
+            bolide_runtime::bolide_list_filter_closure as *const u8,
         );
         builder.symbol(
             "@_list_is_empty",
@@ -5153,6 +5161,18 @@ impl JitCompiler {
             .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_list_map".to_string(), id);
 
+        // list_map_closure(list: ptr, closure: ptr, result_elem_type: i8) -> ptr
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(ptr));
+        sig.params.push(AbiParam::new(ptr));
+        sig.params.push(AbiParam::new(types::I8));
+        sig.returns.push(AbiParam::new(ptr));
+        let id = self
+            .module
+            .declare_function("@_list_map_closure", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
+        self.functions.insert("@_list_map_closure".to_string(), id);
+
         // list_filter(list: ptr, callback: ptr) -> ptr
         let mut sig = self.module.make_signature();
         sig.params.push(AbiParam::new(ptr));
@@ -5163,6 +5183,17 @@ impl JitCompiler {
             .declare_function("@_list_filter", Linkage::Import, &sig)
             .map_err(|e| format!("{}", e))?;
         self.functions.insert("@_list_filter".to_string(), id);
+
+        // list_filter_closure(list: ptr, closure: ptr) -> ptr
+        let mut sig = self.module.make_signature();
+        sig.params.push(AbiParam::new(ptr));
+        sig.params.push(AbiParam::new(ptr));
+        sig.returns.push(AbiParam::new(ptr));
+        let id = self
+            .module
+            .declare_function("@_list_filter_closure", Linkage::Import, &sig)
+            .map_err(|e| format!("{}", e))?;
+        self.functions.insert("@_list_filter_closure".to_string(), id);
 
         // list_is_empty(list: ptr) -> i64
         let mut sig = self.module.make_signature();
@@ -9202,6 +9233,23 @@ impl JitCompiler {
         match expr {
             Expr::Call(callee, args) => {
                 if let Expr::Ident(name) = callee.as_ref() {
+                    // 当前函数直接调用自己的 FuncSig 参数（如 `return f(x)`）：该参数
+                    // 必须按闭包对象 ABI 接收（会被调用），标记为闭包期望，从而调用点
+                    // 会把裸函数名包装成闭包对象。
+                    if let Some(fname) = current_func {
+                        if let Some(params) = self.func_params.get(fname) {
+                            for (i, p) in params.iter().enumerate() {
+                                if p.name == *name
+                                    && matches!(
+                                        p.ty,
+                                        BolideType::FuncSig(_, _) | BolideType::Func
+                                    )
+                                {
+                                    out.entry(fname.to_string()).or_default().insert(i);
+                                }
+                            }
+                        }
+                    }
                     self.record_closure_func_args(
                         name,
                         args,
@@ -21326,16 +21374,28 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                     .func_ptr_return_type(&args[0])
                     .unwrap_or(list_elem_ty.clone());
                 let result_tag = Self::bolide_type_to_element_tag(&ret_ty);
-                let func_ptr = self.compile_expr_as_list_map_func_ptr(&args[0], &list_elem_ty)?;
-                let func_ref = *self
-                    .func_refs
-                    .get("@_list_map")
-                    .ok_or("list_map not found")?;
                 let tag_val = self.builder.ins().iconst(types::I8, result_tag as i64);
+                // 闭包回调：闭包对象（fn+env）；否则裸函数指针。
+                let (func_ref, callback_val) = if self.is_closure_callback(&args[0]) {
+                    let obj = self.compile_expr(&args[0])?;
+                    (
+                        *self
+                            .func_refs
+                            .get("@_list_map_closure")
+                            .ok_or("list_map_closure not found")?,
+                        obj,
+                    )
+                } else {
+                    let ptr = self.compile_expr_as_list_map_func_ptr(&args[0], &list_elem_ty)?;
+                    (
+                        *self.func_refs.get("@_list_map").ok_or("list_map not found")?,
+                        ptr,
+                    )
+                };
                 let call = self
                     .builder
                     .ins()
-                    .call(func_ref, &[list_ptr, func_ptr, tag_val]);
+                    .call(func_ref, &[list_ptr, callback_val, tag_val]);
                 let result = self.builder.inst_results(call)[0];
                 self.track_temp_rc_value(result, &BolideType::List(Box::new(ret_ty)));
                 Ok(result)
@@ -21345,12 +21405,26 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                 if args.len() != 1 {
                     return Err("filter expects 1 argument (function)".to_string());
                 }
-                let func_ptr = self.compile_expr_as_func_ptr(&args[0])?;
-                let func_ref = *self
-                    .func_refs
-                    .get("@_list_filter")
-                    .ok_or("list_filter not found")?;
-                let call = self.builder.ins().call(func_ref, &[list_ptr, func_ptr]);
+                let (func_ref, callback_val) = if self.is_closure_callback(&args[0]) {
+                    let obj = self.compile_expr(&args[0])?;
+                    (
+                        *self
+                            .func_refs
+                            .get("@_list_filter_closure")
+                            .ok_or("list_filter_closure not found")?,
+                        obj,
+                    )
+                } else {
+                    let ptr = self.compile_expr_as_func_ptr(&args[0])?;
+                    (
+                        *self
+                            .func_refs
+                            .get("@_list_filter")
+                            .ok_or("list_filter not found")?,
+                        ptr,
+                    )
+                };
+                let call = self.builder.ins().call(func_ref, &[list_ptr, callback_val]);
                 let result = self.builder.inst_results(call)[0];
                 self.track_temp_rc_value(result, &BolideType::List(Box::new(list_elem_ty.clone())));
                 Ok(result)
@@ -21375,6 +21449,23 @@ impl<'a, 'b> CompileContext<'a, 'b> {
                 let val = self.compile_expr(expr)?;
                 Ok(val)
             }
+        }
+    }
+
+    /// 判断 map/filter 的回调是否为闭包对象（内联闭包 / 闭包变量），
+    /// 是则走闭包感知的运行时（fn(env, elem)），否则走裸函数指针。
+    fn is_closure_callback(&self, expr: &Expr) -> bool {
+        match expr {
+            Expr::Closure { .. } => true,
+            Expr::Ident(name) => {
+                // 命名函数 → func_ref（裸指针）；函数/闭包变量 → 闭包对象。
+                !self.func_refs.contains_key(name.as_str())
+                    && matches!(
+                        self.infer_expr_type(expr),
+                        BolideType::Func | BolideType::FuncSig(_, _)
+                    )
+            }
+            _ => false,
         }
     }
 

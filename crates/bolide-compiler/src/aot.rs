@@ -3441,7 +3441,19 @@ impl AotCompiler {
             ("@_list_first", "bolide_list_first", vec![p], Some(i64t)),
             ("@_list_last", "bolide_list_last", vec![p], Some(i64t)),
             ("@_list_map", "bolide_list_map", vec![p, p, i8t], Some(p)),
+            (
+                "@_list_map_closure",
+                "bolide_list_map_closure",
+                vec![p, p, i8t],
+                Some(p),
+            ),
             ("@_list_filter", "bolide_list_filter", vec![p, p], Some(p)),
+            (
+                "@_list_filter_closure",
+                "bolide_list_filter_closure",
+                vec![p, p],
+                Some(p),
+            ),
             (
                 "@_list_elem_type",
                 "bolide_list_elem_type",
@@ -4994,6 +5006,22 @@ impl AotCompiler {
         match expr {
             Expr::Call(callee, args) => {
                 if let Expr::Ident(name) = callee.as_ref() {
+                    // 当前函数直接调用自己的 FuncSig 参数（如 `return f(x)`）：
+                    // 该参数按闭包对象 ABI 接收（会被调用），标记为闭包期望。
+                    if let Some(fname) = current_func {
+                        if let Some(params) = self.func_params.get(fname) {
+                            for (i, p) in params.iter().enumerate() {
+                                if p.name == *name
+                                    && matches!(
+                                        p.ty,
+                                        BolideType::FuncSig(_, _) | BolideType::Func
+                                    )
+                                {
+                                    out.entry(fname.to_string()).or_default().insert(i);
+                                }
+                            }
+                        }
+                    }
                     self.record_closure_func_args(
                         name,
                         args,
@@ -10353,13 +10381,24 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
                     .func_ptr_return_type(&args[0])
                     .unwrap_or_else(|| src_elem.clone());
                 let result_tag = Self::bolide_type_to_element_tag(&ret_ty);
-                let func_ptr = self.compile_expr_as_list_map_func_ptr(&args[0], &src_elem)?;
-                let f = *self
-                    .func_refs
-                    .get("@_list_map")
-                    .ok_or("list_map not found")?;
                 let tag_val = self.builder.ins().iconst(types::I8, result_tag as i64);
-                let call = self.builder.ins().call(f, &[list_val, func_ptr, tag_val]);
+                let (f, cb) = if self.is_closure_callback(&args[0]) {
+                    let obj = self.compile_expr(&args[0])?;
+                    (
+                        *self
+                            .func_refs
+                            .get("@_list_map_closure")
+                            .ok_or("list_map_closure not found")?,
+                        obj,
+                    )
+                } else {
+                    let ptr = self.compile_expr_as_list_map_func_ptr(&args[0], &src_elem)?;
+                    (
+                        *self.func_refs.get("@_list_map").ok_or("list_map not found")?,
+                        ptr,
+                    )
+                };
+                let call = self.builder.ins().call(f, &[list_val, cb, tag_val]);
                 let result = self.builder.inst_results(call)[0];
                 self.track_temp_rc_value(result, &BolideType::List(Box::new(ret_ty)));
                 Ok(result)
@@ -10368,12 +10407,26 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
                 if args.len() != 1 {
                     return Err("filter expects 1 argument (function)".to_string());
                 }
-                let func_ptr = self.compile_expr_as_func_ptr(&args[0])?;
-                let f = *self
-                    .func_refs
-                    .get("@_list_filter")
-                    .ok_or("list_filter not found")?;
-                let call = self.builder.ins().call(f, &[list_val, func_ptr]);
+                let (f, cb) = if self.is_closure_callback(&args[0]) {
+                    let obj = self.compile_expr(&args[0])?;
+                    (
+                        *self
+                            .func_refs
+                            .get("@_list_filter_closure")
+                            .ok_or("list_filter_closure not found")?,
+                        obj,
+                    )
+                } else {
+                    let ptr = self.compile_expr_as_func_ptr(&args[0])?;
+                    (
+                        *self
+                            .func_refs
+                            .get("@_list_filter")
+                            .ok_or("list_filter not found")?,
+                        ptr,
+                    )
+                };
+                let call = self.builder.ins().call(f, &[list_val, cb]);
                 let result = self.builder.inst_results(call)[0];
                 let elem_ty = self.infer_expr_type_from_list(base);
                 self.track_temp_rc_value(result, &BolideType::List(Box::new(elem_ty)));
@@ -10391,6 +10444,21 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
                 let val = self.compile_expr(expr)?;
                 Ok(val)
             }
+        }
+    }
+
+    /// 判断 map/filter 的回调是否为闭包对象（内联闭包 / 闭包变量）。
+    fn is_closure_callback(&self, expr: &Expr) -> bool {
+        match expr {
+            Expr::Closure { .. } => true,
+            Expr::Ident(name) => {
+                !self.func_refs.contains_key(name.as_str())
+                    && matches!(
+                        self.infer_expr_type(expr).as_ref(),
+                        Some(BolideType::Func) | Some(BolideType::FuncSig(_, _))
+                    )
+            }
+            _ => false,
         }
     }
 
