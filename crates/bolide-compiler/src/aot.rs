@@ -5509,10 +5509,8 @@ impl AotCompiler {
         };
         for (name, (params, ret)) in sigs {
             let Some(func_id) = self.functions.get(&name).copied() else {
-                eprintln!("[DEBUG] adapter {} not in functions, skipped", name);
                 continue;
             };
-            eprintln!("[DEBUG] compiling adapter {}", name);
             let param_cl_types: Vec<types::Type> = params
                 .iter()
                 .map(|param| self.bolide_type_to_cranelift(param))
