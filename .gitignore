@@ -5,6 +5,12 @@ target-codex-*/
 **/*.rs.bk
 Cargo.lock
 
+# Android / Gradle local state and build outputs
+/android/.gradle/
+/android/build/
+/android/app/build/
+/android/local.properties
+
 # 本地编译/链接产物
 /dist/
 /release/

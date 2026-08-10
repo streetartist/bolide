@@ -3972,7 +3972,7 @@ impl JitCompiler {
             Expr::String(_) => BolideType::Str,
             Expr::BigInt(_) => BolideType::BigInt,
             Expr::Decimal(_) => BolideType::Decimal,
-            Expr::None => BolideType::Int,
+            Expr::NullPtr => BolideType::Ptr,
             Expr::List(items) => {
                 // 扫描元素推断统一类型（与函数内推断一致），混合类型为 Dynamic
                 let item_type = if items.is_empty() {
@@ -14590,7 +14590,7 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             } => self.compile_list_comprehension(expr, vars, iter, filter.as_deref()),
             Expr::Spawn(func_name, args) => self.compile_spawn(func_name, args, false),
             Expr::SpawnThread(func_name, args) => self.compile_spawn(func_name, args, true),
-            Expr::None => Ok(self.builder.ins().iconst(types::I64, 0)),
+            Expr::NullPtr => Ok(self.builder.ins().iconst(types::I64, 0)),
             Expr::Await(inner_expr) => self.compile_await(inner_expr),
             Expr::SpawnAll(exprs) => self.compile_spawn_all(exprs),
             Expr::Propagate(inner) => self.compile_propagate(inner),
@@ -17688,7 +17688,7 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             Expr::String(_) => BolideType::Str,
             Expr::BigInt(_) => BolideType::BigInt,
             Expr::Decimal(_) => BolideType::Decimal,
-            Expr::None => BolideType::Int,
+            Expr::NullPtr => BolideType::Ptr,
             Expr::Spawn(_, _) | Expr::SpawnThread(_, _) => BolideType::Future,
             Expr::Closure {
                 params,
@@ -20284,7 +20284,7 @@ impl<'a, 'b> CompileContext<'a, 'b> {
             Expr::String(_) => Ok(BolideType::Str),
             Expr::BigInt(_) => Ok(BolideType::BigInt),
             Expr::Decimal(_) => Ok(BolideType::Decimal),
-            Expr::None => Ok(BolideType::Int),
+            Expr::NullPtr => Ok(BolideType::Ptr),
             Expr::List(items) => {
                 let elem_ty = items
                     .first()

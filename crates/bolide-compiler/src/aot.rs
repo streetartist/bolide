@@ -1809,7 +1809,7 @@ impl AotCompiler {
                 }
             }
             Expr::Spawn(_, _) | Expr::SpawnThread(_, _) => Some(BolideType::Future),
-            Expr::None => Some(BolideType::Int),
+            Expr::NullPtr => Some(BolideType::Ptr),
             // await fn() → 协程返回类型；spawn all {..} → 元组
             Expr::Await(inner) => Some(self.static_awaited_type(inner)),
             Expr::SpawnAll(exprs) => {
@@ -8167,7 +8167,7 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
             Expr::NamedArg(..) | Expr::SpreadArg(_) | Expr::KwSpreadArg(_) => {
                 Err("argument modifiers are only valid inside call argument lists".to_string())
             }
-            Expr::None => Ok(self.builder.ins().iconst(types::I64, 0)),
+            Expr::NullPtr => Ok(self.builder.ins().iconst(types::I64, 0)),
             Expr::Index(base, index) => self.compile_index(base, index),
             Expr::Slice(base, start, end, step) => self.compile_slice(base, start, end, step),
             Expr::Member(base, member) => self.compile_member(base, member),
@@ -13612,7 +13612,7 @@ impl<'a, 'b> AotCompileContext<'a, 'b> {
                     UnaryOp::Neg => operand_ty,
                 }
             }
-            Expr::None => None,
+            Expr::NullPtr => None,
             Expr::Member(base, member) => {
                 // 获取基础表达式的类型，然后查找字段类型
                 let base_ty = self.infer_expr_type(base)?;

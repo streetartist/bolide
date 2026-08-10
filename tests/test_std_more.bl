@@ -21,6 +21,13 @@ import "std/option" as option;
 import "std/result" as result;
 import "std/collections" as collections;
 
+fn require_dynamic(value: Option<dynamic>) -> dynamic {
+    match value {
+        Option.Some(v) => { return v; },
+        Option.None() => { throw Error("expected collection value"); },
+    }
+}
+
 assert.reset();
 
 // ---- env ----
@@ -88,7 +95,7 @@ var q: collections.Queue = collections.queue();
 q.push(1);
 q.push("x");
 assert.equal("qlen", q.len(), 2);
-assert.equal("qpop", int(q.pop()), 1);
+assert.equal("qpop", int(require_dynamic(q.pop())), 1);
 
 // ---- io write + fs read roundtrip ----
 let tmp: str = env.temp_path("bolide_io_roundtrip.txt");

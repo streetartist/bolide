@@ -927,7 +927,7 @@ impl Monomorphizer {
             Expr::String(_) => Type::Str,
             Expr::BigInt(_) => Type::BigInt,
             Expr::Decimal(_) => Type::Decimal,
-            Expr::None => Type::Int,
+            Expr::NullPtr => Type::Ptr,
             Expr::Ident(name) => {
                 if let Some(ty) = var_types.get(name) {
                     return ty.clone();

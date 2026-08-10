@@ -472,7 +472,6 @@ pub enum Pattern {
     Int(i64),
     Bool(bool),
     String(String),
-    None,
     /// 元组模式: `(a, b, _)`（主要用于将来 match；解构声明另有脱糖路径）
     Tuple(Vec<Pattern>),
     Variant {
@@ -561,7 +560,9 @@ pub enum Expr {
     },
     /// `comptime { ... }` 编译期求值块（展开期折叠为常量）
     Comptime(Vec<Statement>),
-    None,
+    /// Compiler-synthesized null pointer. No source-language literal maps to
+    /// this variant; optional values use `Option.None()`.
+    NullPtr,
 }
 
 /// 二元运算符

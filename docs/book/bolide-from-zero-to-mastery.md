@@ -334,7 +334,7 @@ items.push(3);
 | `bigint` | 任意精度整数 | `123b` / `123B` |
 | `decimal` | 十进制定点 | `3.14d` / `3.14D` |
 | `dynamic` | 动态值 | 异构数据边界 |
-| `none` / `null` | 空值（语境相关） | — |
+| `Option<T>` | 可选值 | `Option.Some(v)` / `Option.None()` |
 
 ```bolide
 let x: int = 42;

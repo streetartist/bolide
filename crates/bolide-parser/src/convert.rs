@@ -1743,7 +1743,7 @@ fn validate_if_let_pattern(pattern: &Pattern) -> Result<(), String> {
             "`if let` / `while let` does not support tuple patterns yet; use `let (a, b) = expr;` instead"
                 .to_string(),
         ),
-        Pattern::None | Pattern::Int(_) | Pattern::Bool(_) | Pattern::String(_) => Err(
+        Pattern::Int(_) | Pattern::Bool(_) | Pattern::String(_) => Err(
             "`if let` / `while let` currently supports enum/union patterns (e.g. `Option.Some(v)`)"
                 .to_string(),
         ),
@@ -2020,7 +2020,6 @@ fn parse_pattern(pair: Pair<Rule>) -> Result<Pattern, String> {
             Ok(Pattern::String(unescape_string(&s[1..s.len() - 1])))
         }
         Rule::bool_pattern => Ok(Pattern::Bool(inner.as_str() == "true")),
-        Rule::none_pattern => Ok(Pattern::None),
         Rule::tuple_pattern => {
             let mut fields = Vec::new();
             for item in inner.into_inner() {
@@ -2748,7 +2747,6 @@ fn parse_primary(pair: Pair<Rule>) -> Result<Expr, String> {
         }
         Rule::f_string => parse_f_string(inner),
         Rule::bool_lit => Ok(Expr::Bool(inner.as_str() == "true")),
-        Rule::none_lit => Ok(Expr::None),
         Rule::ident => Ok(Expr::Ident(inner.as_str().to_string())),
         Rule::macro_invoke => Ok(Expr::MacroInvoke(parse_macro_invoke(inner)?)),
         Rule::comptime_expr => {

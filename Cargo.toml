@@ -6,6 +6,7 @@ members = [
     "crates/bolide-compiler",
     "crates/bolide-runtime",
     "crates/bolide-pkg",
+    "crates/bolide-android",
 ]
 
 [workspace.package]

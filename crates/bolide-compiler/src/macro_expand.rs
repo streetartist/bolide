@@ -908,7 +908,7 @@ fn match_bind(kind: &FragKind, arg: &MacroArg, name: &str) -> Result<Capture, St
                 | Expr::Float(_)
                 | Expr::Bool(_)
                 | Expr::String(_)
-                | Expr::None
+                | Expr::NullPtr
                 | Expr::BigInt(_)
                 | Expr::Decimal(_) => Ok(Capture::Expr(expr.clone())),
                 _ => Err(format!("`${}:lit` expects literal", name)),
@@ -2299,7 +2299,7 @@ fn eval_comptime_expr(
     fns: &HashMap<String, ComptimeFn>,
 ) -> Result<Expr, String> {
     match expr {
-        Expr::Int(_) | Expr::Float(_) | Expr::Bool(_) | Expr::String(_) | Expr::None => {
+        Expr::Int(_) | Expr::Float(_) | Expr::Bool(_) | Expr::String(_) | Expr::NullPtr => {
             Ok(expr.clone())
         }
         Expr::Ident(n) => env
@@ -2683,7 +2683,7 @@ pub fn expr_to_src(expr: &Expr) -> String {
         Expr::Bool(b) => b.to_string(),
         Expr::String(s) => format!("\"{}\"", s),
         Expr::Ident(s) => s.clone(),
-        Expr::None => "none".to_string(),
+        Expr::NullPtr => "<internal-null-ptr>".to_string(),
         Expr::BinOp(l, op, r) => {
             let os = match op {
                 BinOp::Add => "+",

@@ -12,6 +12,13 @@ import "std/fs" as fs;
 import "std/path" as path;
 import "std/env" as env;
 
+fn require_dynamic(value: Option<dynamic>) -> dynamic {
+    match value {
+        Option.Some(v) => { return v; },
+        Option.None() => { throw Error("expected collection value"); },
+    }
+}
+
 assert.reset();
 
 // time
@@ -68,7 +75,7 @@ assert.equal("union", u.len(), 3);
 let q: collections.Queue = collections.queue();
 q.push(1);
 q.push(2);
-assert.equal("q", int(q.pop()), 1);
+assert.equal("q", int(require_dynamic(q.pop())), 1);
 
 // path / fs / env smoke
 assert.is_true("join", path.join("a", "b").contains("b") or path.join("a", "b").contains("a"));

@@ -196,7 +196,6 @@ pattern = {
     variant_pattern
   | tuple_pattern
   | wildcard_pattern
-  | none_pattern
   | bool_pattern
   | string_pattern
   | int_pattern
@@ -208,7 +207,6 @@ wildcard_pattern = @{ "_" ~ !id_char }
 int_pattern = { int_lit }
 string_pattern = { string_lit }
 bool_pattern = { bool_lit }
-none_pattern = { none_lit }
 bind_pattern = { ident }
 
 // 导入语句
@@ -418,7 +416,6 @@ primary = {
     f_string |
     string_lit |
     bool_lit |
-    none_lit |
     self_lit |
     super_lit |
     value_construct |
@@ -519,8 +516,6 @@ exponent = @{ ("e" | "E") ~ ("+" | "-")? ~ digits }
 // 字符串支持转义: \" \\ \n \t \r \0 等
 string_lit = @{ "\"" ~ ("\\" ~ ANY | !("\"" | "\\") ~ ANY)* ~ "\"" }
 bool_lit = @{ ("true" | "false") ~ !id_char }
-none_lit = @{ "none" ~ !id_char }
-
 // 类型
 // dyn Trait：运行时多态（trait 对象），convert 层解析为 Type::Dyn
 // 注意：dyn 必须用 kw_dyn（词边界），否则 dynamic 会被误解析为 dyn + amic

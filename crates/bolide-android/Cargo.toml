@@ -1,0 +1,18 @@
+[package]
+name = "bolide-android"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[lib]
+name = "bolide_android"
+crate-type = ["cdylib"]
+
+[dependencies]
+bolide-parser = { path = "../bolide-parser" }
+bolide-compiler = { path = "../bolide-compiler" }
+bolide-runtime = { path = "../bolide-runtime" }
+jni = "0.21"
+
+[target.'cfg(target_os = "android")'.dependencies]
+winit = { version = "0.30", default-features = false, features = ["android-native-activity"] }

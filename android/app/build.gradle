@@ -1,0 +1,95 @@
+plugins {
+    id "com.android.application"
+}
+
+def requestedAbis = (findProperty("bolideAbis") ?: "arm64-v8a,x86_64")
+        .split(",")
+        .collect { it.trim() }
+        .findAll { !it.isEmpty() }
+def rustOutput = layout.buildDirectory.dir("generated/rustJniLibs")
+def stdAssetsOutput = layout.buildDirectory.dir("generated/bolideStdAssets")
+def repoRoot = rootProject.projectDir.parentFile
+def releaseKeystore = System.getenv("BOLIDE_RELEASE_KEYSTORE")
+def releaseKeyAlias = System.getenv("BOLIDE_RELEASE_KEY_ALIAS")
+def releaseStorePassword = System.getenv("BOLIDE_RELEASE_STORE_PASSWORD")
+def releaseKeyPassword = System.getenv("BOLIDE_RELEASE_KEY_PASSWORD")
+def hasReleaseSigning = releaseKeystore && releaseKeyAlias
+        && releaseStorePassword && releaseKeyPassword
+
+android {
+    namespace "dev.bolide.ide"
+    compileSdk 36
+
+    defaultConfig {
+        applicationId "dev.bolide.ide"
+        minSdk 26
+        targetSdk 36
+        versionCode 1
+        versionName "0.15.2"
+        ndk {
+            abiFilters.addAll(requestedAbis)
+        }
+    }
+
+    sourceSets {
+        main.jniLibs.srcDir(rustOutput)
+        main.assets.srcDir(stdAssetsOutput)
+    }
+
+    signingConfigs {
+        release {
+            if (hasReleaseSigning) {
+                storeFile file(releaseKeystore)
+                storePassword releaseStorePassword
+                keyAlias releaseKeyAlias
+                keyPassword releaseKeyPassword
+            }
+        }
+    }
+
+    buildTypes {
+        debug {
+            debuggable true
+        }
+        release {
+            minifyEnabled false
+            if (hasReleaseSigning) {
+                signingConfig signingConfigs.release
+            }
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+tasks.register("buildBolideRust", Exec) {
+    def outputDir = rustOutput.get().asFile
+    inputs.files(fileTree(new File(repoRoot, "crates")) {
+        include "**/*.rs", "**/Cargo.toml"
+    })
+    inputs.files(new File(repoRoot, "Cargo.toml"), new File(repoRoot, "Cargo.lock"))
+    outputs.dir(outputDir)
+    workingDir repoRoot
+
+    if (org.gradle.internal.os.OperatingSystem.current().isWindows()) {
+        commandLine "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+                "-File", new File(rootProject.projectDir, "scripts/build-rust.ps1"),
+                "-OutputDir", outputDir,
+                "-Abis", requestedAbis.join(",")
+    } else {
+        commandLine "bash", new File(rootProject.projectDir, "scripts/build-rust.sh"),
+                outputDir, requestedAbis.join(",")
+    }
+}
+
+tasks.register("syncBolideStd", Sync) {
+    from new File(repoRoot, "std")
+    into stdAssetsOutput.get().dir("std")
+}
+
+tasks.named("preBuild").configure {
+    dependsOn("buildBolideRust", "syncBolideStd")
+}

@@ -1,5 +1,12 @@
 import "std/collections/collections.bl" as collections;
 
+fn require_dynamic(value: Option<dynamic>) -> dynamic {
+    match value {
+        Option.Some(v) => { return v; },
+        Option.None() => { throw Error("expected collection value"); },
+    }
+}
+
 fn check_bool(name: str, got: bool, want: bool) {
     if got == want {
         print("ok " + name + "\n");
@@ -35,15 +42,15 @@ let q: collections.Queue = collections.queue();
 q.push(10);
 q.push(20);
 check_int("queue len", q.len(), 2);
-check_int("queue pop 1", int(q.pop()), 10);
-check_int("queue pop 2", int(q.pop()), 20);
+check_int("queue pop 1", int(require_dynamic(q.pop())), 10);
+check_int("queue pop 2", int(require_dynamic(q.pop())), 20);
 check_bool("queue empty", q.is_empty(), true);
 
 let s: collections.Stack = collections.stack();
 s.push("a");
 s.push("b");
 check_int("stack len", s.len(), 2);
-check_bool("stack pop", str(s.pop()) == "b", true);
+check_bool("stack pop", str(require_dynamic(s.pop())) == "b", true);
 
 let c: collections.Counter = collections.counter();
 c.add("red");

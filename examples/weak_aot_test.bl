@@ -2,15 +2,15 @@
 
 class WeakNode {
     value: int;
-    next: WeakNode;
-    prev: weak WeakNode;
+    next: Option<WeakNode>;
+    prev: Option<weak WeakNode>;
 }
 
 fn create_weak_list() {
-    let n1: WeakNode = WeakNode(1, none, none);
-    let n2: WeakNode = WeakNode(2, none, none);
-    n1.next = n2;
-    n2.prev = n1;
+    let n1: WeakNode = WeakNode(1, Option.None(), Option.None());
+    let n2: WeakNode = WeakNode(2, Option.None(), Option.None());
+    n1.next = Option.Some(n2);
+    n2.prev = Option.Some(n1);
 }
 
 print("Start test...\n");

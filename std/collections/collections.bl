@@ -81,14 +81,19 @@ class Queue {
         self.items.push(value);
     }
 
-    fn pop() -> dynamic {
+    fn pop() -> Option<dynamic> {
         if self.head >= self.items.len() {
-            return none;
+            return Option.None();
         }
+        return Option.Some(self.pop_value());
+    }
+
+    fn pop_value() -> dynamic {
         let value: dynamic = self.items[self.head];
         self.head = self.head + 1;
         if self.head > 32 and self.head * 2 > self.items.len() {
             var next: list<dynamic> = [];
+            var i: int = self.head;
             for i in range(self.head, self.items.len()) {
                 next.push(self.items[i]);
             }
@@ -98,11 +103,11 @@ class Queue {
         return value;
     }
 
-    fn peek() -> dynamic {
+    fn peek() -> Option<dynamic> {
         if self.head >= self.items.len() {
-            return none;
+            return Option.None();
         }
-        return self.items[self.head];
+        return Option.Some(self.items[self.head]);
     }
 
     fn len() -> int {
@@ -126,18 +131,18 @@ class Stack {
         self.items.push(value);
     }
 
-    fn pop() -> dynamic {
+    fn pop() -> Option<dynamic> {
         if self.items.len() == 0 {
-            return none;
+            return Option.None();
         }
-        return self.items.pop();
+        return Option.Some(self.items.pop());
     }
 
-    fn peek() -> dynamic {
+    fn peek() -> Option<dynamic> {
         if self.items.len() == 0 {
-            return none;
+            return Option.None();
         }
-        return self.items[self.items.len() - 1];
+        return Option.Some(self.items[self.items.len() - 1]);
     }
 
     fn len() -> int {
@@ -371,19 +376,24 @@ class Deque {
         self.items = next;
     }
 
-    fn pop_back() -> dynamic {
+    fn pop_back() -> Option<dynamic> {
         if self.items.len() == 0 {
-            return none;
+            return Option.None();
         }
-        return self.items.pop();
+        return Option.Some(self.items.pop());
     }
 
-    fn pop_front() -> dynamic {
+    fn pop_front() -> Option<dynamic> {
         if self.items.len() == 0 {
-            return none;
+            return Option.None();
         }
+        return Option.Some(self.pop_front_value());
+    }
+
+    fn pop_front_value() -> dynamic {
         let value: dynamic = self.items[0];
         var next: list<dynamic> = [];
+        var i: int = 1;
         for i in range(1, self.items.len()) {
             next.push(self.items[i]);
         }
@@ -391,18 +401,18 @@ class Deque {
         return value;
     }
 
-    fn front() -> dynamic {
+    fn front() -> Option<dynamic> {
         if self.items.len() == 0 {
-            return none;
+            return Option.None();
         }
-        return self.items[0];
+        return Option.Some(self.items[0]);
     }
 
-    fn back() -> dynamic {
+    fn back() -> Option<dynamic> {
         if self.items.len() == 0 {
-            return none;
+            return Option.None();
         }
-        return self.items[self.items.len() - 1];
+        return Option.Some(self.items[self.items.len() - 1]);
     }
 
     fn len() -> int {

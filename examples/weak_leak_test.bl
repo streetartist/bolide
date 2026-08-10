@@ -3,19 +3,19 @@
 
 class WeakNode {
     value: int;
-    next: WeakNode;
-    prev: weak WeakNode;  // weak 引用
+    next: Option<WeakNode>;
+    prev: Option<weak WeakNode>;  // weak 引用
 }
 
 fn create_weak_list() {
-    let n1: WeakNode = WeakNode(1, none, none);
-    let n2: WeakNode = WeakNode(2, none, none);
-    let n3: WeakNode = WeakNode(3, none, none);
+    let n1: WeakNode = WeakNode(1, Option.None(), Option.None());
+    let n2: WeakNode = WeakNode(2, Option.None(), Option.None());
+    let n3: WeakNode = WeakNode(3, Option.None(), Option.None());
     
-    n1.next = n2;
-    n2.prev = n1;
-    n2.next = n3;
-    n3.prev = n2;
+    n1.next = Option.Some(n2);
+    n2.prev = Option.Some(n1);
+    n2.next = Option.Some(n3);
+    n3.prev = Option.Some(n2);
 }
 
 // 大量循环测试 weak 引用

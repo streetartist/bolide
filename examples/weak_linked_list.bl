@@ -3,44 +3,64 @@
 
 class Node {
     value: int;
-    next: Node;       // 强引用指向下一个节点
-    prev: weak Node;  // 弱引用指向前一个节点，避免循环
+    next: Option<Node>;       // 强引用指向下一个节点
+    prev: Option<weak Node>;  // 弱引用指向前一个节点，避免循环
 }
 
 // 创建链表节点
-let n1: Node = Node(1, none, none);
-let n2: Node = Node(2, none, none);
-let n3: Node = Node(3, none, none);
+let n1: Node = Node(1, Option.None(), Option.None());
+let n2: Node = Node(2, Option.None(), Option.None());
+let n3: Node = Node(3, Option.None(), Option.None());
 
 // 链接节点
-n1.next = n2;
-n2.prev = n1;  // weak 引用
+n1.next = Option.Some(n2);
+n2.prev = Option.Some(n1);  // weak 引用
 
-n2.next = n3;
-n3.prev = n2;  // weak 引用
+n2.next = Option.Some(n3);
+n3.prev = Option.Some(n2);  // weak 引用
 
 // 正向遍历
 print("Forward traversal:\n");
 print("n1.value = ");
 print(n1.value);
 print("\n");
-print("n1.next.value = ");
-print(n1.next.value);
-print("\n");
-print("n1.next.next.value = ");
-print(n1.next.next.value);
-print("\n");
+match n1.next {
+    Option.Some(next1) => {
+        print("n1.next.value = ");
+        print(next1.value);
+        print("\n");
+        match next1.next {
+            Option.Some(next2) => {
+                print("n1.next.next.value = ");
+                print(next2.value);
+                print("\n");
+            },
+            Option.None() => {},
+        }
+    },
+    Option.None() => {},
+}
 
 // 反向遍历（通过 weak 引用）
 print("\nBackward traversal via weak:\n");
 print("n3.value = ");
 print(n3.value);
 print("\n");
-print("n3.prev.value = ");
-print(n3.prev.value);
-print("\n");
-print("n3.prev.prev.value = ");
-print(n3.prev.prev.value);
-print("\n");
+match n3.prev {
+    Option.Some(prev1) => {
+        print("n3.prev.value = ");
+        print(prev1.value);
+        print("\n");
+        match prev1.prev {
+            Option.Some(prev2) => {
+                print("n3.prev.prev.value = ");
+                print(prev2.value);
+                print("\n");
+            },
+            Option.None() => {},
+        }
+    },
+    Option.None() => {},
+}
 
 print("\nLinked list with weak references works!\n");

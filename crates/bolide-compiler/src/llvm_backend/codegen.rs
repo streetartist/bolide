@@ -3334,7 +3334,7 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
             Expr::UnaryOp(op, e) => self.emit_unary(*op, e),
             Expr::Call(callee, args) => self.emit_call(callee, args),
             Expr::Member(base, member) => self.emit_member_load(base, member),
-            Expr::None => Ok(("null".into(), "ptr")),
+            Expr::NullPtr => Ok(("null".into(), "ptr")),
             Expr::Tuple(items) => {
                 let n = items.len();
                 let tags = self.fresh_local("__tup_tags");
@@ -3572,7 +3572,7 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
                         } else {
                             args.push(match type_llvm(&f.ty) {
                                 "double" => Expr::Float(0.0),
-                                "ptr" => Expr::None,
+                                "ptr" => Expr::NullPtr,
                                 _ => Expr::Int(0),
                             });
                         }
@@ -4593,39 +4593,6 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
                             self.mutable.insert(name.clone(), true);
                         }
                     }
-                    let mut term = false;
-                    for s in &arm.body {
-                        if term {
-                            break;
-                        }
-                        term = self.emit_stmt(s)?;
-                    }
-                    if !term {
-                        all_term = false;
-                        need_end = true;
-                        let _ = writeln!(self.body, "  br label %{}", end_l);
-                    }
-                    open_next = Some(next_l);
-                }
-                Pattern::None => {
-                    let none_tag = adt
-                        .variants
-                        .iter()
-                        .find(|v| v.name == "None")
-                        .map(|v| v.tag)
-                        .unwrap_or(1);
-                    let cmp = self.fresh();
-                    let _ = writeln!(
-                        self.body,
-                        "  {} = icmp eq i64 {}, {}",
-                        cmp, tag, none_tag
-                    );
-                    let _ = writeln!(
-                        self.body,
-                        "  br i1 {}, label %{}, label %{}",
-                        cmp, body_l, next_l
-                    );
-                    let _ = writeln!(self.body, "{}:", body_l);
                     let mut term = false;
                     for s in &arm.body {
                         if term {
@@ -6712,7 +6679,7 @@ declare i64 @bolide_bigint_ge(ptr, ptr)
                         // zero-fill missing required field
                         args_owned.push(match type_llvm(&f.ty) {
                             "double" => Expr::Float(0.0),
-                            "ptr" => Expr::None,
+                            "ptr" => Expr::NullPtr,
                             _ => Expr::Int(0),
                         });
                     }

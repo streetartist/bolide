@@ -2,16 +2,16 @@
 
 class WeakNode {
     value: int;
-    next: WeakNode;
-    prev: weak WeakNode;
+    next: Option<WeakNode>;
+    prev: Option<weak WeakNode>;
 }
 
 print("Step 1: Creating n1\n");
-let n1: WeakNode = WeakNode(1, none, none);
+let n1: WeakNode = WeakNode(1, Option.None(), Option.None());
 print("Step 2: Creating n2\n");
-let n2: WeakNode = WeakNode(2, none, none);
+let n2: WeakNode = WeakNode(2, Option.None(), Option.None());
 print("Step 3: Assigning n1.next = n2\n");
-n1.next = n2;
+n1.next = Option.Some(n2);
 print("Step 4: Assigning n2.prev = n1 (weak)\n");
-n2.prev = n1;
+n2.prev = Option.Some(n1);
 print("Step 5: Done!\n");

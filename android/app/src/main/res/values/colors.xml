@@ -1,0 +1,7 @@
+<resources>
+    <color name="bolide_background">#0B1020</color>
+    <color name="bolide_surface">#151B2E</color>
+    <color name="bolide_accent">#61D6C4</color>
+    <color name="bolide_text">#E8ECF5</color>
+    <color name="bolide_icon_background">#020509</color>
+</resources>

@@ -130,7 +130,7 @@ debug!(n = 1 + 2);
 | `block` | `{ ... }` | 语句块 |
 | `type` | 类型表达式 | `list<int>`、`func(int)->int` |
 | `path` | `a.b.c` | 模块/成员路径 |
-| `lit` | 字面量 | 数、字符串、bool、none |
+| `lit` | 字面量 | 数、字符串、bool |
 | `tt` | 单个 token 树 | 进阶：括号平衡的一块 |
 
 **暂不引入** `item`/`pat`/`lifetime` 等 Rust 全套；需要时用 `tt` + `comptime` 解析。

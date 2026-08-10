@@ -1,0 +1,20 @@
+<resources>
+    <style name="Theme.Bolide" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:statusBarColor">#0B1020</item>
+        <item name="android:navigationBarColor">#0B1020</item>
+        <item name="android:windowBackground">#0B1020</item>
+        <item name="android:colorAccent">#61D6C4</item>
+    </style>
+
+    <style name="Theme.Bolide.Gui" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:statusBarColor">#0B1020</item>
+        <item name="android:navigationBarColor">#0B1020</item>
+        <item name="android:windowBackground">#0B1020</item>
+        <item name="android:colorAccent">#61D6C4</item>
+        <item name="android:windowActionModeOverlay">true</item>
+    </style>
+</resources>

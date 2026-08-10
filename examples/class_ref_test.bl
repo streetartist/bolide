@@ -2,13 +2,13 @@
 
 class Node {
     value: int;
-    next: Node;
+    next: Option<Node>;
 }
 
 print("Step 1: Creating n1\n");
-let n1: Node = Node(1, none);
+let n1: Node = Node(1, Option.None());
 print("Step 2: Creating n2\n");
-let n2: Node = Node(2, none);
+let n2: Node = Node(2, Option.None());
 print("Step 3: Assigning n1.next = n2\n");
-n1.next = n2;
+n1.next = Option.Some(n2);
 print("Step 4: Done!\n");

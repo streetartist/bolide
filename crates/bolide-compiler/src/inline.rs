@@ -655,7 +655,7 @@ fn expr_cost(expr: &Expr) -> usize {
         | Expr::Bool(_)
         | Expr::String(_)
         | Expr::Ident(_)
-        | Expr::None => 1,
+        | Expr::NullPtr => 1,
         Expr::BinOp(l, _, r) => 1 + expr_cost(l) + expr_cost(r),
         Expr::UnaryOp(_, o) => 1 + expr_cost(o),
         Expr::Call(c, args) => 2 + expr_cost(c) + args.iter().map(expr_cost).sum::<usize>(),

@@ -7,6 +7,12 @@ use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::sync::Mutex;
 
+#[cfg(target_os = "android")]
+use std::sync::{Arc, Condvar, RwLock};
+
+#[cfg(target_os = "android")]
+use std::sync::atomic::{AtomicU32, Ordering};
+
 type GuiView = unsafe extern "C" fn(*mut u8);
 
 static GUI_GRID_ROWS: Lazy<Mutex<HashMap<String, usize>>> =
@@ -46,7 +52,264 @@ pub struct BolideGuiUi {
 }
 
 struct BolideEguiApp {
+    #[cfg(not(target_os = "android"))]
     view: GuiView,
+}
+
+#[cfg(target_os = "android")]
+pub type AndroidGuiLaunchHook = Arc<dyn Fn(&str) -> bool + Send + Sync + 'static>;
+
+#[cfg(target_os = "android")]
+pub type AndroidGuiReturnHook = Arc<dyn Fn() + Send + Sync + 'static>;
+
+#[cfg(target_os = "android")]
+struct AndroidGuiSession {
+    id: u64,
+    title: String,
+    view: GuiView,
+}
+
+#[cfg(target_os = "android")]
+#[derive(Default)]
+struct AndroidGuiState {
+    next_id: u64,
+    session: Option<AndroidGuiSession>,
+    runner_failed: bool,
+}
+
+#[cfg(target_os = "android")]
+static ANDROID_GUI_STATE: Lazy<(Mutex<AndroidGuiState>, Condvar)> =
+    Lazy::new(|| (Mutex::new(AndroidGuiState::default()), Condvar::new()));
+
+#[cfg(target_os = "android")]
+static ANDROID_GUI_HOOKS: Lazy<
+    RwLock<(Option<AndroidGuiLaunchHook>, Option<AndroidGuiReturnHook>)>,
+> = Lazy::new(|| RwLock::new((None, None)));
+
+#[cfg(target_os = "android")]
+static ANDROID_GUI_INSETS: [AtomicU32; 4] = [
+    AtomicU32::new(0),
+    AtomicU32::new(0),
+    AtomicU32::new(0),
+    AtomicU32::new(0),
+];
+
+/// Updates the Android safe-area insets in physical pixels. The Java host
+/// reports the union of system bars and display cutouts whenever it changes.
+#[cfg(target_os = "android")]
+pub fn android_gui_set_insets(left: i32, top: i32, right: i32, bottom: i32) {
+    for (slot, value) in ANDROID_GUI_INSETS.iter().zip([left, top, right, bottom]) {
+        slot.store(value.max(0) as u32, Ordering::Relaxed);
+    }
+}
+
+#[cfg(target_os = "android")]
+fn android_gui_insets_points(ctx: &egui::Context) -> [f32; 4] {
+    let pixels_per_point = ctx.pixels_per_point().max(0.01);
+    let screen = ctx.screen_rect();
+    let horizontal_limit = screen.width() * 0.4;
+    let vertical_limit = screen.height() * 0.4;
+    let values = [
+        ANDROID_GUI_INSETS[0].load(Ordering::Relaxed) as f32,
+        ANDROID_GUI_INSETS[1].load(Ordering::Relaxed) as f32,
+        ANDROID_GUI_INSETS[2].load(Ordering::Relaxed) as f32,
+        ANDROID_GUI_INSETS[3].load(Ordering::Relaxed) as f32,
+    ];
+    [
+        (values[0] / pixels_per_point).min(horizontal_limit),
+        (values[1] / pixels_per_point).min(vertical_limit),
+        (values[2] / pixels_per_point).min(horizontal_limit),
+        (values[3] / pixels_per_point).min(vertical_limit),
+    ]
+}
+
+#[cfg(target_os = "android")]
+fn reserve_android_safe_area(ctx: &egui::Context) {
+    let [left, top, right, bottom] = android_gui_insets_points(ctx);
+    let frame = || egui::Frame::none().fill(ctx.style().visuals.panel_fill);
+
+    if top > 0.0 {
+        egui::TopBottomPanel::top("bolide_android_safe_top")
+            .exact_height(top)
+            .frame(frame())
+            .show(ctx, |_| {});
+    }
+    if bottom > 0.0 {
+        egui::TopBottomPanel::bottom("bolide_android_safe_bottom")
+            .exact_height(bottom)
+            .frame(frame())
+            .show(ctx, |_| {});
+    }
+    if left > 0.0 {
+        egui::SidePanel::left("bolide_android_safe_left")
+            .exact_width(left)
+            .resizable(false)
+            .frame(frame())
+            .show(ctx, |_| {});
+    }
+    if right > 0.0 {
+        egui::SidePanel::right("bolide_android_safe_right")
+            .exact_width(right)
+            .resizable(false)
+            .frame(frame())
+            .show(ctx, |_| {});
+    }
+}
+
+#[cfg(target_os = "android")]
+pub fn set_android_gui_hooks(
+    launch: Option<AndroidGuiLaunchHook>,
+    return_to_ide: Option<AndroidGuiReturnHook>,
+) {
+    *ANDROID_GUI_HOOKS
+        .write()
+        .expect("android gui hook lock poisoned") = (launch, return_to_ide);
+}
+
+#[cfg(target_os = "android")]
+pub fn clear_android_gui_hooks() {
+    set_android_gui_hooks(None, None);
+}
+
+#[cfg(target_os = "android")]
+fn android_gui_finish_session(result: i64, return_to_ide: bool) -> bool {
+    // Clone before notifying the waiting Bolide thread. That thread owns the
+    // hook guard and may clear the global hooks as soon as gui.run returns.
+    let return_hook = if return_to_ide {
+        ANDROID_GUI_HOOKS
+            .read()
+            .expect("android gui hook lock poisoned")
+            .1
+            .clone()
+    } else {
+        None
+    };
+    let finished = {
+        let (state, changed) = &*ANDROID_GUI_STATE;
+        let mut state = state.lock().expect("android gui state lock poisoned");
+        let finished = state.session.take().is_some();
+        if finished {
+            state.runner_failed = result == 0;
+            changed.notify_all();
+        }
+        finished
+    };
+
+    if finished {
+        if let Some(hook) = return_hook {
+            hook();
+        }
+    }
+    finished
+}
+
+/// Ends the currently displayed Android GUI session without destroying the
+/// NativeActivity. Keeping that activity alive is important because winit only
+/// permits one event loop per process.
+#[cfg(target_os = "android")]
+pub fn android_gui_close() -> bool {
+    android_gui_finish_session(1, true)
+}
+
+/// Called by the Java NativeActivity when Android really destroys it. Any
+/// waiting Bolide program is released with a failure instead of hanging.
+#[cfg(target_os = "android")]
+pub fn android_gui_activity_destroyed() {
+    let (state, changed) = &*ANDROID_GUI_STATE;
+    let mut state = state.lock().expect("android gui state lock poisoned");
+    state.runner_failed = true;
+    if state.session.take().is_some() {
+        changed.notify_all();
+    }
+}
+
+#[cfg(target_os = "android")]
+fn android_gui_run_session(title: String, view: GuiView) -> i64 {
+    let launch = ANDROID_GUI_HOOKS
+        .read()
+        .expect("android gui hook lock poisoned")
+        .0
+        .clone();
+    let Some(launch) = launch else {
+        eprintln!("bolide gui error: Android IDE launch hook is not installed");
+        return 0;
+    };
+
+    let id = {
+        let (state, _) = &*ANDROID_GUI_STATE;
+        let mut state = state.lock().expect("android gui state lock poisoned");
+        if state.session.is_some() {
+            eprintln!("bolide gui error: another Android GUI session is already active");
+            return 0;
+        }
+        state.next_id = state.next_id.wrapping_add(1).max(1);
+        let id = state.next_id;
+        state.runner_failed = false;
+        state.session = Some(AndroidGuiSession {
+            id,
+            title: title.clone(),
+            view,
+        });
+        id
+    };
+
+    if !launch(&title) {
+        let (state, changed) = &*ANDROID_GUI_STATE;
+        let mut state = state.lock().expect("android gui state lock poisoned");
+        if state.session.as_ref().map(|session| session.id) == Some(id) {
+            state.session = None;
+            state.runner_failed = true;
+            changed.notify_all();
+        }
+        return 0;
+    }
+
+    let (state, changed) = &*ANDROID_GUI_STATE;
+    let mut state = state.lock().expect("android gui state lock poisoned");
+    while state.session.as_ref().map(|session| session.id) == Some(id) {
+        state = changed
+            .wait(state)
+            .expect("android gui state lock poisoned while waiting");
+    }
+    i64::from(!state.runner_failed)
+}
+
+/// Owns the single Android eframe event loop for the lifetime of the dedicated
+/// NativeActivity. Individual `gui.run` calls are swapped in and out through
+/// `ANDROID_GUI_STATE`, so returning to the IDE does not recreate winit.
+#[cfg(target_os = "android")]
+pub fn android_gui_main(app: winit::platform::android::activity::AndroidApp) {
+    use winit::platform::android::EventLoopBuilderExtAndroid;
+
+    {
+        let (state, changed) = &*ANDROID_GUI_STATE;
+        let mut state = state.lock().expect("android gui state lock poisoned");
+        state.runner_failed = false;
+        changed.notify_all();
+    }
+
+    let options = eframe::NativeOptions {
+        run_and_return: true,
+        event_loop_builder: Some(Box::new(move |builder| {
+            builder.with_android_app(app.clone());
+        })),
+        ..Default::default()
+    };
+
+    let result = eframe::run_native(
+        "Bolide GUI",
+        options,
+        Box::new(|cc| {
+            install_system_fonts(&cc.egui_ctx);
+            cc.egui_ctx.set_visuals(egui::Visuals::dark());
+            Ok(Box::new(BolideEguiApp {}))
+        }),
+    );
+
+    if let Err(err) = result {
+        eprintln!("bolide Android gui error: {err}");
+    }
+    android_gui_activity_destroyed();
 }
 
 fn bstr(ptr: *const BolideString) -> String {
@@ -220,6 +483,12 @@ fn load_system_cjk_font() -> Option<Vec<u8>> {
         "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
         #[cfg(target_os = "linux")]
         "/usr/share/fonts/truetype/arphic/uming.ttc",
+        #[cfg(target_os = "android")]
+        "/system/fonts/NotoSansCJK-Regular.ttc",
+        #[cfg(target_os = "android")]
+        "/system/fonts/NotoSansSC-Regular.otf",
+        #[cfg(target_os = "android")]
+        "/system/fonts/DroidSansFallback.ttf",
     ];
 
     for path in candidates {
@@ -255,6 +524,52 @@ fn install_system_fonts(ctx: &egui::Context) {
 
 impl eframe::App for BolideEguiApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        #[cfg(target_os = "android")]
+        {
+            reserve_android_safe_area(ctx);
+            let title = {
+                let (state, _) = &*ANDROID_GUI_STATE;
+                state
+                    .lock()
+                    .expect("android gui state lock poisoned")
+                    .session
+                    .as_ref()
+                    .map(|session| session.title.clone())
+                    .unwrap_or_else(|| "Bolide GUI".to_string())
+            };
+            let mut close = false;
+            egui::TopBottomPanel::top("bolide_android_toolbar").show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    if ui.button("‹ 返回 IDE").clicked() {
+                        close = true;
+                    }
+                    ui.separator();
+                    ui.strong(title);
+                });
+            });
+            if close {
+                android_gui_close();
+                return;
+            }
+
+            egui::CentralPanel::default().show(ctx, |ui| {
+                // Keep the lock while the JIT callback is running. Closing a
+                // session waits for the current frame, so its code pointer can
+                // never be used after the compiler owning it is dropped.
+                let (state, _) = &*ANDROID_GUI_STATE;
+                let state = state.lock().expect("android gui state lock poisoned");
+                if let Some(session) = &state.session {
+                    call_view(ui, session.view);
+                } else {
+                    ui.centered_and_justified(|ui| {
+                        ui.label("已返回 Bolide IDE");
+                    });
+                }
+            });
+            return;
+        }
+
+        #[cfg(not(target_os = "android"))]
         egui::CentralPanel::default().show(ctx, |ui| {
             call_view(ui, self.view);
         });
@@ -278,34 +593,44 @@ pub extern "C" fn bolide_gui_run(
     };
 
     let title = bstr(title);
-    let width = width.max(240) as f32;
-    let height = height.max(160) as f32;
-    let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_inner_size(egui::vec2(width, height)),
-        run_and_return: false,
-        event_loop_builder: Some(Box::new(|builder| {
-            #[cfg(target_os = "windows")]
-            {
-                use winit::platform::windows::EventLoopBuilderExtWindows;
-                builder.with_any_thread(true);
-            }
-        })),
-        ..Default::default()
-    };
 
-    match eframe::run_native(
-        &title,
-        options,
-        Box::new(move |cc| {
-            install_system_fonts(&cc.egui_ctx);
-            cc.egui_ctx.set_visuals(egui::Visuals::light());
-            Ok(Box::new(BolideEguiApp { view }))
-        }),
-    ) {
-        Ok(()) => 1,
-        Err(err) => {
-            eprintln!("bolide gui error: {err}");
-            0
+    #[cfg(target_os = "android")]
+    {
+        let _ = (width, height);
+        return android_gui_run_session(title, view);
+    }
+
+    #[cfg(not(target_os = "android"))]
+    {
+        let width = width.max(240) as f32;
+        let height = height.max(160) as f32;
+        let options = eframe::NativeOptions {
+            viewport: egui::ViewportBuilder::default().with_inner_size(egui::vec2(width, height)),
+            run_and_return: false,
+            event_loop_builder: Some(Box::new(|builder| {
+                #[cfg(target_os = "windows")]
+                {
+                    use winit::platform::windows::EventLoopBuilderExtWindows;
+                    builder.with_any_thread(true);
+                }
+            })),
+            ..Default::default()
+        };
+
+        match eframe::run_native(
+            &title,
+            options,
+            Box::new(move |cc| {
+                install_system_fonts(&cc.egui_ctx);
+                cc.egui_ctx.set_visuals(egui::Visuals::light());
+                Ok(Box::new(BolideEguiApp { view }))
+            }),
+        ) {
+            Ok(()) => 1,
+            Err(err) => {
+                eprintln!("bolide gui error: {err}");
+                0
+            }
         }
     }
 }

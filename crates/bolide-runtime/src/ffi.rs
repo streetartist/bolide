@@ -2,7 +2,7 @@
 
 use libloading::Library;
 use std::collections::HashMap;
-use std::ffi::c_void;
+use std::ffi::{c_char, c_void};
 use std::sync::Mutex;
 
 /// 全局库缓存
@@ -18,7 +18,7 @@ fn init_libs() {
 
 /// 加载动态库并返回句柄
 #[no_mangle]
-pub extern "C" fn bolide_ffi_load_library(path_ptr: *const i8) -> i64 {
+pub extern "C" fn bolide_ffi_load_library(path_ptr: *const c_char) -> i64 {
     init_libs();
 
     let path = unsafe {
@@ -52,8 +52,8 @@ pub extern "C" fn bolide_ffi_load_library(path_ptr: *const i8) -> i64 {
 /// 获取函数指针
 #[no_mangle]
 pub extern "C" fn bolide_ffi_get_symbol(
-    lib_path_ptr: *const i8,
-    symbol_name_ptr: *const i8,
+    lib_path_ptr: *const c_char,
+    symbol_name_ptr: *const c_char,
 ) -> *const c_void {
     init_libs();
 
