@@ -1669,4 +1669,31 @@ b.nope();
         assert_eq!(&source[offset..offset + len], "missing_name");
         assert_eq!(label, "'missing_name' is not defined");
     }
+
+    #[test]
+    fn repl_let_after_var_rejects_assignment() {
+        let mut state = ReplState::new();
+        eval_input(&mut state, "var i = 1;").expect("var i = 1");
+        eval_input(&mut state, "var i = 2;").expect("var i = 2");
+        eval_input(&mut state, r#"print(i);"#).expect("print after var rebind");
+        eval_input(&mut state, "let i = 2;").expect("let i = 2");
+        let err = eval_input(&mut state, "i = 3;").expect_err("let binding must be immutable");
+        assert!(
+            err.contains("immutable binding 'i'"),
+            "expected immutable error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn repl_var_after_let_allows_assignment() {
+        let mut state = ReplState::new();
+        eval_input(&mut state, "let i = 2;").expect("let i = 2");
+        let err = eval_input(&mut state, "i = 3;").expect_err("fresh let is immutable");
+        assert!(
+            err.contains("immutable binding 'i'"),
+            "expected immutable error, got: {err}"
+        );
+        eval_input(&mut state, "var i = 2;").expect("rebind as var");
+        eval_input(&mut state, "i = 3;").expect("assignment after var rebind");
+    }
 }

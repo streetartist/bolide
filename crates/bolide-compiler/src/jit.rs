@@ -3916,26 +3916,24 @@ impl JitCompiler {
                     BolideType::Int
                 };
 
-                // 幂等：REPL 增量编译时跳过已定义的全局变量。
-                if self.global_data_ids.contains_key(&decl.name) {
-                    continue;
+                // 数据段只创建一次（REPL 增量编译必须复用）。
+                // 类型和可变性按最后一次 let/var 更新：否则
+                // `var i = 1` 后再 `let i = 2` 仍按 var 处理，`i = 3` 会错误成功。
+                if !self.global_data_ids.contains_key(&decl.name) {
+                    let data_id = self
+                        .module
+                        .declare_data(&decl.name, Linkage::Local, true, false)
+                        .map_err(|e| format!("Failed to declare global '{}': {}", decl.name, e))?;
+
+                    self.data_desc.define_zeroinit(8);
+                    self.module
+                        .define_data(data_id, &self.data_desc)
+                        .map_err(|e| format!("Failed to define global '{}': {}", decl.name, e))?;
+                    self.data_desc.clear();
+
+                    self.global_data_ids.insert(decl.name.clone(), data_id);
                 }
 
-                // 为全局变量创建数据段（8 字节用于存储值）
-                let data_id = self
-                    .module
-                    .declare_data(&decl.name, Linkage::Local, true, false)
-                    .map_err(|e| format!("Failed to declare global '{}': {}", decl.name, e))?;
-
-                // 初始化数据段为 0
-                self.data_desc.define_zeroinit(8);
-                self.module
-                    .define_data(data_id, &self.data_desc)
-                    .map_err(|e| format!("Failed to define global '{}': {}", decl.name, e))?;
-                self.data_desc.clear();
-
-                // 记录全局变量
-                self.global_data_ids.insert(decl.name.clone(), data_id);
                 self.global_var_types.insert(decl.name.clone(), var_type);
                 self.global_var_mutability
                     .insert(decl.name.clone(), decl.mutable);
@@ -3955,8 +3953,12 @@ impl JitCompiler {
                             self.global_spawn_funcs
                                 .insert(decl.name.clone(), fname.clone());
                         }
-                        _ => {}
+                        _ => {
+                            self.global_spawn_funcs.remove(&decl.name);
+                        }
                     }
+                } else {
+                    self.global_spawn_funcs.remove(&decl.name);
                 }
             }
         }
